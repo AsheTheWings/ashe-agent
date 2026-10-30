@@ -1,0 +1,182 @@
+{
+  "version": 1,
+  "scope": "ashe-agent",
+  "attributes": {
+    "rpc.method": {
+      "type": "string",
+      "description": "The protocol method, or `unknown` for a method the protocol does not define."
+    },
+    "error.type": {
+      "type": "string",
+      "values": [
+        "invalid_request",
+        "method_not_found",
+        "invalid_params",
+        "unauthenticated",
+        "authentication_failed",
+        "rate_limited",
+        "not_found",
+        "conflict",
+        "already_resolved",
+        "invalid_input",
+        "unsupported_version",
+        "internal",
+        "model_call_failed",
+        "context_overflow",
+        "turn_failed",
+        "canceled",
+        "interrupted",
+        "mcp_connect_failed",
+        "mcp_disconnected",
+        "mcp_not_answering"
+      ],
+      "description": "The error class of a failed operation."
+    },
+    "ashe_agent.model": {
+      "type": "string",
+      "description": "A configured model id."
+    },
+    "ashe_agent.turn.status": {
+      "type": "string",
+      "values": [
+        "finished",
+        "failed",
+        "canceled",
+        "interrupted"
+      ],
+      "description": "How a turn ended."
+    },
+    "ashe_agent.tool": {
+      "type": "string",
+      "description": "A tool's registered name: a built-in tool's or a configured MCP server's."
+    },
+    "ashe_agent.tool.outcome": {
+      "type": "string",
+      "values": [
+        "success",
+        "failed",
+        "canceled",
+        "declined",
+        "interrupted"
+      ],
+      "description": "How a tool call ended."
+    },
+    "ashe_agent.tool.in_program": {
+      "type": "boolean",
+      "description": "Whether a code mode program made the call."
+    },
+    "ashe_agent.mcp.server": {
+      "type": "string",
+      "description": "A configured MCP server's name."
+    }
+  },
+  "errorClasses": [
+    "invalid_request",
+    "method_not_found",
+    "invalid_params",
+    "unauthenticated",
+    "authentication_failed",
+    "rate_limited",
+    "not_found",
+    "conflict",
+    "already_resolved",
+    "invalid_input",
+    "unsupported_version",
+    "internal",
+    "model_call_failed",
+    "context_overflow",
+    "turn_failed",
+    "canceled",
+    "interrupted",
+    "mcp_connect_failed",
+    "mcp_disconnected",
+    "mcp_not_answering"
+  ],
+  "spans": {
+    "ashe_agent.request": {
+      "description": "One protocol request, authentication included.",
+      "attributes": [
+        "rpc.method",
+        "error.type"
+      ]
+    },
+    "ashe_agent.turn": {
+      "description": "One turn, from its start to its end.",
+      "attributes": [
+        "ashe_agent.model",
+        "ashe_agent.turn.status",
+        "error.type"
+      ]
+    },
+    "ashe_agent.model_call": {
+      "description": "One model call of a turn.",
+      "attributes": [
+        "ashe_agent.model",
+        "error.type"
+      ]
+    },
+    "ashe_agent.tool_call": {
+      "description": "One tool call, a code mode program's calls included as children of their execute call.",
+      "attributes": [
+        "ashe_agent.tool",
+        "ashe_agent.tool.outcome",
+        "ashe_agent.tool.in_program"
+      ]
+    }
+  },
+  "metrics": {
+    "ashe_agent.turn.duration": {
+      "kind": "histogram",
+      "unit": "s",
+      "description": "Turn duration.",
+      "attributes": [
+        "ashe_agent.model",
+        "ashe_agent.turn.status"
+      ]
+    },
+    "ashe_agent.model_call.duration": {
+      "kind": "histogram",
+      "unit": "s",
+      "description": "Model call duration.",
+      "attributes": [
+        "ashe_agent.model",
+        "error.type"
+      ]
+    },
+    "ashe_agent.tool_call.duration": {
+      "kind": "histogram",
+      "unit": "s",
+      "description": "Tool call duration.",
+      "attributes": [
+        "ashe_agent.tool",
+        "ashe_agent.tool.outcome",
+        "ashe_agent.tool.in_program"
+      ]
+    }
+  },
+  "logs": {
+    "ashe_agent.request.internal_error": {
+      "severity": "ERROR",
+      "description": "A protocol request failed with an internal error.",
+      "attributes": [
+        "rpc.method",
+        "error.type"
+      ]
+    },
+    "ashe_agent.mcp.unavailable": {
+      "severity": "WARN",
+      "description": "An MCP server failed to connect or was lost.",
+      "attributes": [
+        "ashe_agent.mcp.server",
+        "error.type"
+      ]
+    },
+    "ashe_agent.mcp.collision": {
+      "severity": "WARN",
+      "description": "MCP tools whose registered names collide, none registered.",
+      "attributes": [
+        "ashe_agent.tool"
+      ]
+    }
+  }
+}

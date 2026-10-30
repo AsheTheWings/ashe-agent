@@ -88,11 +88,16 @@ export class CliRun {
     })
   }
 
-  async cleanup() {
+  /** Stops every `serve` this run started, as SIGTERM does, and waits for each to exit. */
+  async stopServers() {
     for (const server of this.servers) {
       server.kill()
       await server.exited
     }
+  }
+
+  async cleanup() {
+    await this.stopServers()
     rmSync(this.dir, { recursive: true, force: true })
   }
 }

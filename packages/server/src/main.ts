@@ -7,7 +7,7 @@ import { dirname, join, resolve } from "node:path"
 import { existsSync } from "node:fs"
 import { userInfo } from "node:os"
 import { loginShell } from "./tools/shell/login-shell.ts"
-import { Cause, Effect, Exit, Fiber, Layer, Redacted } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Redacted, Result } from "effect"
 import { createApiToken, hasOwnerPassword, listApiTokens, revokeApiToken, setOwnerPassword } from "./auth/credentials.ts"
 import { readSecretLine } from "./cli/terminal.ts"
 import { loadInputsOrExit, processSources, removeDependencyVariables } from "./inputs/bootstrap.ts"
@@ -19,6 +19,7 @@ import { databasePath, openDatabase, openDatabaseReadonly, Store } from "./store
 import { dumpDatabase } from "./store/dump.ts"
 import { migrationFiles } from "./store/migration-files.ts"
 import { applyMigrations, discoverMigrations, MigrationError, readMigrationStatus } from "./store/migrations.ts"
+import { mcpLogEvents } from "./telemetry/mcp-events.ts"
 
 declare const ASHE_AGENT_REVISION: string | undefined
 
@@ -83,6 +84,7 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
       { McpRegistry },
       { executeTool, catalogTools },
       { renderCatalog },
+      { startTelemetry },
     ] = await Promise.all([
       import("./agent/model.ts"),
       import("./agent/runner.ts"),
@@ -92,7 +94,21 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
       import("./tools/mcp/servers.ts"),
       import("./tools/codemode/execute.ts"),
       import("./tools/codemode/catalog.ts"),
+      import("./telemetry/sdk.ts"),
     ])
+    // The SDK starts before any work, so every signal reaches the selected exporters.
+    const telemetry = startTelemetry({
+      traces: inputs.tracesExporter,
+      metrics: inputs.metricsExporter,
+      logs: inputs.logsExporter,
+      endpoint: inputs.otlpEndpoint,
+      protocol: inputs.otlpProtocol,
+      headers: inputs.otlpHeaders,
+      serviceVersion: revision,
+      deploymentEnvironment: inputs.deploymentEnvironment,
+    })
+    if (Result.isFailure(telemetry)) fail(telemetry.failure)
+    const { effectLayer, shutdown: shutdownTelemetry } = Result.getOrThrow(telemetry)
     // Commands run in the server user's login shell, without the server's own
     // input variables; every process ends with the server.
     const commandEnv: Record<string, string | undefined> = { ...process.env }
@@ -107,7 +123,11 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
     process.on("exit", endProcesses)
     const builtin = builtinTools(inputs, processes)
     // MCP servers connect in the background; each server's tools appear once it has listed them.
-    const mcp = new McpRegistry(inputs.mcpServers, { env: commandEnv, version: revision })
+    const mcp = new McpRegistry(inputs.mcpServers, {
+      env: commandEnv,
+      version: revision,
+      events: mcpLogEvents,
+    })
     void mcp.start()
     // Code mode programs call the tools of servers without `codemode: false`; `execute` is offered while there are any.
     const execute = executeTool(() => mcp.tools(false), inputs.codeModeLimits)
@@ -140,6 +160,7 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
         }),
       ),
       Layer.provide(Store.layer(databasePath(inputs.stateDir))),
+      Layer.provide(effectLayer),
     )
     let interrupt = () => {}
     let stopping = false
@@ -157,6 +178,7 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
     const exit = await Effect.runPromise(Fiber.await(fiber))
     endProcesses()
     await mcp.stop()
+    await shutdownTelemetry()
     process.off("SIGINT", stop)
     process.off("SIGTERM", stop)
     if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
