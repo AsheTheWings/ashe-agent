@@ -65,6 +65,8 @@ bun packages/server/src/main.ts serve
   permissions and limits of programs.
 - [Model context](docs/model-context.md): what each model call carries,
   model switching, and compaction.
+- [Telemetry](docs/telemetry.md): the traces, metrics, and logs the server
+  emits, and where it exports them.
 - [Storage](docs/storage.md): the database, its migrations, and dumps.
 - [Testing](docs/testing.md): the fast gate and the command for each test
   class.

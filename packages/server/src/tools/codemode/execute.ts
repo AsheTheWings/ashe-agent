@@ -5,9 +5,11 @@
  */
 
 import { CodeMode, Tool as CodeModeTool, toolError, type ToolError } from "@ashe-agent/codemode"
+import { context as otelContext, type Context as TraceContext } from "@opentelemetry/api"
 import { Deferred, Effect, Option, Schema } from "effect"
 import { builtinTool, failedResult, type Tool, type ToolResult, type ToolRun } from "../../agent/tools.ts"
-import type { ToolContentPart } from "../../agent/window.ts"
+import type { ToolContentPart, ToolOutcome } from "../../agent/window.ts"
+import { endSpan, recordDuration, startSpan } from "../../telemetry/signals.ts"
 import type { CatalogTool } from "./catalog.ts"
 
 /** Limits on each program, as the code mode limits input names them. */
@@ -38,6 +40,8 @@ interface Execution {
   calls: number
   /** Completed when a call is declined by a plain reject, which ends the program and the turn. */
   readonly declined: Deferred.Deferred<string>
+  /** The trace context of the `execute` call, the parent of its program's call spans. */
+  readonly trace: TraceContext
 }
 
 /**
@@ -61,7 +65,23 @@ const programTools = (inventory: ReadonlyArray<Tool>, execution: Execution | nul
   return tools
 }
 
+/** One program call, traced as a child span of the `execute` call. */
 const call = (tool: Tool, input: unknown, execution: Execution): Effect.Effect<string | null, ToolError> =>
+  Effect.suspend(() => {
+    const attributes = { "ashe_agent.tool": tool.spec.name, "ashe_agent.tool.in_program": true }
+    const span = startSpan("ashe_agent.tool_call", attributes, execution.trace)
+    const startedAt = performance.now()
+    let outcome: ToolOutcome = "canceled"
+    return Effect.ensuring(
+      runCall(tool, input, execution, (ended) => (outcome = ended)),
+      Effect.sync(() => {
+        endSpan(span, { "ashe_agent.tool.outcome": outcome }, outcome === "canceled" ? "canceled" : undefined)
+        recordDuration("ashe_agent.tool_call.duration", (performance.now() - startedAt) / 1000, { ...attributes, "ashe_agent.tool.outcome": outcome })
+      }),
+    )
+  })
+
+const runCall = (tool: Tool, input: unknown, execution: Execution, ended: (outcome: ToolOutcome) => void): Effect.Effect<string | null, ToolError> =>
   Effect.gen(function* () {
     const index = execution.calls++
     const clock = yield* Effect.serviceOption(CodeMode.ActiveTime)
@@ -84,6 +104,7 @@ const call = (tool: Tool, input: unknown, execution: Execution): Effect.Effect<s
       }
       return tool.run(input, inner).catch((error: unknown): ToolResult => failedResult(error))
     })
+    ended(result.outcome)
     outer.programCall(tool.spec.name, result.outcome)
     const parts = typeof result.content === "string" ? [{ type: "text" as const, text: result.content }] : result.content
     const text = parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")
@@ -111,8 +132,9 @@ export const executeTool = (inventory: () => ReadonlyArray<Tool>, limits: CodeMo
     args: CodeMode.Input,
     prepare: () => ({ check: { permission: "execute", subjects: ["*"], patterns: ["*"] }, plan: undefined }),
     run: async ({ code }, run) => {
+      const trace = otelContext.active()
       const program = Effect.gen(function* () {
-        const execution: Execution = { run, images: [], calls: 0, declined: yield* Deferred.make<string>() }
+        const execution: Execution = { run, images: [], calls: 0, declined: yield* Deferred.make<string>(), trace }
         const runtime = CodeMode.make({
           tools: programTools(inventory(), execution),
           limits: {

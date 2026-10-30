@@ -2,8 +2,10 @@ import { AIMessage, type AIMessageChunk } from "@langchain/core/messages"
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import type { Model, SessionEventBody } from "@ashe-agent/protocol"
+import { context as otelContext } from "@opentelemetry/api"
 import { Effect } from "effect"
 import { MAX_USABLE_CONTEXT_WINDOW } from "../inputs/shapes.ts"
+import { endSpan, recordDuration, startSpan, withSpan, type ErrorClass } from "../telemetry/signals.ts"
 import type { TurnContext, TurnOutcome, TurnRunner } from "../sessions/hub.ts"
 import { REQUEST_INSTRUCTIONS } from "./blocks.ts"
 import { compact, needsCompaction, SUMMARY_PROMPT_REVISION } from "./compaction.ts"
@@ -236,12 +238,41 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
     return { window: { ...state.window, entries: [...state.window.entries, ...inputs] } }
   }
 
+  /**
+   * The model port with every call traced as an `ashe_agent.model_call`
+   * span of the turn and timed, the compaction summary call included.
+   */
+  const port: ModelPort = {
+    stream: async function* (call, callSignal) {
+      const span = startSpan("ashe_agent.model_call", { "ashe_agent.model": call.model }, context.trace)
+      const startedAt = performance.now()
+      let failure: ErrorClass | undefined
+      try {
+        yield* options.port.stream(call, callSignal)
+      } catch (error) {
+        failure = callSignal.aborted
+          ? "canceled"
+          : error instanceof ModelCallError && error.overflow
+            ? "context_overflow"
+            : "model_call_failed"
+        throw error
+      } finally {
+        // Also reached when the consumer stops reading early.
+        endSpan(span, {}, failure)
+        recordDuration("ashe_agent.model_call.duration", (performance.now() - startedAt) / 1000, {
+          "ashe_agent.model": call.model,
+          ...(failure === undefined ? {} : { "error.type": failure }),
+        })
+      }
+    },
+  }
+
   const { temperature } = session.agentSettings
   const compactStep = async (state: StateValue) => {
     if (!state.overflowed && !needsCompaction(state.window, first, turn.model, usable)) return {}
     let compaction
     try {
-      compaction = await compact(options.port, state.window, first, turn.model, signal, temperature)
+      compaction = await compact(port, state.window, first, turn.model, signal, temperature)
     } catch (error) {
       if (signal.aborted) throw error
       throw new TurnFailure(`compaction failed: ${error instanceof Error ? error.message : String(error)}`, "compaction_failed")
@@ -272,7 +303,7 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
         tools: [...tools.values()].map((tool) => tool.spec),
         ...(temperature === null ? {} : { temperature }),
       }
-      for await (const chunk of options.port.stream(call, signal)) {
+      for await (const chunk of port.stream(call, signal)) {
         chunks.push(chunk)
         events.chunk(chunk)
       }
@@ -315,11 +346,23 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
         continue
       }
       const tool = tools.get(name)
+      // A name no offered tool has is the model's text, so it is not recorded.
+      const toolName = tool === undefined ? "unknown" : name
+      const span = startSpan("ashe_agent.tool_call", { "ashe_agent.tool": toolName, "ashe_agent.tool.in_program": false }, context.trace)
+      const startedAt = performance.now()
+      const ended = (outcome: ToolOutcome) => {
+        endSpan(span, { "ashe_agent.tool.outcome": outcome }, outcome === "canceled" ? "canceled" : undefined)
+        recordDuration("ashe_agent.tool_call.duration", (performance.now() - startedAt) / 1000, {
+          "ashe_agent.tool": toolName,
+          "ashe_agent.tool.outcome": outcome,
+          "ashe_agent.tool.in_program": false,
+        })
+      }
       if (tool === undefined) {
         result = { outcome: "failed", content: `There is no tool named ${name}.` }
       } else {
         try {
-          result = await tool.run(call.args, {
+          result = await otelContext.with(withSpan(span, context.trace), () => tool.run(call.args, {
             sessionId: session.id,
             runId: turn.runId,
             toolCallId: callId,
@@ -330,12 +373,16 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
             started: () => events.started(callId),
             onCancel: (note) => events.cancelNote(callId, note),
             programCall: (tool, outcome) => events.emit({ type: "PROGRAM_CALL_FINISHED", toolCallId: callId, tool, outcome }),
-          })
+          }))
         } catch (error) {
-          if (signal.aborted) throw error
+          if (signal.aborted) {
+            ended("canceled")
+            throw error
+          }
           result = failedResult(error)
         }
       }
+      ended(result.outcome)
       if (result.outcome === "declined" && result.endTurn) stopped = true
       events.result(callId, result.content, result.outcome)
       entries.push({ ...own, kind: "result", callId, name, content: result.content, outcome: result.outcome })
