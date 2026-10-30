@@ -1,0 +1,21 @@
+{
+  "name": "ashe-agent-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.4",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "gate": "bun scripts/task.ts gate",
+    "typecheck": "bun scripts/task.ts typecheck",
+    "test:unit": "bun scripts/task.ts test:unit",
+    "test:conformance": "bun scripts/task.ts test:conformance",
+    "generate": "bun scripts/task.ts generate"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.4",
+    "typescript": "7.0.2"
+  }
+}

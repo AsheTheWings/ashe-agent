@@ -1,0 +1,6 @@
+# Inputs reach processes only through the declared loader, so Bun's
+# automatic .env loading stays off for every bun command in this repository.
+env = false
+
+[install]
+exact = true
