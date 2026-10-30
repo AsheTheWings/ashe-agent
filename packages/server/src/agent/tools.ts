@@ -54,9 +54,9 @@ export interface Tool {
   readonly run: (args: unknown, run: ToolRun) => Promise<ToolResult>
 }
 
-/** The draft-07 JSON Schema of an Effect Schema, standing alone. */
+/** The draft-07 JSON Schema of an Effect Schema, standing alone, its objects closed to other properties. */
 export const draft07 = (schema: Schema.Top): Record<string, unknown> => {
-  const document = JsonSchema.toDocumentDraft07(Schema.toJsonSchemaDocument(schema))
+  const document = JsonSchema.toDocumentDraft07(Schema.toJsonSchemaDocument(schema, { onExcessProperty: "error" }))
   return {
     ...document.schema,
     ...(Object.keys(document.definitions).length > 0 ? { definitions: document.definitions } : {}),
@@ -66,7 +66,8 @@ export const draft07 = (schema: Schema.Top): Record<string, unknown> => {
 /**
  * A built-in tool: the model is offered the draft-07 JSON Schema of `args`,
  * and its arguments are decoded with `args` before `run`. Arguments that do
- * not decode give a failed result naming the problem, and `run` is not
+ * not decode, an argument `args` does not name included, give a failed
+ * result naming the problem, and `run` is not
  * called. With `prepare`, the decoded call is authorized by the check it
  * returns, and `run` receives its plan, so the call acts on exactly what
  * was authorized; a result from `prepare` ends the call without running
@@ -80,7 +81,7 @@ export const builtinTool = <S extends Schema.Codec<unknown, unknown, never, neve
   readonly prepare?: (args: S["Type"], run: ToolRun) => Prepared<P> | ToolResult | Promise<Prepared<P> | ToolResult>
   readonly run: (args: S["Type"], run: ToolRun, plan: P) => Promise<ToolResult>
 }): Tool => {
-  const decode = Schema.decodeUnknownExit(definition.args)
+  const decode = Schema.decodeUnknownExit(definition.args, { onExcessProperty: "error" })
   const namespace = definition.namespace ?? null
   return {
     namespace,

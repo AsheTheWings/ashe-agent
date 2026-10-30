@@ -197,7 +197,10 @@ describe("the agent loop", () => {
     await withHarness(
       async (h) => {
         const id = h.create()
-        h.model.next(callTools([{ name: "echo", args: { text: 5 } }, { name: "raw", args: { a: [1, "x"], b: null } }]), say("ok"))
+        h.model.next(
+          callTools([{ name: "echo", args: { text: 5 } }, { name: "raw", args: { a: [1, "x"], b: null } }, { name: "echo", args: { text: "a", extra: 1 } }]),
+          say("ok"),
+        )
         h.input(id, "go")
         await h.turnsEnded(id, 1)
         const results = ofType(h.events(id), "TOOL_CALL_RESULT")
@@ -205,6 +208,9 @@ describe("the agent loop", () => {
         expect(results[0].content).toStartWith("The arguments do not match the tool's schema")
         expect(received).toEqual([{ a: [1, "x"], b: null }])
         expect(results[1]).toMatchObject({ outcome: "failed", content: "the server says: field x is required" })
+        // A built-in tool refuses an argument its schema does not name.
+        expect(results[2]).toMatchObject({ outcome: "failed" })
+        expect(results[2].content).toStartWith("The arguments do not match the tool's schema")
       },
       { tools: [...testTools(), raw] },
     )

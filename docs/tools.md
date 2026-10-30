@@ -2,7 +2,10 @@
 
 The agent's built-in tools are grouped in namespaces. Models receive each
 as a plain function tool named `<namespace>_<tool>`, since not every
-provider accepts namespaced or dotted tool names.
+provider accepts namespaced or dotted tool names. A built-in tool's
+schema admits only the arguments it names; a call with any other
+argument, such as a `shell` argument to `shell_exec_command`, fails
+without running.
 
 | Tool | Permission | Subjects |
 | --- | --- | --- |
