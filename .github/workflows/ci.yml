@@ -30,3 +30,4 @@ jobs:
       - run: bun run gate
       - run: bun run test:integration
       - run: bun run test:test262
+      - run: bun run build:web

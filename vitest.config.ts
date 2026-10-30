@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs"
 
 /** Vitest runs only the checkpoint saver's validation suite; every other test runs on bun test. */
 export default {
+  // No .env file reaches the tests; the task runner sets their whole environment.
+  envDir: false,
   plugins: [
     {
       // Bun imports migration files as text; Vite needs the same for the code under test.
