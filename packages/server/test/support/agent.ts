@@ -230,7 +230,7 @@ export class AgentHarness {
     this.hub = this.makeHub()
   }
 
-  create(params: { model?: string } = {}) {
+  create(params: { model?: string; agent?: string } = {}) {
     return this.hub.create({ cwd: this.dir, ...params }).id
   }
 

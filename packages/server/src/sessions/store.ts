@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite"
 import type { SessionEvent, SessionEventBody, SessionSummary } from "@ashe-agent/protocol"
+import type { AgentSettings } from "../agents/agents.ts"
 import { copyThread, latestCheckpointId, truncateThread } from "../store/checkpoint-threads.ts"
 
 export type TurnStatus = "running" | "finished" | "cancelled" | "failed" | "interrupted"
@@ -16,6 +17,8 @@ export interface SessionRecord {
   readonly agent: string | null
   readonly model: string
   readonly instructions: string | null
+  /** The agent's settings as recorded at creation. */
+  readonly agentSettings: AgentSettings
   readonly createdAt: number
   readonly nextSeq: number
   /** The first message of every model call, rendered at creation. */
@@ -48,6 +51,7 @@ interface SessionRow {
   agent: string | null
   model: string
   instructions: string | null
+  agent_settings: string
   created_at: number
   next_seq: number
   first_message: string
@@ -61,6 +65,7 @@ const toSession = (row: SessionRow): SessionRecord => ({
   agent: row.agent,
   model: row.model,
   instructions: row.instructions,
+  agentSettings: JSON.parse(row.agent_settings),
   createdAt: row.created_at,
   nextSeq: row.next_seq,
   firstMessage: row.first_message,
@@ -136,8 +141,9 @@ export class SessionStore {
       this.db
         .query(
           `INSERT INTO sessions
-            (id, cwd, agent, model, instructions, forked_from_session, forked_from_run, created_at, next_seq, first_message, catalogs)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+            (id, cwd, agent, model, instructions, agent_settings, forked_from_session, forked_from_run, created_at, next_seq,
+             first_message, catalogs)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
         )
         .run(
           session.id,
@@ -145,6 +151,7 @@ export class SessionStore {
           session.agent,
           session.model,
           session.instructions,
+          JSON.stringify(session.agentSettings),
           forkedFrom?.sessionId ?? null,
           forkedFrom?.runId ?? null,
           session.createdAt,
@@ -320,9 +327,9 @@ export class SessionStore {
       this.db
         .query(
           `INSERT INTO sessions
-            (id, cwd, agent, model, instructions, forked_from_session, forked_from_run, created_at, next_seq,
+            (id, cwd, agent, model, instructions, agent_settings, forked_from_session, forked_from_run, created_at, next_seq,
              first_message, catalogs, pending_notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           target.id,
@@ -330,6 +337,7 @@ export class SessionStore {
           source.agent,
           source.model,
           source.instructions,
+          JSON.stringify(source.agentSettings),
           source.id,
           throughRunId,
           target.createdAt,

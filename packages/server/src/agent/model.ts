@@ -15,6 +15,8 @@ export interface ModelCall {
   readonly messages: ReadonlyArray<BaseMessage>
   readonly tools: ReadonlyArray<ToolSpec>
   readonly maxOutputTokens?: number
+  /** The sampling temperature, sent only when set. */
+  readonly temperature?: number
 }
 
 /** A failed model call; `overflow` marks a request larger than the model's context window. */
@@ -67,6 +69,7 @@ export const responsesModelPort = (options: { readonly baseUrl: string; readonly
       zdrEnabled: true,
       maxRetries: 2,
       ...(call.maxOutputTokens === undefined ? {} : { maxTokens: call.maxOutputTokens }),
+      ...(call.temperature === undefined ? {} : { temperature: call.temperature }),
       modelKwargs: { instructions: call.instructions },
     })
     const runnable =

@@ -47,6 +47,7 @@ export const compact = async (
   first: string,
   model: string,
   signal: AbortSignal,
+  temperature: number | null = null,
 ): Promise<Compaction | null> => {
   const tokensBefore = estimateWindow(window, first, model)
   const end = tailStart(window.entries, RAW_TAIL_TOKENS)
@@ -58,6 +59,7 @@ export const compact = async (
     messages: [new HumanMessage(summaryRequest(window, end))],
     tools: [],
     maxOutputTokens: SUMMARY_MAX_TOKENS,
+    ...(temperature === null ? {} : { temperature }),
   }
   for await (const chunk of port.stream(call, signal)) {
     if (typeof chunk.content === "string") summary += chunk.content

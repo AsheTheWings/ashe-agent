@@ -38,6 +38,8 @@ const State = Annotation.Root({
   retried: Annotation<boolean>({ reducer: (_, next) => next, default: () => false }),
   /** Set by a plain reject, which ends the turn. */
   stopped: Annotation<boolean>({ reducer: (_, next) => next, default: () => false }),
+  /** The model calls the turn has made, which the agent's `steps` bounds. */
+  calls: Annotation<number>({ reducer: (_, next) => next, default: () => 0 }),
 })
 
 type StateValue = typeof State.State
@@ -235,11 +237,12 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
     return { window: { ...state.window, entries: [...state.window.entries, ...inputs] } }
   }
 
+  const { temperature, steps } = session.agentSettings
   const compactStep = async (state: StateValue) => {
     if (!state.overflowed && !needsCompaction(state.window, first, turn.model, usable)) return {}
     let compaction
     try {
-      compaction = await compact(options.port, state.window, first, turn.model, signal)
+      compaction = await compact(options.port, state.window, first, turn.model, signal, temperature)
     } catch (error) {
       if (signal.aborted) throw error
       throw new TurnFailure(`compaction failed: ${error instanceof Error ? error.message : String(error)}`, "compaction_failed")
@@ -255,17 +258,25 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
       tokensAfter: compaction.tokensAfter,
       promptRevision: SUMMARY_PROMPT_REVISION,
     })
-    return { window: compaction.window, overflowed: false, retried: state.overflowed }
+    // The summary call is one of the turn's model calls, counted toward the agent's steps.
+    return { window: compaction.window, overflowed: false, retried: state.overflowed, calls: state.calls + 1 }
   }
 
   const modelStep = async (state: StateValue) => {
+    // A summary call that took the agent's last allowed call ends the turn, unless it compacted an
+    // overflow: the overflowed call is retried once, as the last call.
+    if (steps !== null && state.calls >= steps && !state.retried) return { stopped: true }
     const chunks: Array<AIMessageChunk> = []
+    // The agent's last allowed call goes without tools, after a note saying so.
+    const last = steps !== null && state.calls + 1 >= steps
+    const window: Window = last ? { ...state.window, entries: [...state.window.entries, { ...own, kind: "note", text: stepLimitNote(steps) }] } : state.window
     try {
       const call = {
         model: turn.model,
         instructions: REQUEST_INSTRUCTIONS,
-        messages: renderWindow(state.window, first, turn.model, model.imageInput),
-        tools: specs,
+        messages: renderWindow(window, first, turn.model, model.imageInput),
+        tools: last ? [] : specs,
+        ...(temperature === null ? {} : { temperature }),
       }
       for await (const chunk of options.port.stream(call, signal)) {
         chunks.push(chunk)
@@ -283,9 +294,18 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
     }
     events.endCall()
     const { message, invalid } = finalMessage(chunks)
-    const entries: Array<Entry> = [...state.window.entries, { ...own, kind: "assistant", message }]
+    const entries: Array<Entry> = [...window.entries, { ...own, kind: "assistant", message }]
     for (const call of message.tool_calls ?? []) events.ensureCall(call.id!, call.name)
+    if (last) {
+      // Calls the last call made anyway never run.
+      for (const call of message.tool_calls ?? []) {
+        const content = "The turn reached its step limit; this tool call did not run."
+        events.result(call.id!, content, "failed")
+        entries.push({ ...own, kind: "result", callId: call.id!, name: call.name, content, outcome: "failed" })
+      }
+    }
     for (const [id, raw] of invalid) {
+      if (last) continue
       const name = message.tool_calls!.find((call) => call.id === id)!.name
       const content = `The arguments were not valid JSON: ${raw}`
       events.result(id, content, "failed")
@@ -293,7 +313,7 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
     }
     const inputTokens = (message.usage_metadata as { input_tokens?: number } | undefined)?.input_tokens
     const usage = inputTokens === undefined ? null : { model: turn.model, inputTokens, entries: state.window.entries.length }
-    return { window: { summary: state.window.summary, entries, usage }, retried: false }
+    return { window: { summary: state.window.summary, entries, usage }, retried: false, calls: state.calls + 1, stopped: last }
   }
 
   const toolStep = async (state: StateValue) => {
@@ -339,6 +359,7 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
 
   const afterModel = (state: StateValue) => {
     if (state.overflowed) return "compact"
+    if (state.stopped) return END
     return unansweredCalls(state.window.entries).some((call) => call.entry.runId === turn.runId) ? "tools" : "steer"
   }
   const afterTools = (state: StateValue) => (state.stopped ? END : "steer")
@@ -351,7 +372,7 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
     .addNode("steer", steer)
     .addEdge(START, "compact")
     .addEdge("compact", "model")
-    .addConditionalEdges("model", afterModel, ["compact", "tools", "steer"])
+    .addConditionalEdges("model", afterModel, ["compact", "tools", "steer", END])
     .addConditionalEdges("tools", afterTools, ["steer", END])
     .addConditionalEdges("steer", afterSteer, ["compact", END])
     .compile({ checkpointer: options.saver })
@@ -370,9 +391,12 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
   }
   for (const note of context.notes) entries.push({ ...own, kind: "note", text: note })
   entries.push({ ...own, kind: "input", text: context.input.text })
-  await graph.invoke({ window: { ...window, entries }, overflowed: false, retried: false, stopped: false }, config)
+  await graph.invoke({ window: { ...window, entries }, overflowed: false, retried: false, stopped: false, calls: 0 }, config)
   return { status: "finished" }
 }
+
+const stepLimitNote = (steps: number) =>
+  `This turn reached its limit of ${steps} model calls. Tools are unavailable for this last response: reply with what was done and what remains.`
 
 /** The result of a tool call that threw: a denial, a reject, or a failure. */
 const failedResult = (error: unknown): ToolResult => {

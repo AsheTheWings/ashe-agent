@@ -57,6 +57,8 @@ bun packages/server/src/main.ts serve
   rewind, and restarts.
 - [Permissions](docs/permissions.md): how permission rules decide tool
   calls, and how clients answer permission requests.
+- [Agents and skills](docs/agents-and-skills.md): global instructions,
+  agent files, and skills, and where the server reads them.
 - [Tools](docs/tools.md): the built-in tools, their permissions, and what
   they read and write.
 - [Model context](docs/model-context.md): what each model call carries,

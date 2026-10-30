@@ -20,6 +20,10 @@ export const sessionHandlers = (hub: SessionHub) => {
 
   const handlers: Handlers = {
     "models.list": async () => ({ models: [...hub.models()] }),
+    "agents.list": async () => {
+      const { agents, refused } = hub.agents()
+      return { agents: [...agents], refused: [...refused] }
+    },
     "session.list": async () => ({ sessions: [...hub.list()] }),
     "session.create": async (params) => ({ session: hub.create(params) }),
     "session.subscribe": async (params, context) => {

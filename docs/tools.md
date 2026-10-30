@@ -12,6 +12,7 @@ provider accepts namespaced or dotted tool names.
 | `shell_write_stdin` | none | covered by the check of the command that started the process |
 | `web_search` | `web` | the query |
 | `web_fetch` | `web` | each URL |
+| `skill` | `skill` | the skill's name; [agents and skills](agents-and-skills.md) describes it |
 
 [Permissions](permissions.md) explains how subjects are resolved and
 decided. A tool resolves its paths once, when the call is checked, and
