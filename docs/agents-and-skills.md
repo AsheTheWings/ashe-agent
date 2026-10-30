@@ -26,7 +26,6 @@ description: Reviews changes without editing them
 mode: primary
 model: provider/model-id
 temperature: 0.2
-steps: 40
 permission:
   edit: deny
   shell: { "*": ask, "git diff*": allow }
@@ -34,7 +33,7 @@ permission:
 You review the working tree and report findings.
 ```
 
-Every field is optional:
+Every field is optional, and the server ignores other keys:
 
 | Field | Meaning |
 | --- | --- |
@@ -42,13 +41,12 @@ Every field is optional:
 | `mode` | `primary`, `subagent`, or `all`, `all` by default. Only `primary` and `all` agents can run a session. |
 | `model` | A configured model id the agent's sessions start with. |
 | `temperature` | A finite number from 0 to 2, sent with every model call, compaction's summary call included. |
-| `steps` | A positive integer bounding a turn's model calls, compaction's summary calls included: the agent's last allowed call goes without tools, after a note asking for a closing reply, and the turn ends; a summary call that takes the last allowed call ends the turn, except that a call that overflowed the context window is still retried once after its summary, as the last call. |
 | `permission` | Rules in the [permissions](permissions.md) shape, layered after the global rules. |
 
 A file whose frontmatter breaks these rules is refused, and `agents.list`
 returns it with the reason beside the valid agents. Creating a session
 with an agent records the agent's body, which replaces the global
-instructions, and its `temperature`, `steps`, and `permission`; later
+instructions, and its `temperature` and `permission`; later
 edits to the file do not reach existing sessions, and a fork keeps what
 its source recorded.
 

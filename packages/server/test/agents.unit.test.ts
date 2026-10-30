@@ -29,7 +29,7 @@ const reason = (frontmatter: string) => {
 describe("agent files", () => {
   test("valid frontmatter gives the agent's settings and its body as instructions", () => {
     const result = agent(
-      'description: Helps\nmode: primary\nmodel: beta/two\ntemperature: 0.5\nsteps: 3\npermission:\n  shell: ask\n  edit: { "*.md": allow }',
+      'description: Helps\nmode: primary\nmodel: beta/two\ntemperature: 0.5\npermission:\n  shell: ask\n  edit: { "*.md": allow }',
       "# Helper\n\nDo things.\n",
     )
     expect(result).toEqual({
@@ -40,18 +40,16 @@ describe("agent files", () => {
         description: "Helps",
         mode: "primary",
         model: "beta/two",
-        settings: { temperature: 0.5, steps: 3, permission: { shell: "ask", edit: { "*.md": "allow" } } },
+        settings: { temperature: 0.5, permission: { shell: "ask", edit: { "*.md": "allow" } } },
         body: "# Helper\n\nDo things.\n",
       },
     })
     expect(parseAgent("plain", "/agents/plain.md", "Only a body.", models)).toMatchObject({ ok: true, agent: { mode: "all", model: null, body: "Only a body." } })
   })
 
-  test("mode, model, steps, and permission are validated", () => {
+  test("mode, model, and permission are validated", () => {
     expect(reason("mode: helper")).toBe("mode is not primary, subagent, or all")
     expect(reason("model: gamma/three")).toBe("model is not a configured model id")
-    expect(reason("steps: 0")).toBe("steps is not a positive integer")
-    expect(reason("steps: 1.5")).toBe("steps is not a positive integer")
     expect(reason("permission: { shell: maybe }")).toBe("permission is malformed")
     expect(reason("description: [a]")).toBe("description is not a string")
     expect(reason(": : :")).toStartWith("its frontmatter is not valid YAML")
@@ -76,7 +74,7 @@ describe("agent files", () => {
         "/config/AGENTS.md": "Global rules.",
         "/agents/helper.md": "---\nmode: primary\ntemperature: 1\n---\nHelper rules.",
         "/agents/sub.md": "---\nmode: subagent\n---\nSub rules.",
-        "/agents/bad.md": "---\nsteps: -1\n---\n",
+        "/agents/bad.md": "---\nmode: helper\n---\n",
       }),
     })
     expect(setup.resolve(null)).toMatchObject({ agent: null, instructions: "Global rules." })
@@ -88,7 +86,7 @@ describe("agent files", () => {
         { name: "helper", description: null, mode: "primary", model: null },
         { name: "sub", description: null, mode: "subagent", model: null },
       ],
-      refused: [{ path: "/agents/bad.md", reason: "steps is not a positive integer" }],
+      refused: [{ path: "/agents/bad.md", reason: "mode is not primary, subagent, or all" }],
     })
   })
 
