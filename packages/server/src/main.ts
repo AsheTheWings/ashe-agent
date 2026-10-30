@@ -10,6 +10,8 @@ import { createApiToken, hasOwnerPassword, listApiTokens, revokeApiToken, setOwn
 import { readSecretLine } from "./cli/terminal.ts"
 import { loadInputsOrExit } from "./inputs/bootstrap.ts"
 import { ProtocolServer, serveProgram } from "./server/serve.ts"
+import { Sessions } from "./sessions/hub.ts"
+import { noAgents, unavailableRunner } from "./sessions/placeholder.ts"
 import { databasePath, openDatabase, openDatabaseReadonly, Store } from "./store/database.ts"
 import { dumpDatabase } from "./store/dump.ts"
 import { migrationFiles } from "./store/migration-files.ts"
@@ -68,8 +70,10 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
       hostname: inputs.listenHost,
       port: inputs.listenPort,
       origins: inputs.origins,
-      handlers: {},
-    }).pipe(Layer.provide(Store.layer(databasePath(inputs.stateDir))))
+    }).pipe(
+      Layer.provideMerge(Sessions.layer({ models: inputs.models, runner: unavailableRunner, setup: noAgents })),
+      Layer.provide(Store.layer(databasePath(inputs.stateDir))),
+    )
     let interrupt = () => {}
     let stopping = false
     const stop = () => {

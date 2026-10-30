@@ -101,10 +101,16 @@ export class CliRun {
 export class Client {
   private readonly messages: Array<any> = []
   closed: { code: number } | null = null
+  /** Receives every notification; a client without it queues them with responses. */
+  onNotification: ((message: any) => void) | null = null
   private nextId = 1
 
   private constructor(private readonly socket: WebSocket) {
-    socket.onmessage = (event) => this.messages.push(JSON.parse(String(event.data)))
+    socket.onmessage = (event) => {
+      const message = JSON.parse(String(event.data))
+      if (message.id === undefined && this.onNotification !== null) this.onNotification(message)
+      else this.messages.push(message)
+    }
     socket.onclose = (event) => {
       this.closed = { code: event.code }
     }

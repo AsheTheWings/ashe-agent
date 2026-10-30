@@ -40,6 +40,7 @@ export const SessionSummary = Schema.Struct({
   model: Id,
   createdAt: Timestamp,
   running: Schema.Boolean,
+  /** The number of the session's last persisted event; a subscriber that received it is caught up. */
   lastSeq: Count,
 })
 
