@@ -5,9 +5,10 @@ consists of its input layer, which declares, merges, and validates every
 configuration and protected input, its client protocol's message
 definitions, its SQLite store with migrations, a LangGraph checkpoint
 saver, and consistent dumps, and a WebSocket server that authenticates the
-owner's logins and API tokens. Nothing about it is stable yet, and its
-configuration, protocol, and storage may change incompatibly at any
-revision.
+owner's logins and API tokens and keeps durable sessions that several
+clients share, with steering, queueing, fork, and rewind. It has no agent
+loop yet. Nothing about it is stable yet, and its configuration,
+protocol, and storage may change incompatibly at any revision.
 
 ## Repository
 
@@ -49,6 +50,8 @@ bun packages/server/src/main.ts serve
   API tokens, and how connections authenticate.
 - [Protocol](docs/protocol.md): how clients and the server exchange
   messages and session events.
+- [Sessions](docs/sessions.md): history, input during turns, fork,
+  rewind, and restarts.
 - [Storage](docs/storage.md): the database, its migrations, and dumps.
 - [Testing](docs/testing.md): the fast gate and the command for each test
   class.

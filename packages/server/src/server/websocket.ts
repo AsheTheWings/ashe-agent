@@ -35,11 +35,13 @@ export interface Connection {
   deadline: ReturnType<typeof setTimeout> | null
 }
 
-/** What a method handler gets: the connection's principal and a way to send it notifications. */
+/** What a method handler gets: the connection's principal and ways to send it notifications. */
 export interface RequestContext {
   readonly principal: Sender
   readonly connection: Connection
   readonly notify: (message: unknown) => void
+  /** Runs `action` right after the request's response is sent. */
+  readonly afterResponse: (action: () => void) => void
 }
 
 /** A method's handler; it throws a `ProtocolError` to answer with an error. */
@@ -61,6 +63,8 @@ export interface WebSocketServerOptions {
   readonly handlers: Handlers
   readonly now?: () => number
   readonly onClose?: (connection: Connection) => void
+  /** Receives a handler's unexpected failure, which the client sees only as an internal error. */
+  readonly onInternalError?: (method: string, failure: unknown) => void
 }
 
 export interface WebSocketServer {
@@ -157,16 +161,19 @@ export const startWebSocketServer = (options: WebSocketServerOptions): WebSocket
     const params = Schema.decodeUnknownResult(methods[name].params as Schema.Codec<any, unknown>)(request.params ?? {})
     if (Result.isFailure(params)) return fail(socket, request.id, error(ErrorCode.invalidParams, params.failure.message))
     try {
+      const after: Array<() => void> = []
       const result = await handler(params.success, {
         principal,
         connection: socket.data,
         notify: (message) => send(socket, message),
+        afterResponse: (action) => after.push(action),
       })
       respond(socket, request.id, result)
+      for (const action of after) action()
     } catch (failure) {
       if (failure instanceof ProtocolError) return fail(socket, request.id, failure.error)
       fail(socket, request.id, error(ErrorCode.internalError, "internal error"))
-      throw failure
+      options.onInternalError?.(request.method, failure)
     }
   }
 

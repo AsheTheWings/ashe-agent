@@ -1,15 +1,16 @@
 import { Context, Effect, Layer } from "effect"
+import { sessionHandlers } from "../sessions/handlers.ts"
+import { Sessions } from "../sessions/hub.ts"
 import { Store } from "../store/database.ts"
-import { startWebSocketServer, type Handlers, type WebSocketServer } from "./websocket.ts"
+import { startWebSocketServer, type WebSocketServer } from "./websocket.ts"
 
 export interface ServeOptions {
   readonly hostname: string
   readonly port: number
   readonly origins: ReadonlyArray<string>
-  readonly handlers: Handlers
 }
 
-/** The listening protocol server, stopped when its layer is released. */
+/** The listening protocol server over the session hub, stopped when its layer is released. */
 export class ProtocolServer extends Context.Service<ProtocolServer, WebSocketServer>()(
   "ashe-agent/server/ProtocolServer",
 ) {
@@ -18,8 +19,10 @@ export class ProtocolServer extends Context.Service<ProtocolServer, WebSocketSer
       ProtocolServer,
       Effect.gen(function* () {
         const { db } = yield* Store
+        const hub = yield* Sessions
+        const { handlers, onClose } = sessionHandlers(hub)
         return yield* Effect.acquireRelease(
-          Effect.sync(() => startWebSocketServer({ db, ...options })),
+          Effect.sync(() => startWebSocketServer({ db, ...options, handlers, onClose })),
           (server) => Effect.promise(() => server.stop()),
         )
       }),

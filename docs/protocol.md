@@ -48,7 +48,7 @@ cover what AG-UI does not:
 | Event | Meaning |
 | --- | --- |
 | `SESSION_CREATED` | The session's first event: its directory, agent, model, and fork source. |
-| `INPUT_RECEIVED` | An input, in order of arrival, with its sender and mode. |
+| `INPUT_RECEIVED` | An input entering the conversation, with its sender and mode. |
 | `RUN_INTERRUPTED` | A run the server was still running when it stopped. |
 | `MODEL_CHANGED` | A new selected model, used from the next run. |
 | `SESSION_REWOUND` | A rewind removed every event from `firstRemovedSeq` on. |
@@ -57,6 +57,8 @@ cover what AG-UI does not:
 
 A client applying `SESSION_REWOUND` drops its events numbered
 `firstRemovedSeq` and later before it applies the events after it.
+[Sessions](sessions.md) explains how inputs, turns, fork, and rewind
+produce these events.
 
 ## Errors
 

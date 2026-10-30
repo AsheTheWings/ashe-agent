@@ -107,7 +107,11 @@ export const SessionCreated = event("SESSION_CREATED", {
   ),
 })
 
-/** An input as the server received it, in order of arrival. */
+/**
+ * An input entering the conversation: starting a turn or joining the
+ * running one at a step boundary. Inputs of each mode enter in order of
+ * arrival.
+ */
 export const InputReceived = event("INPUT_RECEIVED", {
   inputId: Id,
   text: Schema.String,
