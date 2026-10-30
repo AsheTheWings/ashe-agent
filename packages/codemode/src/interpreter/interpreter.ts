@@ -389,7 +389,7 @@ export class Interpreter<R> {
     readonly services: Context.Context<R>
     readonly builtins: Builtins
     readonly logs?: Array<string>
-    readonly globals?: (ctx: Interpreter<R>) => ReadonlyArray<readonly [string, Value]>
+    readonly globals?: ((ctx: Interpreter<R>) => ReadonlyArray<readonly [string, Value]>) | undefined
   }) {
     this.tools = options.tools
     this.builtins = options.builtins
@@ -2190,8 +2190,9 @@ class Frame<R> {
       checkStringLength(output.length)
 
       if (index < expressions.length) {
-        const raw = yield* this.evaluateExpression(expressions[index])
-        output += coerceToString(yield* this.toPrimitive(raw, "string", expressions[index]))
+        const expression = expressions[index]!
+        const raw = yield* this.evaluateExpression(expression)
+        output += coerceToString(yield* this.toPrimitive(raw, "string", expression))
         checkStringLength(output.length)
       }
     }

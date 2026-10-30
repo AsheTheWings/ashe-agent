@@ -159,7 +159,7 @@ type Assertion = {
   label: string
   input?: string
   args?: ReadonlyArray<Argument>
-  expected?: string | number
+  expected?: string | number | undefined
   outcome?: Outcome
 }
 type Vector = {
