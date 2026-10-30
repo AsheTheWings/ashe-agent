@@ -35,7 +35,8 @@ export type Model = typeof Model.Type
 
 export const SessionSummary = Schema.Struct({
   id: Id,
-  cwd: Schema.String,
+  /** The session's own directory, its starting working directory. */
+  sessionDir: Schema.String,
   agent: Schema.NullOr(Schema.String),
   model: Id,
   createdAt: Timestamp,

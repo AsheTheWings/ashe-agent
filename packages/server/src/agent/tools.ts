@@ -8,6 +8,7 @@ export interface ToolRun {
   readonly sessionId: string
   readonly runId: string
   readonly toolCallId: string
+  /** The session directory, where shell commands start and against which relative paths resolve. */
   readonly cwd: string
   /** Whether the turn's model takes images in tool results. */
   readonly imageInput: boolean

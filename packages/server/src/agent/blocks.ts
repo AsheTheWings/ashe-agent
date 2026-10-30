@@ -63,7 +63,7 @@ export interface DeveloperSections {
   readonly skills: string | null
   readonly codeMode: string | null
   readonly sessionId: string
-  readonly cwd: string
+  readonly sessionDir: string
 }
 
 const section = (heading: string, introduction: string, body: string) => `# ${heading}\n\n${introduction}\n\n${body}`
@@ -89,8 +89,8 @@ export const developerMessage = (sections: DeveloperSections): string => {
   parts.push(
     section(
       "Session",
-      "This session's identity and where its shell commands start.",
-      `- Session id: \`${sections.sessionId}\`\n- Starting working directory: \`${escapeTags(sections.cwd)}\``,
+      "This session's identity and its own directory, where shell commands start and relative paths resolve.",
+      `- Session id: \`${sections.sessionId}\`\n- Session directory: \`${escapeTags(sections.sessionDir)}\``,
     ),
   )
   return parts.join("\n\n")

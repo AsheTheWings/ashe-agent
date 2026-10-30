@@ -2,7 +2,7 @@
 
 A session's instructions, its agent, and the skills its model can load
 all come from the server user's configuration, never from the session's
-working directory: the server reads no `AGENTS.md`, `CLAUDE.md`, or skill
+directory: the server reads no `AGENTS.md`, `CLAUDE.md`, or skill
 directory there or in its ancestors.
 
 ## Global instructions

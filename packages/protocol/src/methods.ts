@@ -52,7 +52,8 @@ export const methods = {
   "session.list": method(Empty, Schema.Struct({ sessions: Schema.Array(SessionSummary) })),
   "session.create": method(
     Schema.Struct({
-      cwd: Schema.String,
+      /** Refused when present: each session starts in its own session directory. */
+      cwd: Schema.optionalKey(Schema.Never),
       model: Schema.optionalKey(Id),
       agent: Schema.optionalKey(Schema.String),
     }),

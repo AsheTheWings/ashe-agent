@@ -102,6 +102,7 @@ describe("file_read images", () => {
   test("an image reaches a model that takes images as an input_image part, else a refusal; records carry a placeholder", async () => {
     await withHarness({}, async (h) => {
       const viewer = h.create({ model: beta })
+      cpSync(join(fixtures, "red.png"), join(h.sessionDir(viewer), "red.png"))
       h.model.next(callTools([{ name: "file_read", args: { path: "red.png" } }]), say("red"))
       h.input(viewer, "look")
       await h.turnsEnded(viewer, 1)
@@ -120,6 +121,7 @@ describe("file_read images", () => {
       expect(JSON.stringify(responsesInput(h.model.last()))).not.toContain("input_image")
 
       const blind = h.create({ model: alpha })
+      cpSync(join(fixtures, "red.png"), join(h.sessionDir(blind), "red.png"))
       h.model.next(callTools([{ name: "file_read", args: { path: "red.png" } }]), say("cannot"))
       h.input(blind, "look")
       await h.turnsEnded(blind, 1)
@@ -141,9 +143,10 @@ describe("file tools in a turn", () => {
 
   test("file_patch asks `edit` for every resolved path, a move's destination included, then applies the patch", async () => {
     await withHarness({ permission: { edit: "ask", read: { "*.secret": "deny" } } }, async (h) => {
-      writeFileSync(join(h.dir, "old.txt"), "one\ntwo\n")
-      writeFileSync(join(h.dir, "key.secret"), "k")
       const id = h.create()
+      const dir = h.sessionDir(id)
+      writeFileSync(join(dir, "old.txt"), "one\ntwo\n")
+      writeFileSync(join(dir, "key.secret"), "k")
       const patch = [
         "*** Begin Patch",
         "*** Add File: notes/new.txt",
@@ -166,19 +169,19 @@ describe("file tools in a turn", () => {
       )
       h.input(id, "edit")
       const request = await waitFor("the edit request", () => ofType(h.events(id), "PERMISSION_REQUESTED")[0])
-      const root = realpathSync(h.dir)
+      const root = realpathSync(dir)
       expect(request).toMatchObject({
         permission: "edit",
         subjects: [join(root, "notes/new.txt"), join(root, "old.txt"), join(root, "moved/renamed.txt")],
       })
-      expect(existsSync(join(h.dir, "notes"))).toBe(false)
+      expect(existsSync(join(dir, "notes"))).toBe(false)
       h.answer(id, request.requestId, "once")
       await h.turnsEnded(id, 1)
       const results = ofType(h.events(id), "TOOL_CALL_RESULT")
       expect(results[0]).toMatchObject({ outcome: "success", content: "Success. Updated the following files:\nA notes/new.txt\nM moved/renamed.txt" })
-      expect(readFileSync(join(h.dir, "notes/new.txt"), "utf8")).toBe("hello\n")
-      expect(readFileSync(join(h.dir, "moved/renamed.txt"), "utf8")).toBe("one\nTWO\n")
-      expect(existsSync(join(h.dir, "old.txt"))).toBe(false)
+      expect(readFileSync(join(dir, "notes/new.txt"), "utf8")).toBe("hello\n")
+      expect(readFileSync(join(dir, "moved/renamed.txt"), "utf8")).toBe("one\nTWO\n")
+      expect(existsSync(join(dir, "old.txt"))).toBe(false)
       expect(results[1]).toMatchObject({ outcome: "failed", content: expect.stringContaining("denied by configuration") })
       expect(results[2]).toMatchObject({ outcome: "failed", content: expect.stringContaining("The patch is invalid: Invalid hunk at line 2") })
       expect(ofType(h.events(id), "PERMISSION_REQUESTED")).toHaveLength(1)
@@ -232,33 +235,33 @@ describe("file tools in a turn", () => {
 
   test("a deny rule on the resolved path refuses a patch reaching it through `..` after a symlink", async () => {
     await withHarness({ permission: { edit: { "~/victim.txt": "deny" } } }, async (h) => {
-      mkdirSync(join(h.dir, "work"))
+      const id = h.create()
+      const work = h.sessionDir(id)
       mkdirSync(join(h.dir, "outside"))
-      symlinkSync("../outside", join(h.dir, "work", "link"))
+      symlinkSync(join(h.dir, "outside"), join(work, "link"))
       writeFileSync(join(h.dir, "victim.txt"), "keep\n")
-      const id = h.hub.create({ cwd: join(h.dir, "work") }).id
       h.model.next(callTools([{ name: "file_patch", args: { patch: "*** Begin Patch\n*** Add File: link/../victim.txt\n+overwritten\n*** End Patch" } }]), say("done"))
       h.input(id, "edit")
       await h.turnsEnded(id, 1)
       expect(ofType(h.events(id), "TOOL_CALL_RESULT")[0]).toMatchObject({ outcome: "failed", content: expect.stringContaining("denied by configuration") })
       expect(readFileSync(join(h.dir, "victim.txt"), "utf8")).toBe("keep\n")
-      expect(existsSync(join(h.dir, "work", "victim.txt"))).toBe(false)
+      expect(existsSync(join(work, "victim.txt"))).toBe(false)
     })
   })
 
   test("a patch's later hunks act on the paths resolved before its earlier hunks ran", async () => {
-    await withHarness({ permission: { edit: { "~/work/other": "deny" } } }, async (h) => {
-      // `work/link` points at `../a/f`, so `link/../other` resolves to `<root>/a/other` before the link is deleted.
-      mkdirSync(join(h.dir, "work"))
+    await withHarness({ permission: { edit: { "~/sessions/*/other": "deny" } } }, async (h) => {
+      // The session directory's `link` points at `<root>/a/f`, so `link/../other` resolves to `<root>/a/other` before the link is deleted.
+      const id = h.create()
+      const work = h.sessionDir(id)
       mkdirSync(join(h.dir, "a", "f"), { recursive: true })
-      symlinkSync("../a/f", join(h.dir, "work", "link"))
-      const id = h.hub.create({ cwd: join(h.dir, "work") }).id
+      symlinkSync(join(h.dir, "a", "f"), join(work, "link"))
       const patch = "*** Begin Patch\n*** Delete File: link\n*** Add File: link/../other\n+made\n*** End Patch"
       h.model.next(callTools([{ name: "file_patch", args: { patch } }]), say("done"))
       h.input(id, "edit")
       await h.turnsEnded(id, 1)
       expect(ofType(h.events(id), "TOOL_CALL_RESULT")[0]).toMatchObject({ outcome: "success" })
-      expect(existsSync(join(h.dir, "work", "other"))).toBe(false)
+      expect(existsSync(join(work, "other"))).toBe(false)
       expect(readFileSync(join(h.dir, "a", "other"), "utf8")).toBe("made\n")
     })
   })

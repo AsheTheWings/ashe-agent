@@ -34,8 +34,7 @@ read from and for its destination.
 `*** Begin Patch`, then `*** Add File:`, `*** Delete File:`, and
 `*** Update File:` hunks, an update optionally followed by
 `*** Move to:`, with `@@` context lines and `*** End of File`, then
-`*** End Patch`. Relative paths resolve against the session's starting
-working directory.
+`*** End Patch`. Relative paths resolve against the session directory.
 
 The whole patch is checked under the `edit` permission before any file
 changes, then its hunks are applied in order. Add File replaces an
@@ -55,7 +54,7 @@ as Codex does.
 
 `file_read` takes a `path`, either one path or a list of paths and glob
 patterns, with an optional `offset`, `column`, and `limit`. Relative paths resolve
-against the session's starting working directory. Nothing records what a
+against the session directory. Nothing records what a
 session read.
 
 Text comes back numbered as `cat -n` numbers it: at most 2,000 lines,
@@ -104,7 +103,7 @@ login shell, as `<shell> -lc <cmd>`, or `-c` when `login` is false. The
 shell is the one the user database gives the server's user, through
 `getent passwd`, or `/bin/sh` when it gives none; `SHELL` is not read. It
 runs on a pseudo-terminal when `tty` is true and on pipes otherwise, in
-`workdir` resolved against the session's working directory, else in that
+`workdir` resolved against the session directory, else in the session
 directory. The script the `ASHE_AGENT_SHELL_ENV_FILE` input names, when
 set, is sourced in each command's own shell, after its login startup.
 When the file is missing or unreadable, the command does not run and the

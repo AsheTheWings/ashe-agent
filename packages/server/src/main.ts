@@ -3,7 +3,7 @@
  * The `ashe-agent` command line: the server and its operator commands.
  * Each command resolves and validates its inputs before any other work.
  */
-import { dirname, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { existsSync } from "node:fs"
 import { userInfo } from "node:os"
 import { loginShell } from "./tools/shell/login-shell.ts"
@@ -107,6 +107,7 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
       Layer.provideMerge(
         Sessions.layer({
           models: inputs.models,
+          sessionsDir: join(inputs.stateDir, "sessions"),
           setup: fileSetup({
             agentsDir: inputs.agentsDir,
             instructionsFile: inputs.instructionsFile,

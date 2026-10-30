@@ -47,12 +47,13 @@ const ofType = (events: ReadonlyArray<SessionEvent>, type: string) => bodies(eve
 const firstText = (h: AgentHarness, index = -1) => messageText(h.model.calls.at(index)!.call.messages[0]!)
 
 describe("instructions and skills", () => {
-  test("a session gets the global instructions and user skills, never its working directory's AGENTS.md or skills", async () => {
+  test("a session gets the global instructions and user skills, never its directory's AGENTS.md or skills", async () => {
     await withConfig({ "AGENTS.md": "Global rule: be brief.", "skills/brew-tea/SKILL.md": skillText("brew-tea", "Brews tea") }, async (h, config) => {
-      writeFileSync(join(h.dir, "AGENTS.md"), "PROJECT RULE")
-      mkdirSync(join(h.dir, ".agents", "skills", "project-skill"), { recursive: true })
-      writeFileSync(join(h.dir, ".agents", "skills", "project-skill", "SKILL.md"), skillText("project-skill", "PROJECT SKILL"))
       const id = h.create()
+      const dir = h.sessionDir(id)
+      writeFileSync(join(dir, "AGENTS.md"), "PROJECT RULE")
+      mkdirSync(join(dir, ".agents", "skills", "project-skill"), { recursive: true })
+      writeFileSync(join(dir, ".agents", "skills", "project-skill", "SKILL.md"), skillText("project-skill", "PROJECT SKILL"))
       h.model.next(say("ok"))
       h.input(id, "hello")
       await h.turnsEnded(id, 1)

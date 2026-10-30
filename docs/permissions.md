@@ -43,8 +43,8 @@ is decided per subject, then
 as a whole: any denied subject refuses the whole call, else any asked
 subject raises one request naming the asked subjects, else the call runs.
 
-Paths are decided as absolute paths against the session's working
-directory, resolved one component at a time as the operating system
+Paths are decided as absolute paths against the session directory,
+resolved one component at a time as the operating system
 resolves them, so a relative or linked path is decided by the file it
 reaches, and a `..` after a symlink leaves the symlink's target. A part of
 the path that does not exist yet is kept as written, and a dangling

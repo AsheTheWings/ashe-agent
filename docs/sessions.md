@@ -1,7 +1,18 @@
 # Sessions
 
-A session is one conversation with its own working directory, model, and
+A session is one conversation with its own session directory, model, and
 history. Every client of the owner sees every session.
+
+## Session directory
+
+Creating a session takes no working directory: `session.create` refuses
+a request naming `cwd`. The server creates the session's directory,
+`<state-dir>/sessions/<session-id>/`, readable by the server user alone,
+when it creates the session. That directory is the session's starting
+working directory: shell commands without a `workdir` run there, and a
+relative `workdir`, `file_read` path, or `file_patch` path resolves
+against it. `SessionSummary` and the `SESSION_CREATED` event give it as
+`sessionDir`.
 
 ## History
 
@@ -56,13 +67,15 @@ session's next model call tells the model so in a harness note.
 
 `session.fork` creates a new session from a source session's turns
 through one of its user turns, or all of them, keeping their events'
-numbers, and leaves the source unchanged. The new session starts with the
-source's working directory, agent, selected model, and recorded
+numbers, and leaves the source unchanged. The new session gets its own
+new session directory, and starts with the source's agent, selected
+model, and recorded
 instructions, which its `SESSION_CREATED` event gives, and with the
 source's [session grants](permissions.md#session-grants); the source's own
 `SESSION_REWOUND` and `MODEL_CHANGED` events are not copied. Its model
 context is the source's as it stood after the last copied turn, and its
-first model call is told the source and new session ids.
+first model call is told the source and new session ids and its own
+session directory. Files in the source's directory stay there.
 
 `session.rewind` removes a user turn and every later turn with their
 events, so no client can read them again, then starts a turn with the

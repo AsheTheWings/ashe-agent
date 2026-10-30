@@ -320,7 +320,7 @@
               "type": "object",
               "properties": {
                 "cwd": {
-                  "type": "string"
+                  "not": {}
                 },
                 "model": {
                   "type": "string",
@@ -330,9 +330,6 @@
                   "type": "string"
                 }
               },
-              "required": [
-                "cwd"
-              ],
               "additionalProperties": true
             }
           },
@@ -1406,7 +1403,7 @@
                             "SESSION_CREATED"
                           ]
                         },
-                        "cwd": {
+                        "sessionDir": {
                           "type": "string"
                         },
                         "agent": {
@@ -1458,7 +1455,7 @@
                       },
                       "required": [
                         "type",
-                        "cwd",
+                        "sessionDir",
                         "agent",
                         "model",
                         "forkedFrom"
@@ -2336,7 +2333,7 @@
                 "SESSION_CREATED"
               ]
             },
-            "cwd": {
+            "sessionDir": {
               "type": "string"
             },
             "agent": {
@@ -2388,7 +2385,7 @@
           },
           "required": [
             "type",
-            "cwd",
+            "sessionDir",
             "agent",
             "model",
             "forkedFrom"
@@ -3163,7 +3160,7 @@
                 "type": "string",
                 "minLength": 1
               },
-              "cwd": {
+              "sessionDir": {
                 "type": "string"
               },
               "agent": {
@@ -3196,7 +3193,7 @@
             },
             "required": [
               "id",
-              "cwd",
+              "sessionDir",
               "agent",
               "model",
               "createdAt",
@@ -3216,7 +3213,7 @@
       "type": "object",
       "properties": {
         "cwd": {
-          "type": "string"
+          "not": {}
         },
         "model": {
           "type": "string",
@@ -3226,9 +3223,6 @@
           "type": "string"
         }
       },
-      "required": [
-        "cwd"
-      ],
       "additionalProperties": true
     },
     "session.create.result": {
@@ -3241,7 +3235,7 @@
               "type": "string",
               "minLength": 1
             },
-            "cwd": {
+            "sessionDir": {
               "type": "string"
             },
             "agent": {
@@ -3274,7 +3268,7 @@
           },
           "required": [
             "id",
-            "cwd",
+            "sessionDir",
             "agent",
             "model",
             "createdAt",
@@ -3317,7 +3311,7 @@
               "type": "string",
               "minLength": 1
             },
-            "cwd": {
+            "sessionDir": {
               "type": "string"
             },
             "agent": {
@@ -3350,7 +3344,7 @@
           },
           "required": [
             "id",
-            "cwd",
+            "sessionDir",
             "agent",
             "model",
             "createdAt",
@@ -3482,7 +3476,7 @@
               "type": "string",
               "minLength": 1
             },
-            "cwd": {
+            "sessionDir": {
               "type": "string"
             },
             "agent": {
@@ -3515,7 +3509,7 @@
           },
           "required": [
             "id",
-            "cwd",
+            "sessionDir",
             "agent",
             "model",
             "createdAt",

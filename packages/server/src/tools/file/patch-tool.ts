@@ -22,7 +22,7 @@ const parsed = (patch: string): ReadonlyArray<Hunk> | string => {
 
 /**
  * `file_patch`: applies a patch in Codex's format, its paths resolved
- * against the session's starting working directory as the operating
+ * against the session directory as the operating
  * system walks them once, before any hunk runs, and authorized under the
  * `edit` permission as one call for exactly the paths it then reads,
  * writes, and removes. When the paths resolve differently by the time the

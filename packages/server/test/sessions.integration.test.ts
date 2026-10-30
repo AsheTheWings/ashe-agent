@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
-import { mkdtempSync } from "node:fs"
+import { statSync } from "node:fs"
 import { join } from "node:path"
 import { Client, waitFor } from "./support/cli.ts"
 import { models, SessionView, TestServer } from "./support/server.ts"
@@ -23,13 +23,12 @@ const connect = async (url: string, token: string) => {
   return client
 }
 
-const createSession = async (client: Client, dir: string) => {
-  const response = await client.request("session.create", { cwd: dir })
+const createSession = async (client: Client) => {
+  const response = await client.request("session.create", {})
   if (response.error !== undefined) throw new Error(response.error.message)
   return response.result.session.id as string
 }
 
-const workDir = (server: TestServer) => mkdtempSync(join(server.dir, "work-"))
 
 const runIds = (view: SessionView) =>
   view.events.filter((event) => event.event.type === "RUN_STARTED").map((event) => event.event.runId as string)
@@ -64,17 +63,21 @@ const execute = (server: TestServer, sql: string) => {
 }
 
 describe("sessions", () => {
-  test("creation requires an existing absolute directory, and sessions and models are listed", async () => {
+  test("creation refuses a working directory, gives each session its own directory, and sessions and models are listed", async () => {
     await withServer(async (server, token) => {
       const client = await connect(server.url, token)
-      for (const cwd of ["relative/dir", join(server.dir, "missing")]) {
-        expect((await client.request("session.create", { cwd })).error.code).toBe(-32007)
-      }
-      expect((await client.request("session.create", { cwd: workDir(server), model: "other/model" })).error.code).toBe(-32007)
-      const id = await createSession(client, workDir(server))
+      expect((await client.request("session.create", { cwd: server.dir })).error.code).toBe(-32602)
+      expect((await client.request("session.create", { model: "other/model" })).error.code).toBe(-32007)
+      const id = await createSession(client)
+      const sessionDir = join(server.sessionsDir, id)
+      expect(statSync(sessionDir).isDirectory()).toBe(true)
+      expect(statSync(sessionDir).mode & 0o777).toBe(0o700)
       const listed = (await client.request("session.list")).result.sessions
       expect(listed.map((session: any) => session.id)).toEqual([id])
-      expect(listed[0]).toMatchObject({ model: models[0]!.id, agent: null, running: false, lastSeq: 1 })
+      expect(listed[0]).toMatchObject({ sessionDir, model: models[0]!.id, agent: null, running: false, lastSeq: 1 })
+      const view = await SessionView.open(server.url, token, id)
+      await view.waitFor("the created event", (v) => v.types().includes("SESSION_CREATED"))
+      expect(view.events[0].event.sessionDir).toBe(sessionDir)
       expect((await client.request("models.list")).result.models).toEqual(models)
     })
   })
@@ -82,7 +85,7 @@ describe("sessions", () => {
   test("events are numbered from 1 and a subscription resumes after a sequence number", async () => {
     await withServer(async (server, token) => {
       const client = await connect(server.url, token)
-      const id = await createSession(client, workDir(server))
+      const id = await createSession(client)
       const view = await SessionView.open(server.url, token, id)
       await client.request("session.input", { sessionId: id, text: "one" })
       server.script.release("one")
@@ -99,7 +102,7 @@ describe("two clients on one session", () => {
   test("both see the same events; a disconnect leaves the turn running; resuming has no gap or duplicate", async () => {
     await withServer(async (server, token) => {
       const control = await connect(server.url, token)
-      const id = await createSession(control, workDir(server))
+      const id = await createSession(control)
       const a = await SessionView.open(server.url, token, id)
       const b = await SessionView.open(server.url, token, id)
       await a.client.request("session.input", { sessionId: id, text: "long" })
@@ -125,7 +128,7 @@ describe("input during turns", () => {
       const other = server.token("secondary")
       const control = await connect(server.url, token)
       const second = await connect(server.url, other)
-      const id = await createSession(control, workDir(server))
+      const id = await createSession(control)
       const view = await SessionView.open(server.url, token, id)
       await control.request("session.input", { sessionId: id, text: "first" })
       await view.waitFor("the first turn", (v) => v.texts().includes("echo: first"))
@@ -151,7 +154,7 @@ describe("input during turns", () => {
   test("steered input arriving after the last step boundary starts the next turn", async () => {
     await withServer(async (server, token) => {
       const control = await connect(server.url, token)
-      const id = await createSession(control, workDir(server))
+      const id = await createSession(control)
       const view = await SessionView.open(server.url, token, id)
       await control.request("session.input", { sessionId: id, text: "hold" })
       await view.waitFor("the turn", (v) => v.texts().includes("echo: hold"))
@@ -170,7 +173,7 @@ describe("input during turns", () => {
   test("an input whose turn cannot start leaves no event and no turn", async () => {
     await withServer(async (server, token) => {
       const control = await connect(server.url, token)
-      const id = await createSession(control, workDir(server))
+      const id = await createSession(control)
       const before = snapshot(server, id)
       execute(server, "CREATE TRIGGER fail_turn BEFORE INSERT ON turns BEGIN SELECT RAISE(ABORT, 'injected'); END")
       expect((await control.request("session.input", { sessionId: id, text: "never" })).error.code).toBe(-32603)
@@ -187,7 +190,7 @@ describe("input during turns", () => {
   test("cancel ends the running turn with a cancelled event", async () => {
     await withServer(async (server, token) => {
       const control = await connect(server.url, token)
-      const id = await createSession(control, workDir(server))
+      const id = await createSession(control)
       const view = await SessionView.open(server.url, token, id)
       await control.request("session.input", { sessionId: id, text: "cancel me" })
       await view.waitFor("the turn", (v) => v.texts().includes("echo: cancel me"))
@@ -204,8 +207,7 @@ describe("restart", () => {
   test("sessions survive, running turns end interrupted, unanswered asks are withdrawn, and input is accepted", async () => {
     await withServer(async (server, token) => {
       const control = await connect(server.url, token)
-      const cwd = workDir(server)
-      const id = await createSession(control, cwd)
+      const id = await createSession(control)
       const view = await SessionView.open(server.url, token, id)
       await control.request("session.input", { sessionId: id, text: "ask before restart" })
       await view.waitFor("the permission request", (v) => v.types().includes("PERMISSION_REQUESTED"))
@@ -217,7 +219,7 @@ describe("restart", () => {
       expect(after.events[0].event.reason).toBe("restart")
       const client = await connect(server.url, token)
       const listed = (await client.request("session.list")).result.sessions
-      expect(listed[0]).toMatchObject({ id, cwd, running: false })
+      expect(listed[0]).toMatchObject({ id, sessionDir: join(server.sessionsDir, id), running: false })
       await client.request("session.input", { sessionId: id, text: "after restart" })
       server.script.release("after restart")
       await after.waitFor("the new turn to finish", (v) => finishedRuns(v) === 1)
@@ -227,7 +229,7 @@ describe("restart", () => {
   test("an ended turn withdraws its unanswered asks, leaving none for a restart", async () => {
     await withServer(async (server, token) => {
       const control = await connect(server.url, token)
-      const id = await createSession(control, workDir(server))
+      const id = await createSession(control)
       const view = await SessionView.open(server.url, token, id)
       await control.request("session.input", { sessionId: id, text: "ask then cancel" })
       await view.waitFor("the permission request", (v) => v.types().includes("PERMISSION_REQUESTED"))
@@ -249,7 +251,7 @@ describe("restart", () => {
     await withServer(
       async (server, token) => {
         const control = await connect(server.url, token)
-        const id = await createSession(control, workDir(server))
+        const id = await createSession(control)
         const view = await SessionView.open(server.url, token, id)
         await control.request("session.input", { sessionId: id, text: "ask ls a" })
         await view.waitFor("the permission request", (v) => v.types().includes("PERMISSION_REQUESTED"))
@@ -285,7 +287,7 @@ describe("fork and rewind", () => {
   /** A session with three finished turns, "t1" to "t3", and a view of it. */
   const threeTurns = async (server: TestServer, token: string) => {
     const control = await connect(server.url, token)
-    const id = await createSession(control, workDir(server))
+    const id = await createSession(control)
     const view = await SessionView.open(server.url, token, id)
     for (const [index, text] of ["t1", "t2", "t3"].entries()) {
       await control.request("session.input", { sessionId: id, text })
@@ -302,7 +304,9 @@ describe("fork and rewind", () => {
       const [, second] = runIds(view)
       const sourceBefore = [...view.events]
       const forked = (await control.request("session.fork", { sessionId: id, runId: second })).result.session
-      expect(forked).toMatchObject({ model: models[1]!.id, cwd: sourceBefore[0].event.cwd })
+      expect(forked).toMatchObject({ model: models[1]!.id, sessionDir: join(server.sessionsDir, forked.id) })
+      expect(forked.sessionDir).not.toBe(sourceBefore[0].event.sessionDir)
+      expect(statSync(forked.sessionDir).isDirectory()).toBe(true)
       const copy = await SessionView.open(server.url, token, forked.id)
       await copy.waitFor("the copy", (v) => v.lastSeq === forked.lastSeq)
       expect(copy.texts()).toEqual(["echo: t1", "echo: t2"])

@@ -27,7 +27,7 @@ export const MAX_GLOB_MATCHES = 1_000
 const Args = Schema.Struct({
   path: Schema.Union([Schema.String, Schema.Array(Schema.String)]).annotate({
     description:
-      "A file path, or a list of file paths and glob patterns such as `src/**/*.ts`. Relative paths resolve against the session's starting working directory.",
+      "A file path, or a list of file paths and glob patterns such as `src/**/*.ts`. Relative paths resolve against the session directory.",
   }),
   offset: Schema.optionalKey(
     Schema.Int.annotate({ description: "The line to start from, 1-based; a negative offset counts from the end, -1 being the last line." }),
