@@ -5,10 +5,13 @@
  */
 import { dirname, resolve } from "node:path"
 import { existsSync } from "node:fs"
+import { userInfo } from "node:os"
+import { loginShell } from "./tools/shell/login-shell.ts"
 import { Cause, Effect, Exit, Fiber, Layer, Redacted } from "effect"
 import { createApiToken, hasOwnerPassword, listApiTokens, revokeApiToken, setOwnerPassword } from "./auth/credentials.ts"
 import { readSecretLine } from "./cli/terminal.ts"
 import { loadInputsOrExit, processSources, removeDependencyVariables } from "./inputs/bootstrap.ts"
+import { catalog } from "./inputs/catalog.ts"
 import { ProtocolServer, serveProgram } from "./server/serve.ts"
 import { Sessions } from "./sessions/hub.ts"
 import { noAgents } from "./sessions/setup.ts"
@@ -71,12 +74,29 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
     if (modelApiKey === null) fail("serve needs ASHE_AGENT_MODEL_API_KEY_FILE")
     openCurrentDatabase(inputs.stateDir).close()
     // The agent loop's libraries load only for serve, so operator commands start quickly.
-    const [{ responsesModelPort }, { agentRunner }, { SqliteCheckpointSaver }, { fileTools }] = await Promise.all([
+    const [{ responsesModelPort }, { agentRunner }, { SqliteCheckpointSaver }, { fileTools }, { ShellProcesses, shellTools }] = await Promise.all([
       import("./agent/model.ts"),
       import("./agent/runner.ts"),
       import("./store/checkpointer.ts"),
       import("./tools/file/index.ts"),
+      import("./tools/shell/index.ts"),
     ])
+    // Commands run in the server user's login shell, without the server's own
+    // input variables; every process ends with the server.
+    const commandEnv: Record<string, string | undefined> = { ...process.env }
+    for (const input of Object.values(catalog)) if ("env" in input) delete commandEnv[input.env]
+    const processes = new ShellProcesses({
+      shell: loginShell(process.getuid?.() ?? userInfo().uid),
+      envFile: inputs.shellEnvFile,
+      env: commandEnv,
+      maxProcesses: inputs.shellMaxProcesses,
+    })
+    const endProcesses = () => processes.stopAll()
+    process.on("exit", endProcesses)
+    const tools = [
+      ...fileTools(),
+      ...shellTools(processes, { yieldMs: inputs.shellYieldMs, maxOutputTokens: inputs.shellMaxOutputTokens }),
+    ]
     const layer = ProtocolServer.layer({
       hostname: inputs.listenHost,
       port: inputs.listenPort,
@@ -91,7 +111,7 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
           runner: (db) =>
             agentRunner({
               port: responsesModelPort({ baseUrl: inputs.modelBaseUrl, apiKey: Redacted.value(modelApiKey!) }),
-              tools: [...fileTools()],
+              tools,
               saver: new SqliteCheckpointSaver(db),
               models: inputs.models,
             }),
@@ -113,6 +133,7 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
     interrupt = () => Effect.runFork(Fiber.interrupt(fiber))
     if (stopping) interrupt()
     const exit = await Effect.runPromise(Fiber.await(fiber))
+    endProcesses()
     process.off("SIGINT", stop)
     process.off("SIGTERM", stop)
     if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {

@@ -26,6 +26,11 @@ export interface ToolRun {
    * so a call that is refused or fails validation never counts as started.
    */
   readonly started: () => void
+  /**
+   * Sets a note the call's result carries if the turn is canceled while
+   * the call runs, such as how to reach a process it leaves running.
+   */
+  readonly onCancel: (note: string) => void
 }
 
 /**
