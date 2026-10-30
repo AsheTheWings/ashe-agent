@@ -6,7 +6,7 @@ import { logs, SeverityNumber } from "@opentelemetry/api-logs"
  * with its attributes, units, and error classes. Bump the version whenever
  * a name, attribute, unit, or error class changes.
  */
-export const SIGNAL_CATALOG_VERSION = 1
+export const SIGNAL_CATALOG_VERSION = 2
 
 /** The instrumentation scope of every signal. */
 export const SCOPE = "ashe-agent"
@@ -50,6 +50,11 @@ export const ATTRIBUTES = {
   "ashe_agent.tool.outcome": { type: "string", values: TOOL_OUTCOMES, description: "How a tool call ended." },
   "ashe_agent.tool.in_program": { type: "boolean", description: "Whether a code mode program made the call." },
   "ashe_agent.mcp.server": { type: "string", description: "A configured MCP server's name." },
+  "ashe_agent.mcp.collision.servers": {
+    type: "string[]",
+    description: "The configured MCP server of each colliding tool, in the order of `ashe_agent.mcp.collision.tools`.",
+  },
+  "ashe_agent.mcp.collision.tools": { type: "string[]", description: "The colliding tools' names as their MCP servers list them." },
 } as const
 
 export type AttributeName = keyof typeof ATTRIBUTES
@@ -78,7 +83,11 @@ export const METRICS = {
 export const LOGS = {
   "ashe_agent.request.internal_error": { severity: "ERROR", description: "A protocol request failed with an internal error.", attributes: ["rpc.method", "error.type"] },
   "ashe_agent.mcp.unavailable": { severity: "WARN", description: "An MCP server failed to connect or was lost.", attributes: ["ashe_agent.mcp.server", "error.type"] },
-  "ashe_agent.mcp.collision": { severity: "WARN", description: "MCP tools whose registered names collide, none registered.", attributes: ["ashe_agent.tool"] },
+  "ashe_agent.mcp.collision": {
+    severity: "WARN",
+    description: "MCP tools whose registered names collide, none registered.",
+    attributes: ["ashe_agent.tool", "ashe_agent.mcp.collision.servers", "ashe_agent.mcp.collision.tools"],
+  },
 } as const satisfies Record<string, { severity: "ERROR" | "WARN"; description: string; attributes: ReadonlyArray<AttributeName> }>
 
 export type SpanName = keyof typeof SPANS
@@ -122,7 +131,7 @@ export const endSpan = (span: Span, attributes: Partial<Record<AttributeName, st
 export const withSpan = (span: Span, parent: Context = context.active()) => trace.setSpan(parent, span)
 
 /** Emits the log record `name`; its body is the catalog's description, never event data. */
-export const emitLog = (name: LogName, attributes: Partial<Record<AttributeName, string>>) =>
+export const emitLog = (name: LogName, attributes: Partial<Record<AttributeName, string | Array<string>>>) =>
   logs.getLogger(SCOPE).emit({
     eventName: name,
     body: LOGS[name].description,

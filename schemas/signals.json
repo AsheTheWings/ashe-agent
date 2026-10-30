@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "scope": "ashe-agent",
   "attributes": {
     "rpc.method": {
@@ -68,6 +68,14 @@
     "ashe_agent.mcp.server": {
       "type": "string",
       "description": "A configured MCP server's name."
+    },
+    "ashe_agent.mcp.collision.servers": {
+      "type": "string[]",
+      "description": "The configured MCP server of each colliding tool, in the order of `ashe_agent.mcp.collision.tools`."
+    },
+    "ashe_agent.mcp.collision.tools": {
+      "type": "string[]",
+      "description": "The colliding tools' names as their MCP servers list them."
     }
   },
   "errorClasses": [
@@ -175,7 +183,9 @@
       "severity": "WARN",
       "description": "MCP tools whose registered names collide, none registered.",
       "attributes": [
-        "ashe_agent.tool"
+        "ashe_agent.tool",
+        "ashe_agent.mcp.collision.servers",
+        "ashe_agent.mcp.collision.tools"
       ]
     }
   }

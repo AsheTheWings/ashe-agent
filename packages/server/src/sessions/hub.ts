@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite"
 import { mkdirSync, rmdirSync } from "node:fs"
+import type { Context as TraceContext, Span } from "@opentelemetry/api"
 import { Context, Effect, Exit, Fiber, Layer } from "effect"
 import {
   type Agent,
@@ -25,6 +26,7 @@ import {
 } from "../permissions/rules.ts"
 import { ProtocolError } from "../server/websocket.ts"
 import { Store } from "../store/database.ts"
+import { endSpan, recordDuration, startSpan, withSpan, type ErrorClass } from "../telemetry/signals.ts"
 import { SessionStore, type Catalogs, type SessionRecord, type TurnRecord } from "./store.ts"
 
 /** An input a client sent, waiting for a turn to take it. */
@@ -58,6 +60,8 @@ export interface TurnContext {
    * when `signal` aborts while it waits.
    */
   readonly authorize: (toolCallId: string, check: PermissionCheck, signal: AbortSignal) => Promise<void>
+  /** The trace context holding the turn's span, the parent of its model and tool call spans. */
+  readonly trace: TraceContext
 }
 
 export type TurnOutcome = { readonly status: "finished" } | { readonly status: "failed"; readonly message: string; readonly code?: string }
@@ -103,6 +107,8 @@ interface Live {
   fiber: Fiber.Fiber<TurnOutcome>
   readonly turn: TurnRecord
   cancelled: boolean
+  readonly span: Span
+  readonly startedAt: number
 }
 
 type AskOutcome = { readonly kind: "allowed" } | { readonly kind: "rejected"; readonly message: string | undefined }
@@ -500,7 +506,8 @@ export class SessionHub {
       append({ type: "RUN_STARTED", threadId: sessionId, runId, model: turn.model, inputId: input.inputId })
       return { session, turn, notes }
     })
-    const live: Live = { fiber: null as unknown as Fiber.Fiber<TurnOutcome>, turn, cancelled: false }
+    const span = startSpan("ashe_agent.turn", { "ashe_agent.model": turn.model })
+    const live: Live = { fiber: null as unknown as Fiber.Fiber<TurnOutcome>, turn, cancelled: false, span, startedAt: performance.now() }
     const context: TurnContext = {
       session,
       turn,
@@ -518,6 +525,7 @@ export class SessionHub {
       isCancelled: () => live.cancelled,
       toolResult: (toolCallId) => this.store.toolResult(sessionId, toolCallId),
       authorize: (toolCallId, check, signal) => this.authorize(sessionId, turn.runId, toolCallId, check, signal),
+      trace: withSpan(span),
     }
     const fiber = Effect.runFork(this.options.runner(context))
     live.fiber = fiber
@@ -530,6 +538,7 @@ export class SessionHub {
     state.live = null
     const runId = live.turn.runId
     for (const [requestId, ask] of [...state.asks.entries()]) if (ask.runId === runId) state.asks.delete(requestId)
+    this.endTurnSpan(live, exit)
     if (this.stopping) return
     this.commit(sessionId, (append) => {
       // No answer can apply to an ended turn, so its open requests are withdrawn with it.
@@ -552,6 +561,22 @@ export class SessionHub {
     const next = state.pending.shift()
     if (next === undefined) return
     this.startTurn(sessionId, next)
+  }
+
+  /** Ends the turn's span and records its duration, with how it ended. */
+  private endTurnSpan(live: Live, exit: Exit.Exit<TurnOutcome>) {
+    const [status, errorClass]: readonly ["finished" | "failed" | "canceled" | "interrupted", ErrorClass | undefined] =
+      Exit.isSuccess(exit)
+        ? exit.value.status === "finished"
+          ? ["finished", undefined]
+          : ["failed", "turn_failed"]
+        : live.cancelled
+          ? ["canceled", undefined]
+          : this.stopping
+            ? ["interrupted", "interrupted"]
+            : ["failed", "internal"]
+    endSpan(live.span, { "ashe_agent.turn.status": status }, errorClass)
+    recordDuration("ashe_agent.turn.duration", (performance.now() - live.startedAt) / 1000, { "ashe_agent.model": live.turn.model, "ashe_agent.turn.status": status })
   }
 
   /** Copies the session through the user turn `runId`, or entirely, into a new session with its own new directory. */
