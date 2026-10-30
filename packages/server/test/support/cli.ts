@@ -46,7 +46,7 @@ export class CliRun {
   }
 
   get databasePath() {
-    return join(this.stateDir, "ashe-agent.db")
+    return join(this.stateDir, "database", "ashe-agent.db")
   }
 
   async run(args: ReadonlyArray<string>, options: { stdin?: string; env?: Record<string, string> } = {}) {

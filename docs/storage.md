@@ -1,8 +1,12 @@
 # Storage
 
-The server keeps its state in one SQLite database, `ashe-agent.db` in the
-state directory, opened with `bun:sqlite` in WAL mode with foreign keys
-enforced; opening fails on a filesystem where SQLite cannot use WAL.
+The server keeps its state in one SQLite database,
+`database/ashe-agent.db` in the state directory, opened with `bun:sqlite`
+in WAL mode with foreign keys enforced; opening fails on a filesystem
+where SQLite cannot use WAL. The `database` directory holds only the
+database file and SQLite's `ashe-agent.db-wal` and `ashe-agent.db-shm`
+beside it, so a backup can leave the live database's directory out and
+copy a consistent dump instead.
 LangGraph checkpoints live there too, through the server's own checkpoint
 saver.
 

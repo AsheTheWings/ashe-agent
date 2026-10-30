@@ -3,10 +3,14 @@ import { chmodSync, existsSync, mkdirSync } from "node:fs"
 import { dirname } from "node:path"
 import { Context, Effect, Layer } from "effect"
 
-/** The database file's name in the state directory. */
+/** The database file's name in its directory. */
 export const DATABASE_FILE = "ashe-agent.db"
 
-export const databasePath = (stateDir: string) => `${stateDir}/${DATABASE_FILE}`
+/**
+ * The database file, in the state directory's `database` directory, which
+ * holds only it and its WAL and shared-memory files.
+ */
+export const databasePath = (stateDir: string) => `${stateDir}/database/${DATABASE_FILE}`
 
 /**
  * Opens the server database for writing in WAL mode, creating it and its

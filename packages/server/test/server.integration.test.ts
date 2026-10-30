@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
+import { dirname, join } from "node:path"
 import { login as loginDirect, setOwnerPassword } from "../src/auth/credentials.ts"
 import { tokenHash } from "../src/auth/tokens.ts"
 import { openDatabase } from "../src/store/database.ts"
@@ -66,7 +66,10 @@ describe("entry point and database", () => {
         const stateDir = join(run.dir, "absent", "ashe-agent")
         const result = await run.run(["migrate"], { env: { ASHE_AGENT_STATE_DIR: stateDir } })
         expect(result.code).toBe(0)
-        expect(existsSync(join(stateDir, "ashe-agent.db"))).toBe(true)
+        expect(existsSync(join(stateDir, "database", "ashe-agent.db"))).toBe(true)
+        const beside = readdirSync(join(stateDir, "database")).filter((name) => name !== "ashe-agent.db")
+        expect(beside.every((name) => name === "ashe-agent.db-wal" || name === "ashe-agent.db-shm")).toBe(true)
+        expect(readdirSync(stateDir)).toEqual(["database"])
       },
       { fresh: true, serve: false },
     )
@@ -108,6 +111,7 @@ describe("migration gate", () => {
   test("serve refuses a pending migration, and status reports it without writing", async () => {
     await withRun(
       async (run) => {
+        mkdirSync(dirname(run.databasePath), { recursive: true })
         const db = new Database(run.databasePath, { create: true })
         db.run("PRAGMA journal_mode = WAL")
         db.close()
