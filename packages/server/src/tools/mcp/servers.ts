@@ -22,11 +22,14 @@ export interface Collision {
   readonly tools: ReadonlyArray<{ readonly server: string; readonly tool: string }>
 }
 
+/** Why a server is unavailable: it never connected, its connection closed, or it stopped answering. */
+export type UnavailableCause = "connect_failed" | "disconnected" | "not_answering"
+
 export interface McpEvents {
   /** A server connected and listed its tools. */
   readonly connected?: (server: string, tools: number) => void
-  /** A server failed to connect or disconnected; `reason` names no credential. */
-  readonly unavailable?: (server: string, reason: string) => void
+  /** A server failed to connect or was lost, by `cause`; `reason` names no credential. */
+  readonly unavailable?: (server: string, reason: string, cause: UnavailableCause) => void
   /** Tools whose names collide and are left unregistered. */
   readonly collision?: (collision: Collision) => void
 }
@@ -151,23 +154,23 @@ export class McpRegistry {
         return
       }
       this.connections.set(name, { client, tools })
-      client.onclose = () => this.lost(name, client, "disconnected")
+      client.onclose = () => this.lost(name, client, "disconnected", "disconnected")
       client.onerror = () => void this.check(name, client)
       this.options.events?.connected?.(name, tools.length)
       this.reportCollisions()
     } catch (error) {
       this.pending.delete(name)
       await client.close().catch(() => undefined)
-      if (!this.stopped) this.options.events?.unavailable?.(name, `failed to connect: ${describeError(error)}`)
+      if (!this.stopped) this.options.events?.unavailable?.(name, `failed to connect: ${describeError(error)}`, "connect_failed")
     }
   }
 
   /** Removes a connected server's tools and closes its client, once. */
-  private lost(name: string, client: Client, reason: string) {
+  private lost(name: string, client: Client, reason: string, cause: UnavailableCause) {
     if (this.connections.get(name)?.client !== client) return
     this.connections.delete(name)
     void client.close().catch(() => undefined)
-    if (!this.stopped) this.options.events?.unavailable?.(name, reason)
+    if (!this.stopped) this.options.events?.unavailable?.(name, reason, cause)
   }
 
   /**
@@ -184,7 +187,7 @@ export class McpRegistry {
     try {
       await client.listTools(undefined, { cacheMode: "bypass", timeout: PROBE_TIMEOUT_MS })
     } catch (error) {
-      if (!(error instanceof ProtocolError)) this.lost(name, client, `stopped answering: ${describeError(error)}`)
+      if (!(error instanceof ProtocolError)) this.lost(name, client, `stopped answering: ${describeError(error)}`, "not_answering")
     } finally {
       this.checking.delete(client)
     }
