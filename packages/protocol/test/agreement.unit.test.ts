@@ -10,7 +10,12 @@ import { jsonSchemaRoots, toJsonSchema } from "../src/json-schema.ts"
  * its nodes, with a boundary value or arbitrary JSON, or delete one object
  * key. ASHE_AGENT_TEST_SEED reproduces a run.
  */
-const seed = Number(process.env.ASHE_AGENT_TEST_SEED ?? Math.floor(Math.random() * 2 ** 31))
+declare const ASHE_AGENT_TEST_SEED: string | undefined
+
+/** The task runner defines the seed at build time, so the test reads no process configuration. */
+const seed = Number(
+  typeof ASHE_AGENT_TEST_SEED === "undefined" ? Math.floor(Math.random() * 2 ** 31) : ASHE_AGENT_TEST_SEED,
+)
 const runs = 200
 
 const boundaryValues: ReadonlyArray<unknown> = [0, -1, 1, 1.5, -0.5, 2 ** 53, "", " ", "x", null, true, false, [], {}, ["x"], { x: 1 }]
