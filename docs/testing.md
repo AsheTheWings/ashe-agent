@@ -17,7 +17,7 @@ A test's class is the suffix of its file name.
 | Class | File suffix | Command | Boundary |
 | --- | --- | --- | --- |
 | unit | `.unit.test.ts` | `bun run test:unit` | pure functions: no filesystem, sockets, processes, process configuration, or waits |
-| integration | `.integration.test.ts`, `.integration.vitest.ts` | `bun run test:integration` | real SQLite files and processes the test creates in its own temporary directory |
+| integration | `.integration.test.ts`, `.integration.vitest.ts` | `bun run test:integration` | real SQLite files, `ashe-agent` processes, and WebSocket connections the test creates in its own temporary directory |
 | conformance | `.conformance.test.ts` | `bun run test:conformance` | read-only checks that generated files, pins, and versions match their sources |
 
 The `.integration.vitest.ts` files run LangGraph's checkpoint saver

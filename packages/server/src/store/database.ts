@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite"
-import { existsSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync } from "node:fs"
+import { dirname } from "node:path"
 import { Context, Effect, Layer } from "effect"
 
 /** The database file's name in the state directory. */
@@ -8,13 +9,17 @@ export const DATABASE_FILE = "ashe-agent.db"
 export const databasePath = (stateDir: string) => `${stateDir}/${DATABASE_FILE}`
 
 /**
- * Opens the server database for writing in WAL mode, creating it when
- * absent, with foreign keys enforced and a bounded wait on locks. It fails
- * when SQLite cannot use WAL mode for the file.
+ * Opens the server database for writing in WAL mode, creating it and its
+ * directory, readable by its owner only, when absent, with foreign keys
+ * enforced and a bounded wait on locks. It fails when SQLite cannot use WAL
+ * mode for the file.
  */
 export const openDatabase = (path: string): Database => {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  const creating = !existsSync(path)
   const db = new Database(path, { create: true, readwrite: true, strict: true })
   try {
+    if (creating) chmodSync(path, 0o600)
     const mode = db.query<{ journal_mode: string }, []>("PRAGMA journal_mode = WAL").get()?.journal_mode
     if (mode !== "wal") throw new Error(`SQLite kept journal mode ${mode} instead of WAL for ${path}`)
     db.run("PRAGMA foreign_keys = ON")
