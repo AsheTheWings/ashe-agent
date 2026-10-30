@@ -1,13 +1,15 @@
-// Runs every vendored test262 file, including skipped ones, and groups failures by cause. Pass
+// Runs every synced test262 file, including skipped ones, and groups failures by cause. Pass
 // --write to regenerate test/test262/skipped.txt from the current failures.
 //
-// Usage: bun run script/test262-report.ts [--write] [path-prefix]
+// Usage: bun --define 'ASHE_AGENT_TEST262_DIR="/path/to/corpus"' script/test262-report.ts [--write] [path-prefix]
 import path from "node:path"
-import { root, run, skipped } from "../test/test262/run.js"
+import { corpus, root, run, skipped } from "../test/test262/run.js"
+
+if (corpus === undefined) throw new Error("define ASHE_AGENT_TEST262_DIR as a corpus synced by script/sync-test262.ts")
 
 const write = process.argv.includes("--write")
 const prefix = process.argv.slice(2).find((arg) => !arg.startsWith("--")) ?? ""
-const files = [...new Bun.Glob("**/*.js").scanSync({ cwd: root })].filter((file) => file.startsWith(prefix)).sort()
+const files = [...new Bun.Glob("**/*.js").scanSync({ cwd: corpus })].filter((file) => file.startsWith(prefix)).sort()
 
 const failures: Array<{ file: string; reason: string }> = []
 const recovered: Array<string> = []

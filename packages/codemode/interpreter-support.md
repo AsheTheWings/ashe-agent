@@ -9,7 +9,7 @@ standard-library surface that programs can use today, plus concrete gaps that ma
 - Intentional boundaries are not listed as compatibility work.
 
 Check off items as support lands and add unchecked items for significant gaps. The implementation and tests remain
-the ultimate source of truth. Upstream test262 files run verbatim from `test/test262`; a failing file is listed in
+the ultimate source of truth. Upstream test262 files run verbatim through `bun run test:test262`; a failing file is listed in
 `test/test262/skipped.txt` and its gap is an unchecked item here (see `test/test262/README.md`).
 
 ## Source and execution model

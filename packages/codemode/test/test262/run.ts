@@ -12,7 +12,17 @@ import { constructor, fn, methods } from "../../src/interpreter/native.js"
 import { Callable, define, get, hidden, Arr, Fn, Obj, type Value } from "../../src/interpreter/objects.js"
 import { ToolRuntime } from "../../src/tool-runtime.js"
 
+/** The directory holding manifest.json and skipped.txt. */
 export const root = import.meta.dir
+
+declare const ASHE_AGENT_TEST262_DIR: string | undefined
+
+/**
+ * The copied test262 files, which `bun run test:test262` syncs into a directory of its own run and
+ * names through the ASHE_AGENT_TEST262_DIR build-time constant; undefined when no run named one.
+ */
+export const corpus: string | undefined =
+  typeof ASHE_AGENT_TEST262_DIR === "undefined" ? undefined : ASHE_AGENT_TEST262_DIR
 
 /** Files that fail on a known gap, mapped to the gap; see skipped.txt. */
 export const skipped = new Map(
@@ -33,7 +43,8 @@ const limits = { timeoutMs: 5000, maxToolCalls: undefined, maxOutputBytes: undef
 const prepared = ToolRuntime.prepare<never>({})
 
 export const run = async (file: string): Promise<Outcome> => {
-  const source = await Bun.file(path.join(root, file)).text()
+  if (corpus === undefined) throw new Error("no test262 corpus; run `bun run test:test262`")
+  const source = await Bun.file(path.join(corpus, file)).text()
   const start = source.indexOf("/*---")
   const meta = Bun.YAML.parse(source.slice(start + 5, source.indexOf("---*/", start))) as Frontmatter
   let done: { error: unknown } | undefined

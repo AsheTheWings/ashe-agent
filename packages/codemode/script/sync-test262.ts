@@ -1,16 +1,15 @@
-// Copies the manifest's test262 directories from a local checkout into test/test262, verbatim.
-// Files needing unsupported flags, features, or harness includes, or whose code crosses one of the
-// interpreter's intentional boundaries, are not copied, so the vendored tree is exactly what
-// test/test262.test.ts runs.
+// Copies the manifest's test262 directories from a test262 checkout into a corpus directory,
+// verbatim. Files needing unsupported flags, features, or harness includes, or whose code crosses
+// one of the interpreter's intentional boundaries, are not copied, so the corpus is exactly what
+// test/test262.integration.test.ts runs.
 //
-// Usage: bun run script/sync-test262.ts /path/to/test262
+// Usage: bun run script/sync-test262.ts /path/to/test262 /path/to/corpus
 import path from "node:path"
 import { rm } from "node:fs/promises"
 
 type Frontmatter = { flags?: Array<string>; features?: Array<string>; includes?: Array<string> }
 
-const root = path.resolve(import.meta.dir, "../test/test262")
-const manifest = (await Bun.file(path.join(root, "manifest.json")).json()) as {
+const manifest = (await Bun.file(path.resolve(import.meta.dir, "../test/test262/manifest.json")).json()) as {
   revision: string
   directories: Array<string>
   harness: Array<string>
@@ -20,8 +19,9 @@ const manifest = (await Bun.file(path.join(root, "manifest.json")).json()) as {
 }
 const boundaries = Object.entries(manifest.boundaries).map(([name, pattern]) => [name, new RegExp(pattern)] as const)
 const checkout = process.argv[2]
-if (checkout === undefined) {
-  console.error("usage: bun run script/sync-test262.ts /path/to/test262")
+const root = process.argv[3]
+if (checkout === undefined || root === undefined) {
+  console.error("usage: bun run script/sync-test262.ts /path/to/test262 /path/to/corpus")
   process.exit(1)
 }
 const head = (await Bun.$`git -C ${checkout} rev-parse HEAD`.text()).trim()

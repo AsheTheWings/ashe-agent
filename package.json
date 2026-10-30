@@ -14,6 +14,7 @@
     "test:component": "bun scripts/task.ts test:component",
     "test:integration": "bun scripts/task.ts test:integration",
     "test:conformance": "bun scripts/task.ts test:conformance",
+    "test:test262": "bun scripts/task.ts test:test262",
     "generate": "bun scripts/task.ts generate"
   },
   "devDependencies": {
