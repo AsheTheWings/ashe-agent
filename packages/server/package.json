@@ -1,0 +1,9 @@
+{
+  "name": "@ashe-agent/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "effect": "4.1.0"
+  }
+}

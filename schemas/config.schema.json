@@ -1,0 +1,325 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ashe-agent config file",
+  "type": "object",
+  "properties": {
+    "stateDir": {
+      "type": "string",
+      "pattern": "^\\/",
+      "description": "Directory holding the server's database and other state."
+    },
+    "listenHost": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Address the WebSocket server listens on."
+    },
+    "listenPort": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535,
+      "description": "Port the WebSocket server listens on; 0 picks a free port."
+    },
+    "modelBaseUrl": {
+      "type": "string",
+      "description": "Base URL of the OpenAI Responses API the model calls go to."
+    },
+    "modelApiKeyFile": {
+      "type": "string",
+      "pattern": "^\\/",
+      "description": "Path of the protected file holding the model API key."
+    },
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "contextWindow": {
+            "type": "integer",
+            "minimum": 200000,
+            "maximum": 9007199254740991
+          },
+          "imageInput": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "contextWindow",
+          "imageInput"
+        ],
+        "additionalProperties": false
+      },
+      "description": "Models sessions may use, the first being the default, each with its id, context window, and image input."
+    },
+    "origins": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Browser origins allowed to open a WebSocket connection."
+    },
+    "permission": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "allow",
+            "ask",
+            "deny"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "allow",
+                  "ask",
+                  "deny"
+                ]
+              },
+              {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "ask",
+                    "deny"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "description": "Permission rules in opencode's shape; a tool call no rule matches is allowed."
+    },
+    "shellEnvFile": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^\\/"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional script every shell command sources before it runs."
+    },
+    "shellYieldMs": {
+      "type": "integer",
+      "minimum": 250,
+      "maximum": 30000,
+      "description": "Milliseconds a shell command runs before it yields, unless its call says otherwise."
+    },
+    "shellMaxOutputTokens": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Estimated tokens a shell result holds, unless its call says otherwise."
+    },
+    "shellMaxProcesses": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Shell processes a session holds at most."
+    },
+    "instructionsFile": {
+      "type": "string",
+      "pattern": "^\\/",
+      "description": "Global instructions file recorded into sessions without an agent."
+    },
+    "agentsDir": {
+      "type": "string",
+      "pattern": "^\\/",
+      "description": "Directory of agent files."
+    },
+    "skillRoots": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^\\/"
+      },
+      "description": "Directories searched for skills, the first winning a duplicate name."
+    },
+    "mcpServers": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "stdio"
+                ]
+              },
+              "command": {
+                "type": "string",
+                "minLength": 1
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "envFile": {
+                "type": "string",
+                "pattern": "^\\/"
+              },
+              "codemode": {
+                "type": "boolean",
+                "enum": [
+                  false
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "command"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "http"
+                ]
+              },
+              "url": {
+                "type": "string"
+              },
+              "headersFile": {
+                "type": "string",
+                "pattern": "^\\/"
+              },
+              "codemode": {
+                "type": "boolean",
+                "enum": [
+                  false
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "url"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "description": "MCP servers by name: stdio commands or Streamable HTTP URLs."
+    },
+    "codeModeLimits": {
+      "type": "object",
+      "properties": {
+        "wallClockMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "toolCalls": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "outputBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false,
+      "description": "Optional limits on a code mode program's time, tool calls, and output bytes."
+    },
+    "exaBaseUrl": {
+      "type": "string",
+      "description": "Base URL of the Exa API behind the web tools."
+    },
+    "exaApiKeyFile": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^\\/"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional path of the protected file holding the Exa API key; without it the web tools are off."
+    },
+    "tracesExporter": {
+      "type": "string",
+      "enum": [
+        "otlp",
+        "console",
+        "none"
+      ],
+      "description": "Trace exporter: otlp, console, or none."
+    },
+    "metricsExporter": {
+      "type": "string",
+      "enum": [
+        "otlp",
+        "console",
+        "none"
+      ],
+      "description": "Metric exporter: otlp, console, or none."
+    },
+    "logsExporter": {
+      "type": "string",
+      "enum": [
+        "otlp",
+        "console",
+        "none"
+      ],
+      "description": "Log exporter: otlp, console, or none."
+    },
+    "otlpEndpoint": {
+      "type": "string",
+      "description": "OTLP endpoint the otlp exporters send to."
+    },
+    "otlpProtocol": {
+      "type": "string",
+      "enum": [
+        "http/protobuf",
+        "http/json"
+      ],
+      "description": "OTLP transport protocol."
+    },
+    "otlpHeadersFile": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^\\/"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional path of the protected file holding OTLP export headers as key=value pairs."
+    },
+    "deploymentEnvironment": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Value of the deployment.environment.name telemetry attribute."
+    }
+  },
+  "additionalProperties": false
+}
