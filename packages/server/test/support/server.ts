@@ -6,7 +6,7 @@ import type { Model } from "@ashe-agent/protocol"
 import { createApiToken } from "../../src/auth/credentials.ts"
 import { ProtocolServer } from "../../src/server/serve.ts"
 import { Sessions, type TurnRunner } from "../../src/sessions/hub.ts"
-import { noAgents } from "../../src/sessions/placeholder.ts"
+import { noAgents } from "../../src/sessions/setup.ts"
 import { openDatabase, Store } from "../../src/store/database.ts"
 import { migrationFiles } from "../../src/store/migration-files.ts"
 import { applyMigrations, discoverMigrations } from "../../src/store/migrations.ts"
@@ -113,7 +113,7 @@ export class TestServer {
 
   async start() {
     const layer = ProtocolServer.layer({ hostname: "127.0.0.1", port: 0, origins: [] }).pipe(
-      Layer.provideMerge(Sessions.layer({ models, runner: this.script.runner, setup: noAgents })),
+      Layer.provideMerge(Sessions.layer({ models, runner: () => this.script.runner, setup: noAgents })),
       Layer.provideMerge(Store.layer(this.databasePath)),
     )
     this.runtime = ManagedRuntime.make(layer)

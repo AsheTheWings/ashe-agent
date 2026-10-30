@@ -6,6 +6,13 @@ enforced; opening fails on a filesystem where SQLite cannot use WAL.
 LangGraph checkpoints live there too, through the server's own checkpoint
 saver.
 
+Each session's model context is a LangGraph thread named by the session
+id, with a checkpoint after every step of a turn; each checkpoint stores
+the whole context. A turn records the thread's latest checkpoint when it
+ends. A rewind removes the checkpoints after the last kept turn's, and a
+fork copies the source's checkpoints through the last copied turn's into
+its own thread.
+
 ## Migrations
 
 The schema comes only from the migrations in `packages/server/migrations`.

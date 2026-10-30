@@ -1,3 +1,4 @@
+import type { Database } from "bun:sqlite"
 import { existsSync, statSync } from "node:fs"
 import { isAbsolute } from "node:path"
 import { Context, Effect, Exit, Fiber, Layer } from "effect"
@@ -10,6 +11,8 @@ import {
   type SessionEventBody,
   type SessionSummary,
 } from "@ashe-agent/protocol"
+import { firstMessage } from "../agent/blocks.ts"
+import { forkNote, rewindNote, unfinishedResult } from "../agent/notes.ts"
 import { ProtocolError } from "../server/websocket.ts"
 import { Store } from "../store/database.ts"
 import { SessionStore, type SessionRecord, type TurnRecord } from "./store.ts"
@@ -27,10 +30,16 @@ export interface TurnContext {
   readonly session: SessionRecord
   readonly turn: TurnRecord
   readonly input: Input
+  /** The harness notes the turn delivers before its input. */
+  readonly notes: ReadonlyArray<string>
   /** Persists an event of the turn and sends it to every subscriber. */
   readonly emit: (body: SessionEventBody) => SessionEvent
   /** Takes the inputs steered into the turn since the last step boundary, emitting their events. */
   readonly takeSteered: () => ReadonlyArray<Input>
+  /** Whether a cancel request, rather than a server stop, is ending the turn. */
+  readonly isCancelled: () => boolean
+  /** The result the session's events recorded for a tool call, if any. */
+  readonly toolResult: (toolCallId: string) => { readonly content: string; readonly outcome: ToolOutcome } | null
 }
 
 export type TurnOutcome = { readonly status: "finished" } | { readonly status: "failed"; readonly message: string; readonly code?: string }
@@ -38,10 +47,18 @@ export type TurnOutcome = { readonly status: "finished" } | { readonly status: "
 /** Runs one turn to its end; interrupting it cancels the turn. */
 export type TurnRunner = (context: TurnContext) => Effect.Effect<TurnOutcome>
 
-/** Resolves a session's agent and the instructions recorded at its creation. */
+/** What a session takes from its agent, and the catalogs its developer message lists. */
 export interface SessionSetup {
-  readonly resolve: (agent: string | null) => { readonly agent: string | null; readonly instructions: string | null }
+  /** The session's agent, the instructions recorded at its creation, and the model the agent names, if any. */
+  readonly resolve: (agent: string | null) => {
+    readonly agent: string | null
+    readonly instructions: string | null
+    readonly model: string | null
+  }
+  readonly catalogs: () => { readonly skills: string | null; readonly codeMode: string | null }
 }
+
+type ToolOutcome = Extract<SessionEventBody, { type: "TOOL_CALL_RESULT" }>["outcome"]
 
 export interface HubOptions {
   readonly models: ReadonlyArray<Model>
@@ -53,7 +70,7 @@ export interface HubOptions {
 type Listener = (event: SessionEvent) => void
 
 interface Live {
-  readonly fiber: Fiber.Fiber<TurnOutcome>
+  fiber: Fiber.Fiber<TurnOutcome>
   readonly turn: TurnRecord
   cancelled: boolean
 }
@@ -91,9 +108,10 @@ export class SessionHub {
 
   /**
    * Ends every turn a stopped server left running: withdraws its
-   * unanswered permission requests, then emits its interrupted event. A
-   * turn that ended withdrew its own requests, so only running turns can
-   * hold unanswered ones.
+   * unanswered permission requests, gives each of its tool calls without a
+   * result an interrupted one, then emits its interrupted event. A turn
+   * that ended withdrew its own requests and answered its own calls, so
+   * only running turns can hold unanswered ones.
    */
   recover() {
     for (const { sessionId, runId } of this.store.runningTurns()) {
@@ -101,21 +119,54 @@ export class SessionHub {
         for (const requestId of this.openRequests(sessionId, runId)) {
           this.store.appendEvent(sessionId, { type: "PERMISSION_WITHDRAWN", requestId, reason: "restart" }, this.now())
         }
+        for (const { toolCallId, started } of this.unansweredCalls(sessionId, runId)) {
+          this.store.appendEvent(
+            sessionId,
+            {
+              type: "TOOL_CALL_RESULT",
+              messageId: crypto.randomUUID(),
+              toolCallId,
+              role: "tool",
+              content: unfinishedResult("interrupted", started),
+              outcome: "interrupted",
+            },
+            this.now(),
+          )
+        }
         this.store.endTurn(sessionId, runId, "interrupted", this.now())
         this.store.appendEvent(sessionId, { type: "RUN_INTERRUPTED", threadId: sessionId, runId }, this.now())
       })()
     }
   }
 
+  /** The events of the turn `runId`, from its input on. */
+  private turnEvents(sessionId: string, runId: string) {
+    const turn = this.store.getTurn(sessionId, runId)!
+    return this.store.eventsAfter(sessionId, turn.firstSeq - 1)
+  }
+
   /** The permission requests of the turn `runId` that are neither resolved nor withdrawn. */
   private openRequests(sessionId: string, runId: string): ReadonlyArray<string> {
-    const turn = this.store.getTurn(sessionId, runId)!
     const open = new Set<string>()
-    for (const { event } of this.store.eventsAfter(sessionId, turn.firstSeq - 1)) {
+    for (const { event } of this.turnEvents(sessionId, runId)) {
       if (event.type === "PERMISSION_REQUESTED" && event.runId === runId) open.add(event.requestId)
       if (event.type === "PERMISSION_RESOLVED" || event.type === "PERMISSION_WITHDRAWN") open.delete(event.requestId)
     }
     return [...open]
+  }
+
+  /** The tool calls the turn `runId` started streaming that have no result, with whether each started running. */
+  private unansweredCalls(sessionId: string, runId: string) {
+    const calls = new Map<string, { toolCallId: string; started: boolean }>()
+    for (const { event } of this.turnEvents(sessionId, runId)) {
+      if (event.type === "TOOL_CALL_START") calls.set(event.toolCallId, { toolCallId: event.toolCallId, started: false })
+      if (event.type === "TOOL_EXECUTION_STARTED") {
+        const call = calls.get(event.toolCallId)
+        if (call !== undefined) call.started = true
+      }
+      if (event.type === "TOOL_CALL_RESULT") calls.delete(event.toolCallId)
+    }
+    return [...calls.values()]
   }
 
   private state(sessionId: string): SessionState {
@@ -171,15 +222,28 @@ export class SessionHub {
     return this.store.summary(this.session(sessionId), this.isRunning(sessionId))
   }
 
+  /** The first message of a session with this identity and recorded instructions, with today's catalogs. */
+  private firstMessage(id: string, cwd: string, instructions: string | null) {
+    const { skills, codeMode } = this.options.setup.catalogs()
+    return firstMessage({ instructions, skills, codeMode, sessionId: id, cwd })
+  }
+
+  /**
+   * Creates a session. Its model is the one its agent names, else the one
+   * given, which must be configured, else the first configured model.
+   */
   create(params: { cwd: string; model?: string; agent?: string }): SessionSummary {
     if (!isAbsolute(params.cwd) || !existsSync(params.cwd) || !statSync(params.cwd).isDirectory()) {
       throw invalid("the working directory must be an absolute path of an existing directory")
     }
-    const model = params.model ?? this.options.models[0]!.id
+    const { agent, instructions, model: agentModel } = this.options.setup.resolve(params.agent ?? null)
+    const model = agentModel ?? params.model ?? this.options.models[0]!.id
     if (!this.options.models.some((candidate) => candidate.id === model)) throw invalid(`no configured model ${model}`)
-    const { agent, instructions } = this.options.setup.resolve(params.agent ?? null)
     const id = crypto.randomUUID()
-    this.store.createSession({ id, cwd: params.cwd, agent, model, instructions, createdAt: this.now() }, null)
+    this.store.createSession(
+      { id, cwd: params.cwd, agent, model, instructions, createdAt: this.now(), firstMessage: this.firstMessage(id, params.cwd, instructions) },
+      null,
+    )
     return this.summary(id)
   }
 
@@ -232,23 +296,31 @@ export class SessionHub {
   /** Starts a turn with `input`, after `before` writes in the same transaction. */
   private startTurn(sessionId: string, input: Input, before?: (append: (body: SessionEventBody) => SessionEvent) => void) {
     const state = this.state(sessionId)
-    const { session, turn } = this.commit(sessionId, (append) => {
+    const { session, turn, notes } = this.commit(sessionId, (append) => {
       before?.(append)
-      const session = this.session(sessionId)
+      let session = this.session(sessionId)
+      if (session.firstMessage === "") {
+        this.store.setFirstMessage(sessionId, this.firstMessage(session.id, session.cwd, session.instructions))
+        session = this.session(sessionId)
+      }
+      const notes = session.pendingNotes
+      this.store.setPendingNotes(sessionId, [])
       const runId = crypto.randomUUID()
       const received = append({ type: "INPUT_RECEIVED", inputId: input.inputId, text: input.text, mode: input.mode, sender: input.sender })
       const turn = this.store.insertTurn(
         sessionId,
-        { runId, inputId: input.inputId, inputText: input.text, model: session.model, firstSeq: received.seq },
+        { runId, inputId: input.inputId, inputText: input.text, model: session.model, firstSeq: received.seq, notes },
         this.now(),
       )
       append({ type: "RUN_STARTED", threadId: sessionId, runId, model: turn.model, inputId: input.inputId })
-      return { session, turn }
+      return { session, turn, notes }
     })
+    const live: Live = { fiber: null as unknown as Fiber.Fiber<TurnOutcome>, turn, cancelled: false }
     const context: TurnContext = {
       session,
       turn,
       input,
+      notes,
       emit: (body) => this.emit(sessionId, body),
       takeSteered: () => {
         const taken = state.pending.filter((pending) => pending.mode === "steer")
@@ -258,9 +330,11 @@ export class SessionHub {
         }
         return taken
       },
+      isCancelled: () => live.cancelled,
+      toolResult: (toolCallId) => this.store.toolResult(sessionId, toolCallId),
     }
     const fiber = Effect.runFork(this.options.runner(context))
-    const live: Live = { fiber, turn, cancelled: false }
+    live.fiber = fiber
     state.live = live
     fiber.addObserver((exit) => this.endTurn(sessionId, live, exit))
   }
@@ -298,13 +372,24 @@ export class SessionHub {
     const source = this.session(sessionId)
     if (this.isRunning(sessionId)) throw conflict("a turn is running; fork after it ends")
     if (runId !== undefined && this.store.getTurn(sessionId, runId) === null) throw notFound(`turn ${runId}`)
-    const forked = this.store.fork(source, { id: crypto.randomUUID(), createdAt: this.now() }, runId ?? null)
+    const id = crypto.randomUUID()
+    const forked = this.store.fork(
+      source,
+      {
+        id,
+        createdAt: this.now(),
+        firstMessage: this.firstMessage(id, source.cwd, source.instructions),
+        notes: [...source.pendingNotes, forkNote(source.id, id)],
+      },
+      runId ?? null,
+    )
     return this.summary(forked.id)
   }
 
   /**
    * Removes the user turn `runId` and every later turn, then starts a turn
    * with its input, or with `text` instead, before taking any other input.
+   * The new turn delivers the notes of the removed turns and a rewind note.
    * The removal and the new turn's start commit together.
    */
   rewind(sessionId: string, runId: string, text: string | undefined, sender: Sender) {
@@ -313,7 +398,9 @@ export class SessionHub {
     const turn = this.store.getTurn(sessionId, runId)
     if (turn === null) throw notFound(`turn ${runId}`)
     this.startTurn(sessionId, { inputId: crypto.randomUUID(), text: text ?? turn.inputText, mode: "steer", sender }, (append) => {
-      this.store.removeFrom(sessionId, turn)
+      const removedNotes = this.store.removeFrom(sessionId, turn)
+      const session = this.session(sessionId)
+      this.store.setPendingNotes(sessionId, [...new Set([...session.pendingNotes, ...removedNotes, rewindNote()])])
       append({ type: "SESSION_REWOUND", runId: turn.runId, firstRemovedSeq: turn.firstSeq })
     })
   }
@@ -328,14 +415,15 @@ export class SessionHub {
 
 /** The server's session hub over its database, stopped when its layer is released. */
 export class Sessions extends Context.Service<Sessions, SessionHub>()("ashe-agent/sessions/Sessions") {
-  static readonly layer = (options: HubOptions) =>
+  /** The hub over the `Store` database; `runner` builds the turn runner over that database. */
+  static readonly layer = (options: Omit<HubOptions, "runner"> & { readonly runner: (db: Database) => TurnRunner }) =>
     Layer.effect(
       Sessions,
       Effect.gen(function* () {
         const { db } = yield* Store
         return yield* Effect.acquireRelease(
           Effect.sync(() => {
-            const hub = new SessionHub(new SessionStore(db), options)
+            const hub = new SessionHub(new SessionStore(db), { ...options, runner: options.runner(db) })
             hub.recover()
             return hub
           }),

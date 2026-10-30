@@ -6,15 +6,17 @@ configuration and protected input, its client protocol's message
 definitions, its SQLite store with migrations, a LangGraph checkpoint
 saver, and consistent dumps, and a WebSocket server that authenticates the
 owner's logins and API tokens and keeps durable sessions that several
-clients share, with steering, queueing, fork, and rewind. It has no agent
-loop yet. Nothing about it is stable yet, and its configuration,
+clients share, with steering, queueing, fork, and rewind. Its agent loop
+calls a model through the OpenAI Responses API, switches models within a
+session, and compacts long sessions; it has no built-in tools yet.
+Nothing about it is stable yet, and its configuration,
 protocol, and storage may change incompatibly at any revision.
 
 ## Repository
 
 The repository is a Bun workspace. `packages/server` holds the server's
-input layer, store, WebSocket server, and the `ashe-agent` command, and
-`packages/protocol` the protocol's message schemas.
+input layer, store, WebSocket server, agent loop, and the `ashe-agent`
+command, and `packages/protocol` the protocol's message schemas.
 
 ## Set up
 
@@ -52,6 +54,8 @@ bun packages/server/src/main.ts serve
   messages and session events.
 - [Sessions](docs/sessions.md): history, input during turns, fork,
   rewind, and restarts.
+- [Model context](docs/model-context.md): what each model call carries,
+  model switching, and compaction.
 - [Storage](docs/storage.md): the database, its migrations, and dumps.
 - [Testing](docs/testing.md): the fast gate and the command for each test
   class.

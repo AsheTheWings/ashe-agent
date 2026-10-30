@@ -78,3 +78,7 @@ takes image input; the first is the default for new sessions. The list
 must hold at least one model and no id twice. A model whose context
 window is below 200,000 tokens is refused, and the server uses at most
 480,000 tokens of any model's window.
+
+The model and graph libraries' own process variables, such as
+`OPENAI_BASE_URL` or `LANGSMITH_TRACING`, configure nothing: `serve`
+removes them, as [model context](model-context.md) explains.

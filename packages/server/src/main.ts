@@ -5,13 +5,13 @@
  */
 import { dirname, resolve } from "node:path"
 import { existsSync } from "node:fs"
-import { Cause, Effect, Exit, Fiber, Layer } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Redacted } from "effect"
 import { createApiToken, hasOwnerPassword, listApiTokens, revokeApiToken, setOwnerPassword } from "./auth/credentials.ts"
 import { readSecretLine } from "./cli/terminal.ts"
-import { loadInputsOrExit } from "./inputs/bootstrap.ts"
+import { loadInputsOrExit, removeDependencyVariables } from "./inputs/bootstrap.ts"
 import { ProtocolServer, serveProgram } from "./server/serve.ts"
 import { Sessions } from "./sessions/hub.ts"
-import { noAgents, unavailableRunner } from "./sessions/placeholder.ts"
+import { noAgents } from "./sessions/setup.ts"
 import { databasePath, openDatabase, openDatabaseReadonly, Store } from "./store/database.ts"
 import { dumpDatabase } from "./store/dump.ts"
 import { migrationFiles } from "./store/migration-files.ts"
@@ -65,13 +65,34 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
   async serve(args) {
     if (args.length > 0) usageError("serve takes no arguments")
     const { inputs } = loadInputsOrExit("serve")
+    removeDependencyVariables(process.env)
+    const modelApiKey = inputs.modelApiKey
+    if (modelApiKey === null) fail("serve needs ASHE_AGENT_MODEL_API_KEY_FILE")
     openCurrentDatabase(inputs.stateDir).close()
+    // The agent loop's libraries load only for serve, so operator commands start quickly.
+    const [{ responsesModelPort }, { agentRunner }, { SqliteCheckpointSaver }] = await Promise.all([
+      import("./agent/model.ts"),
+      import("./agent/runner.ts"),
+      import("./store/checkpointer.ts"),
+    ])
     const layer = ProtocolServer.layer({
       hostname: inputs.listenHost,
       port: inputs.listenPort,
       origins: inputs.origins,
     }).pipe(
-      Layer.provideMerge(Sessions.layer({ models: inputs.models, runner: unavailableRunner, setup: noAgents })),
+      Layer.provideMerge(
+        Sessions.layer({
+          models: inputs.models,
+          setup: noAgents,
+          runner: (db) =>
+            agentRunner({
+              port: responsesModelPort({ baseUrl: inputs.modelBaseUrl, apiKey: Redacted.value(modelApiKey!) }),
+              tools: [],
+              saver: new SqliteCheckpointSaver(db),
+              models: inputs.models,
+            }),
+        }),
+      ),
       Layer.provide(Store.layer(databasePath(inputs.stateDir))),
     )
     let interrupt = () => {}

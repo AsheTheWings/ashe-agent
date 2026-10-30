@@ -73,11 +73,12 @@ const typecheck = async () => {
 const tasks: Record<string, () => Promise<number>> = {
   typecheck,
   "test:unit": () => test("unit"),
+  "test:component": () => test("component"),
   "test:integration": () => test("integration"),
   "test:conformance": () => test("conformance"),
   generate: () => run([process.execPath, join(root, "scripts/generate.ts")]),
   gate: async () => {
-    for (const step of [typecheck, () => test("unit"), () => test("conformance")]) {
+    for (const step of [typecheck, () => test("unit"), () => test("component"), () => test("conformance")]) {
       const code = await step()
       if (code !== 0) return code
     }

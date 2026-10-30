@@ -34,6 +34,20 @@ export const processSources = (): Sources => ({
   readFile,
 })
 
+/** Prefixes of process variables that the model and graph libraries read as their own configuration. */
+const dependencyVariable = /^(OPENAI|LANGCHAIN|LANGSMITH|LANGGRAPH|LC)_/
+
+/**
+ * Removes from `env` every variable the model and graph libraries would read
+ * as configuration, such as `OPENAI_BASE_URL` or `LANGSMITH_TRACING`, so
+ * only the declared inputs configure the server. Returns the removed names.
+ */
+export const removeDependencyVariables = (env: Record<string, string | undefined>): ReadonlyArray<string> => {
+  const removed = Object.keys(env).filter((name) => dependencyVariable.test(name))
+  for (const name of removed) delete env[name]
+  return removed
+}
+
 /**
  * The entry point's first step: resolve and validate the process's inputs,
  * or print each problem and exit before any other work.
