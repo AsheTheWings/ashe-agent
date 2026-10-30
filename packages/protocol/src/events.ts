@@ -82,6 +82,9 @@ export const ToolCallArgs = event("TOOL_CALL_ARGS", {
 
 export const ToolCallEnd = event("TOOL_CALL_END", { toolCallId: Id })
 
+/** The server started running a tool call; a call with no such event never ran. */
+export const ToolExecutionStarted = event("TOOL_EXECUTION_STARTED", { toolCallId: Id })
+
 /** How a tool call ended; every outcome but success is a failed result. */
 export const ToolOutcome = Schema.Literals(["success", "failed", "canceled", "declined", "interrupted"])
 
@@ -180,6 +183,7 @@ export const SessionEventBody = Schema.Union([
   ToolCallStart,
   ToolCallArgs,
   ToolCallEnd,
+  ToolExecutionStarted,
   ToolCallResult,
   SessionCreated,
   InputReceived,
