@@ -12,7 +12,7 @@ import {
   type SessionSummary,
 } from "@ashe-agent/protocol"
 import { firstMessage } from "../agent/blocks.ts"
-import { catalogNote, forkNote, rewindNote, unfinishedResult } from "../agent/notes.ts"
+import { catalogNote, forkNote, programCallsNote, rewindNote, unfinishedResult } from "../agent/notes.ts"
 import type { AgentSettings } from "../agents/agents.ts"
 import type { Permission } from "../inputs/shapes.ts"
 import {
@@ -150,7 +150,8 @@ export class SessionHub {
   /**
    * Ends every turn a stopped server left running: withdraws its
    * unanswered permission requests, gives each of its tool calls without a
-   * result an interrupted one, then emits its interrupted event. A turn
+   * result an interrupted one, which for an `execute` call lists the tool
+   * calls its program had finished, then emits its interrupted event. A turn
    * that ended withdrew its own requests and answered its own calls, so
    * only running turns can hold unanswered ones.
    */
@@ -160,7 +161,8 @@ export class SessionHub {
         for (const requestId of this.openRequests(sessionId, runId)) {
           this.store.appendEvent(sessionId, { type: "PERMISSION_WITHDRAWN", requestId, reason: "restart" }, this.now())
         }
-        for (const { toolCallId, started } of this.unansweredCalls(sessionId, runId)) {
+        for (const { toolCallId, started, program } of this.unansweredCalls(sessionId, runId)) {
+          const content = unfinishedResult("interrupted", started)
           this.store.appendEvent(
             sessionId,
             {
@@ -168,7 +170,7 @@ export class SessionHub {
               messageId: crypto.randomUUID(),
               toolCallId,
               role: "tool",
-              content: unfinishedResult("interrupted", started),
+              content: program === null ? content : `${content} ${programCallsNote(program)}`,
               outcome: "interrupted",
             },
             this.now(),
@@ -198,9 +200,13 @@ export class SessionHub {
 
   /** The tool calls the turn `runId` started streaming that have no result, with whether each started running. */
   private unansweredCalls(sessionId: string, runId: string) {
-    const calls = new Map<string, { toolCallId: string; started: boolean }>()
+    type Call = { toolCallId: string; started: boolean; program: Array<{ tool: string; outcome: string }> | null }
+    const calls = new Map<string, Call>()
     for (const { event } of this.turnEvents(sessionId, runId)) {
-      if (event.type === "TOOL_CALL_START") calls.set(event.toolCallId, { toolCallId: event.toolCallId, started: false })
+      if (event.type === "TOOL_CALL_START") {
+        calls.set(event.toolCallId, { toolCallId: event.toolCallId, started: false, program: event.toolCallName === "execute" ? [] : null })
+      }
+      if (event.type === "PROGRAM_CALL_FINISHED") calls.get(event.toolCallId)?.program?.push({ tool: event.tool, outcome: event.outcome })
       if (event.type === "TOOL_EXECUTION_STARTED") {
         const call = calls.get(event.toolCallId)
         if (call !== undefined) call.started = true

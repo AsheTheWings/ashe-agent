@@ -96,6 +96,16 @@ export const ToolCallResult = event("TOOL_CALL_RESULT", {
   outcome: ToolOutcome,
 })
 
+/**
+ * A tool call that the code mode program of the `execute` call `toolCallId`
+ * made ended, with the permission name of the tool it called.
+ */
+export const ProgramCallFinished = event("PROGRAM_CALL_FINISHED", {
+  toolCallId: Id,
+  tool: Schema.String,
+  outcome: ToolOutcome,
+})
+
 /** The first event of every session. */
 export const SessionCreated = event("SESSION_CREATED", {
   /** The session's own directory, its starting working directory. */
@@ -186,6 +196,7 @@ export const SessionEventBody = Schema.Union([
   ToolCallEnd,
   ToolExecutionStarted,
   ToolCallResult,
+  ProgramCallFinished,
   SessionCreated,
   InputReceived,
   ModelChanged,

@@ -52,6 +52,7 @@ const call = (tool: Tool, cwd: string, sessionId: string, args: unknown) => {
     authorize: async () => {},
     started: () => {},
     onCancel: () => {},
+    programCall: () => {},
   }
   return tool.run(args, run).then((result) => result.content as string)
 }

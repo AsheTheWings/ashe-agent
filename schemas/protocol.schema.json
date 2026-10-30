@@ -1400,6 +1400,41 @@
                         "type": {
                           "type": "string",
                           "enum": [
+                            "PROGRAM_CALL_FINISHED"
+                          ]
+                        },
+                        "toolCallId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "tool": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "type": "string",
+                          "enum": [
+                            "success",
+                            "failed",
+                            "canceled",
+                            "declined",
+                            "interrupted"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "toolCallId",
+                        "tool",
+                        "outcome"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
                             "SESSION_CREATED"
                           ]
                         },
@@ -2320,6 +2355,41 @@
             "toolCallId",
             "role",
             "content",
+            "outcome"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "PROGRAM_CALL_FINISHED"
+              ]
+            },
+            "toolCallId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tool": {
+              "type": "string"
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "success",
+                "failed",
+                "canceled",
+                "declined",
+                "interrupted"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "toolCallId",
+            "tool",
             "outcome"
           ],
           "additionalProperties": true

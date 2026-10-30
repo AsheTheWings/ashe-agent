@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@ashe-agent/codemode": "workspace:*",
     "@ashe-agent/protocol": "workspace:*",
     "@firecrawl/anydoc": "0.2.4",
     "@langchain/core": "1.3.2",

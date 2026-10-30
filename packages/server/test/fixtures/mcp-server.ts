@@ -4,8 +4,8 @@
  * HTTP. Each tool returns `<name>:<tool>:<arguments as JSON>`, except
  * `env`, which returns `ASHE_TEST_SECRET`; `quit`, which exits the process
  * just after answering; `parts`, which returns an image, a resource, and
- * text; `structured`, which returns only structured content; and `fail`,
- * which returns an error result. `bun mcp-server.ts hang <pid-file>` appends
+ * text; `structured`, which returns only structured content; `fail`,
+ * which returns an error result; and `stall`, which never answers. `bun mcp-server.ts hang <pid-file>` appends
  * its pid to the file and never answers.
  */
 import { appendFileSync } from "node:fs"
@@ -32,6 +32,7 @@ export const testServer = (name: string, tools: ReadonlyArray<string>) => {
   for (const tool of tools) {
     server.registerTool(tool, { description: `The ${tool} tool of ${name}.`, inputSchema: anything }, async (args) => {
       if (tool === "quit") setTimeout(() => process.exit(0), 50)
+      if (tool === "stall") return await new Promise<never>(() => {})
       if (special[tool] !== undefined) return special[tool]() as never
       const text = tool === "env" ? (process.env.ASHE_TEST_SECRET ?? "unset") : `${name}:${tool}:${JSON.stringify(args)}`
       return { content: [{ type: "text", text }] }

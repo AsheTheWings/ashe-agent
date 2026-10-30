@@ -39,6 +39,7 @@ const call = (tool: Tool, cwd: string, args: unknown, imageInput = false, author
     authorize,
     started: () => {},
     onCancel: () => {},
+    programCall: () => {},
   }
   return tool.run(args, run)
 }
@@ -220,6 +221,7 @@ describe("file tools in a turn", () => {
         authorize: async (check) => void checks.push(check),
         started: () => {},
         onCancel: () => {},
+        programCall: () => {},
       }
       const update = "*** Begin Patch\n*** Update File: link/../victim.txt\n@@\n-real victim\n+patched\n*** Delete File: link/alias.txt\n*** End Patch"
       expect(await patch.run({ patch: update }, run)).toMatchObject({ outcome: "success" })

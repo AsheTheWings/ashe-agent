@@ -1,7 +1,7 @@
 import { JsonSchema, Schema } from "effect"
-import type { PermissionCheck } from "../permissions/rules.ts"
+import { PermissionDenied, PermissionRejected, type PermissionCheck } from "../permissions/rules.ts"
 import type { ToolSpec } from "./model.ts"
-import type { ToolContent } from "./window.ts"
+import type { ToolContent, ToolOutcome } from "./window.ts"
 
 /** What a running tool call knows about itself. */
 export interface ToolRun {
@@ -18,9 +18,10 @@ export interface ToolRun {
    * Returns when the permission rules let the call run, after an ask if
    * they ask; throws `PermissionDenied` or `PermissionRejected` otherwise.
    * A tool lets those errors propagate, so the tool step turns them into
-   * the call's result.
+   * the call's result. An ask is withdrawn when the call's `signal` or the
+   * given `signal` aborts.
    */
-  readonly authorize: (check: PermissionCheck) => Promise<void>
+  readonly authorize: (check: PermissionCheck, signal?: AbortSignal) => Promise<void>
   /**
    * Marks the call as running, emitting `TOOL_EXECUTION_STARTED` once. A
    * tool calls it after authorization and before the call's first effect,
@@ -32,6 +33,11 @@ export interface ToolRun {
    * the call runs, such as how to reach a process it leaves running.
    */
   readonly onCancel: (note: string) => void
+  /**
+   * Records that a tool call the call's code mode program made ended, by
+   * the called tool's permission name, emitting `PROGRAM_CALL_FINISHED`.
+   */
+  readonly programCall: (tool: string, outcome: ToolOutcome) => void
 }
 
 /**
@@ -113,4 +119,17 @@ export const builtinTool = <S extends Schema.Codec<unknown, unknown, never, neve
 export interface Prepared<P> {
   readonly check: PermissionCheck
   readonly plan: P
+}
+
+/** The result of a tool call that threw: a denial, a reject, or a failure. */
+export const failedResult = (error: unknown): ToolResult => {
+  if (error instanceof PermissionDenied) {
+    return { outcome: "failed", content: "This tool call was denied by configuration and did not run." }
+  }
+  if (error instanceof PermissionRejected) {
+    return error.reason === undefined
+      ? { outcome: "declined", content: "The user declined this tool call.", endTurn: true }
+      : { outcome: "failed", content: `The user rejected this tool call: ${error.reason}` }
+  }
+  return { outcome: "failed", content: `The tool failed: ${error instanceof Error ? error.message : String(error)}` }
 }
