@@ -2,6 +2,7 @@ import { parse, type Program } from "acorn"
 import { Cause, Effect, Option, Schema } from "effect"
 import type { DataValue, Diagnostic, ResolvedExecutionLimits, Result } from "../codemode.js"
 import { ToolRuntime } from "../tool-runtime.js"
+import { ActiveTime, makeBudget } from "./active-time.js"
 import { normalizeError } from "./errors.js"
 import type { Value } from "./objects.js"
 import { createBuiltins } from "./intrinsics.js"
@@ -58,38 +59,43 @@ export const executeProgram = <R>(
       } satisfies Result
     }).pipe(Effect.ensuring(Effect.suspend(() => runner?.interrupt() ?? Effect.void)))
     const timeoutMs = limits.timeoutMs
+    // The time limit counts active time only: the clock pauses while a host call is `uncounted`.
+    const budget = timeoutMs === undefined ? undefined : makeBudget(timeoutMs)
     const operation =
-      timeoutMs === undefined
+      budget === undefined
         ? base
-        : base.pipe(
-            Effect.timeoutOrElse({
-              duration: timeoutMs,
-              orElse: () =>
-                Effect.sync(() => {
-                  if (returned === undefined) {
+        : Effect.raceFirst(
+            base.pipe(Effect.provideService(ActiveTime, budget.clock), Effect.map(Option.some)),
+            Effect.as(budget.expired, Option.none<Result>()),
+          ).pipe(
+            Effect.flatMap((finished) =>
+              Option.isSome(finished)
+                ? Effect.succeed(finished.value)
+                : Effect.sync(() => {
+                    if (returned === undefined) {
+                      return {
+                        ok: false,
+                        error: { kind: "TimeoutExceeded", message: `Execution timed out after ${timeoutMs}ms.` },
+                        ...logged(),
+                        toolCalls: tools.calls,
+                      } satisfies Result
+                    }
+                    // Keep the timeout warning first so truncation preserves it.
                     return {
-                      ok: false,
-                      error: { kind: "TimeoutExceeded", message: `Execution timed out after ${timeoutMs}ms.` },
+                      ok: true,
+                      value: returned.value,
+                      warnings: [
+                        {
+                          kind: "TimeoutExceeded",
+                          message: `The program returned, but background work was still running at the ${timeoutMs}ms timeout and was interrupted. Await all started promises.`,
+                        },
+                        ...returned.runner.diagnostics(),
+                      ],
                       ...logged(),
                       toolCalls: tools.calls,
                     } satisfies Result
-                  }
-                  // Keep the timeout warning first so truncation preserves it.
-                  return {
-                    ok: true,
-                    value: returned.value,
-                    warnings: [
-                      {
-                        kind: "TimeoutExceeded",
-                        message: `The program returned, but background work was still running at the ${timeoutMs}ms timeout and was interrupted. Await all started promises.`,
-                      },
-                      ...returned.runner.diagnostics(),
-                    ],
-                    ...logged(),
-                    toolCalls: tools.calls,
-                  } satisfies Result
-                }),
-            }),
+                  }),
+            ),
           )
 
     return operation.pipe(
