@@ -59,13 +59,19 @@ interface SessionRow {
   pending_notes: string
 }
 
+/** The agent settings a session row records, by field, ignoring any other key the JSON holds. */
+const agentSettingsOf = (json: string): AgentSettings => {
+  const recorded = JSON.parse(json) as Partial<AgentSettings>
+  return { temperature: recorded.temperature ?? null, permission: recorded.permission ?? null }
+}
+
 const toSession = (row: SessionRow): SessionRecord => ({
   id: row.id,
   cwd: row.cwd,
   agent: row.agent,
   model: row.model,
   instructions: row.instructions,
-  agentSettings: JSON.parse(row.agent_settings),
+  agentSettings: agentSettingsOf(row.agent_settings),
   createdAt: row.created_at,
   nextSeq: row.next_seq,
   firstMessage: row.first_message,

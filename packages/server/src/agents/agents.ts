@@ -9,11 +9,10 @@ export type AgentMode = "primary" | "subagent" | "all"
 /** What a session records from its agent at creation. */
 export interface AgentSettings {
   readonly temperature: number | null
-  readonly steps: number | null
   readonly permission: Permission | null
 }
 
-export const noAgentSettings: AgentSettings = { temperature: null, steps: null, permission: null }
+export const noAgentSettings: AgentSettings = { temperature: null, permission: null }
 
 export interface AgentDefinition {
   readonly name: string
@@ -42,9 +41,8 @@ const decodePermission = Schema.decodeUnknownResult(Permission)
 /**
  * Validates one agent file's text: its frontmatter may set `description`,
  * `mode` (`primary`, `subagent`, or `all`, `all` when absent), `model` (a
- * configured model id), `temperature` (a finite number from 0 to 2),
- * `steps` (a positive integer), and `permission`; its body is the agent's
- * instructions.
+ * configured model id), `temperature` (a finite number from 0 to 2), and
+ * `permission`; its body is the agent's instructions.
  */
 export const parseAgent = (
   name: string,
@@ -66,8 +64,6 @@ export const parseAgent = (
   if (temperature !== null && (typeof temperature !== "number" || !Number.isFinite(temperature) || temperature < 0 || temperature > 2)) {
     return { ok: false, reason: "temperature is not a finite number from 0 to 2" }
   }
-  const steps = data.steps ?? null
-  if (steps !== null && (typeof steps !== "number" || !Number.isInteger(steps) || steps < 1)) return { ok: false, reason: "steps is not a positive integer" }
   let permission: Permission | null = null
   if (data.permission !== undefined && data.permission !== null) {
     const decoded = decodePermission(data.permission)
@@ -82,7 +78,7 @@ export const parseAgent = (
       description: typeof description === "string" ? description : null,
       mode,
       model,
-      settings: { temperature, steps, permission },
+      settings: { temperature, permission },
       body: parsed.body,
     },
   }

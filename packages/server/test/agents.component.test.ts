@@ -7,8 +7,7 @@ import { SUMMARY_MAX_TOKENS } from "../src/agent/compaction.ts"
 import { skillTool } from "../src/agents/skill-tool.ts"
 import { fileSetup } from "../src/agents/setup.ts"
 import type { Permission } from "../src/inputs/shapes.ts"
-import { ModelCallError } from "../src/agent/model.ts"
-import { AgentHarness, agentModels, callTools, failWith, messageText, say, testTools } from "./support/agent.ts"
+import { AgentHarness, agentModels, callTools, messageText, say, testTools } from "./support/agent.ts"
 
 const skillText = (name: string, description: string) => `---\nname: ${name}\ndescription: ${description}\nallowed-tools: touch\n---\nHow to ${name}.\n`
 
@@ -121,78 +120,19 @@ describe("agents", () => {
     )
   })
 
-  test("a turn reaching the agent's steps makes one last call without tools, then ends", async () => {
-    await withConfig({ "agents/brief.md": helper("steps: 2", "BRIEF") }, async (h) => {
-      const id = h.create({ agent: "brief" })
-      h.model.next(callTools([{ name: "echo", args: { text: "one" } }]), callTools([{ name: "echo", args: { text: "two" } }]))
-      h.input(id, "go")
-      await h.turnsEnded(id, 1)
-      expect(h.model.calls).toHaveLength(2)
-      expect(h.model.calls[0]!.call.tools.length).toBeGreaterThan(0)
-      const last = h.model.calls[1]!.call
-      expect(last.tools).toEqual([])
-      expect(messageText(last.messages.at(-1)!)).toContain("This turn reached its limit of 2 model calls.")
-      const results = ofType(h.events(id), "TOOL_CALL_RESULT")
-      expect(results.map((result) => result.outcome)).toEqual(["success", "failed"])
-      expect(results[1]!.content).toBe("The turn reached its step limit; this tool call did not run.")
-      expect(ofType(h.events(id), "RUN_FINISHED")).toHaveLength(1)
-    })
-  })
-
-  test("compaction's summary call sends the agent's temperature and counts toward its steps", async () => {
-    const big = `t1 ${"y".repeat(100_000)}`
-    await withConfig({ "agents/brief.md": helper("temperature: 0.25\nsteps: 2", "BRIEF") }, async (h) => {
-      const id = h.create({ agent: "brief" })
+  test("compaction's summary call sends the agent's temperature", async () => {
+    await withConfig({ "agents/warm.md": helper("temperature: 0.25", "WARM") }, async (h) => {
+      const id = h.create({ agent: "warm" })
       h.model.next(say("r1", { inputTokens: 150_000 }))
-      h.input(id, big)
+      h.input(id, `t1 ${"y".repeat(100_000)}`)
       await h.turnsEnded(id, 1)
       h.model.next(say("SUMMARY"), say("r2"))
       h.input(id, "t2")
       await h.turnsEnded(id, 2)
-      const [summary, last] = h.model.calls.slice(1).map(({ call }) => call)
+      const [summary, next] = h.model.calls.slice(1).map(({ call }) => call)
       expect(h.model.calls).toHaveLength(3)
       expect(summary!.maxOutputTokens).toBe(SUMMARY_MAX_TOKENS)
-      expect([summary!.temperature, last!.temperature]).toEqual([0.25, 0.25])
-      expect(last!.tools).toEqual([])
-      expect(messageText(last!.messages.at(-1)!)).toContain("This turn reached its limit of 2 model calls.")
-    })
-    await withConfig({ "agents/single.md": helper("steps: 1", "SINGLE") }, async (h) => {
-      const id = h.create({ agent: "single" })
-      h.model.next(say("r1", { inputTokens: 150_000 }))
-      h.input(id, big)
-      await h.turnsEnded(id, 1)
-      h.model.next(say("SUMMARY"))
-      h.input(id, "t2")
-      await h.turnsEnded(id, 2)
-      expect(h.model.calls).toHaveLength(2)
-      expect(h.model.calls[1]!.call.maxOutputTokens).toBe(SUMMARY_MAX_TOKENS)
-      expect(ofType(h.events(id), "COMPACTED")).toHaveLength(1)
-      expect(ofType(h.events(id), "RUN_FINISHED")).toHaveLength(2)
-    })
-  })
-
-  test("a last allowed call that overflows is retried once after its summary, as the last call", async () => {
-    const overflow = new ModelCallError("input is too long", true)
-    await withConfig({ "agents/single.md": helper("steps: 1", "SINGLE") }, async (h) => {
-      const id = h.create({ agent: "single" })
-      h.model.next(failWith(overflow), say("SUMMARY"), say("done"))
-      h.input(id, `t1 ${"y".repeat(100_000)}`)
-      await h.turnsEnded(id, 1)
-      expect(h.model.calls).toHaveLength(3)
-      const retry = h.model.calls[2]!.call
-      expect(retry.tools).toEqual([])
-      expect(messageText(retry.messages.at(-1)!)).toContain("This turn reached its limit of 1 model calls.")
-      expect(ofType(h.events(id), "COMPACTED")).toHaveLength(1)
-      expect(ofType(h.events(id), "RUN_FINISHED")).toHaveLength(1)
-    })
-    await withConfig({ "agents/brief.md": helper("steps: 2", "BRIEF") }, async (h) => {
-      const id = h.create({ agent: "brief" })
-      h.model.next(callTools([{ name: "echo", args: { text: "one" } }]), failWith(overflow), say("SUMMARY"), failWith(overflow))
-      h.input(id, `t1 ${"y".repeat(100_000)}`)
-      await h.turnsEnded(id, 1)
-      expect(h.model.calls).toHaveLength(4)
-      expect(h.model.calls[3]!.call.tools).toEqual([])
-      expect(ofType(h.events(id), "RUN_ERROR").map((event) => event.code)).toEqual(["context_overflow"])
+      expect([summary!.temperature, next!.temperature]).toEqual([0.25, 0.25])
     })
   })
 })
