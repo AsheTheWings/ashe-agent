@@ -10,6 +10,8 @@ provider accepts namespaced or dotted tool names.
 | `file_patch` | `edit` | each path the patch writes, reads to update, or removes, resolved |
 | `shell_exec_command` | `shell` | the command text, `cmd` |
 | `shell_write_stdin` | none | covered by the check of the command that started the process |
+| `web_search` | `web` | the query |
+| `web_fetch` | `web` | each URL |
 
 [Permissions](permissions.md) explains how subjects are resolved and
 decided. A tool resolves its paths once, when the call is checked, and
@@ -159,3 +161,25 @@ The `shell` permission is decided on the command text, so a rule such as
 it runs. Input written to a running process is not checked: an allowed
 command that reads its input, such as a shell or an interpreter, runs
 whatever is written to it.
+
+## `web_search` and `web_fetch`
+
+The web tools are offered exactly when an Exa API key is delivered
+through `ASHE_AGENT_EXA_API_KEY_FILE`. Both reach the web only through
+Exa's API, so the server never connects to a URL the model names.
+
+`web_search` takes a `query` and an optional `numResults` of 1 to 100,
+10 by default, and returns each result's title, URL, published date,
+author, and highlights. A `category:company`, `category:publication`,
+`category:news`, `category:personal site`, or `category:people` term in
+the query is sent as Exa's category instead.
+
+`web_fetch` takes 1 to 100 absolute `http` or `https` URLs and an
+optional `maxCharacters` per page, 3,000 by default, and returns each
+page's text under its title and URL, then a line for each URL Exa failed
+to fetch. A call naming anything else fails before it reaches Exa.
+
+An Exa request, its response body included, times out after 120 seconds.
+A failed one gives the model the HTTP status and Exa's error tag, or
+`timeout` or `unavailable` when no response arrived whole, never the key,
+the query, or the URLs.
