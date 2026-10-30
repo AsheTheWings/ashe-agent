@@ -58,7 +58,8 @@ session's next model call tells the model so in a harness note.
 through one of its user turns, or all of them, keeping their events'
 numbers, and leaves the source unchanged. The new session starts with the
 source's working directory, agent, selected model, and recorded
-instructions, which its `SESSION_CREATED` event gives; the source's own
+instructions, which its `SESSION_CREATED` event gives, and with the
+source's [session grants](permissions.md#session-grants); the source's own
 `SESSION_REWOUND` and `MODEL_CHANGED` events are not copied. Its model
 context is the source's as it stood after the last copied turn, and its
 first model call is told the source and new session ids.
@@ -71,11 +72,12 @@ client drops its events from that number on. The removal, the rewound
 event, and the new turn's start commit in one transaction, so a failure
 leaves the history as it was. The new turn's model context is the one at
 the end of the last turn kept; [model context](model-context.md)
-explains both.
+explains both. A rewind keeps every session grant.
 
 ## Restart
 
-Sessions and their events survive a server restart. On start, the server
+Sessions, their events, and their session grants survive a server
+restart. On start, the server
 ends each turn a stopped server left running: it withdraws the turn's
 unanswered permission requests with `PERMISSION_WITHDRAWN` events, gives
 each of its tool calls without a result an `interrupted` result saying

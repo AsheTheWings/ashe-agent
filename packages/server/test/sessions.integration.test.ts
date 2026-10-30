@@ -6,8 +6,7 @@ import { Client, waitFor } from "./support/cli.ts"
 import { models, SessionView, TestServer } from "./support/server.ts"
 
 /** Runs `body` against a fresh in-process server and cleans up. */
-const withServer = async (body: (server: TestServer, token: string) => Promise<void>) => {
-  const server = new TestServer()
+const withServer = async (body: (server: TestServer, token: string) => Promise<void>, server = new TestServer()) => {
   try {
     const token = server.token("primary")
     await server.start()
@@ -36,6 +35,9 @@ const runIds = (view: SessionView) =>
   view.events.filter((event) => event.event.type === "RUN_STARTED").map((event) => event.event.runId as string)
 
 const finishedRuns = (view: SessionView) => view.events.filter((event) => event.event.type === "RUN_FINISHED").length
+
+const said = (view: SessionView) =>
+  view.events.filter((event) => event.event.type === "TEXT_MESSAGE_CONTENT").map((event) => event.event.delta as string)
 
 /** The session's rows in the events, turns, and sessions tables, read from the database file. */
 const snapshot = (server: TestServer, id: string) => {
@@ -241,6 +243,41 @@ describe("restart", () => {
       await after.waitFor("the replay", (v) => v.lastSeq === view.lastSeq)
       expect(after.events).toEqual(view.events)
     })
+  })
+
+  test("an always grant still allows its call without an ask, and an ungranted call still follows the rules", async () => {
+    await withServer(
+      async (server, token) => {
+        const control = await connect(server.url, token)
+        const id = await createSession(control, workDir(server))
+        const view = await SessionView.open(server.url, token, id)
+        await control.request("session.input", { sessionId: id, text: "ask ls a" })
+        await view.waitFor("the permission request", (v) => v.types().includes("PERMISSION_REQUESTED"))
+        const requested = view.events.find((event) => event.event.type === "PERMISSION_REQUESTED")
+        const answer = { sessionId: id, requestId: requested.event.requestId, answer: "always" }
+        expect((await control.request("permission.answer", answer)).result).toEqual({})
+        expect((await control.request("permission.answer", answer)).error.code).toBe(-32006)
+        await view.waitFor("the allowed call", (v) => said(v).includes("permission: allowed"))
+        server.script.release("ask ls a")
+        await view.waitFor("the turn to finish", (v) => finishedRuns(v) === 1)
+        await server.restart()
+        const client = await connect(server.url, token)
+        const after = await SessionView.open(server.url, token, id, view.lastSeq)
+        await client.request("session.input", { sessionId: id, text: "ask ls a" })
+        await after.waitFor("the granted call", (v) => said(v).includes("permission: allowed"))
+        server.script.release("ask ls a")
+        await after.waitFor("the granted turn to finish", (v) => finishedRuns(v) === 1)
+        await client.request("session.input", { sessionId: id, text: "ask rm a" })
+        await after.waitFor("the denied call", (v) => said(v).includes("permission: denied by configuration"))
+        server.script.release("ask rm a")
+        await after.waitFor("the denied turn to finish", (v) => finishedRuns(v) === 2)
+        await client.request("session.input", { sessionId: id, text: "ask ls b" })
+        await after.waitFor("the ungranted request", (v) => v.types().includes("PERMISSION_REQUESTED"))
+        await client.request("session.cancel", { sessionId: id })
+        await after.waitFor("the cancelled turn", (v) => finishedRuns(v) === 3)
+      },
+      new TestServer({ shell: { "*": "ask", "rm *": "deny" } }),
+    )
   })
 })
 

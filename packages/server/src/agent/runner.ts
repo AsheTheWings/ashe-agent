@@ -9,6 +9,7 @@ import { REQUEST_INSTRUCTIONS } from "./blocks.ts"
 import { compact, needsCompaction, SUMMARY_PROMPT_REVISION } from "./compaction.ts"
 import { ModelCallError, type ModelPort } from "./model.ts"
 import { unfinishedResult } from "./notes.ts"
+import { PermissionDenied, PermissionRejected } from "../permissions/rules.ts"
 import type { Tool, ToolResult } from "./tools.ts"
 import { emptyWindow, renderWindow, unansweredCalls, type Entry, type ToolContent, type ToolOutcome, type Window } from "./window.ts"
 
@@ -128,7 +129,8 @@ class TurnEvents {
 
   started(id: string) {
     const call = this.calls.get(id)
-    if (call !== undefined) call.started = true
+    if (call === undefined || call.started) return
+    call.started = true
     this.emit({ type: "TOOL_EXECUTION_STARTED", toolCallId: id })
   }
 
@@ -303,12 +305,19 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
       if (tool === undefined) {
         result = { outcome: "failed", content: `There is no tool named ${name}.` }
       } else {
-        events.started(callId)
         try {
-          result = await tool.run(call.args, { sessionId: session.id, runId: turn.runId, toolCallId: callId, cwd: session.cwd, signal })
+          result = await tool.run(call.args, {
+            sessionId: session.id,
+            runId: turn.runId,
+            toolCallId: callId,
+            cwd: session.cwd,
+            signal,
+            authorize: (check) => context.authorize(callId, check, signal),
+            started: () => events.started(callId),
+          })
         } catch (error) {
           if (signal.aborted) throw error
-          result = { outcome: "failed", content: `The tool failed: ${error instanceof Error ? error.message : String(error)}` }
+          result = failedResult(error)
         }
       }
       if (result.outcome === "declined" && result.endTurn) stopped = true
@@ -353,4 +362,17 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
   entries.push({ ...own, kind: "input", text: context.input.text })
   await graph.invoke({ window: { ...window, entries }, overflowed: false, retried: false, stopped: false }, config)
   return { status: "finished" }
+}
+
+/** The result of a tool call that threw: a denial, a reject, or a failure. */
+const failedResult = (error: unknown): ToolResult => {
+  if (error instanceof PermissionDenied) {
+    return { outcome: "failed", content: "This tool call was denied by configuration and did not run." }
+  }
+  if (error instanceof PermissionRejected) {
+    return error.reason === undefined
+      ? { outcome: "declined", content: "The user declined this tool call.", endTurn: true }
+      : { outcome: "failed", content: `The user rejected this tool call: ${error.reason}` }
+  }
+  return { outcome: "failed", content: `The tool failed: ${error instanceof Error ? error.message : String(error)}` }
 }

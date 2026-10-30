@@ -8,7 +8,7 @@ import { existsSync } from "node:fs"
 import { Cause, Effect, Exit, Fiber, Layer, Redacted } from "effect"
 import { createApiToken, hasOwnerPassword, listApiTokens, revokeApiToken, setOwnerPassword } from "./auth/credentials.ts"
 import { readSecretLine } from "./cli/terminal.ts"
-import { loadInputsOrExit, removeDependencyVariables } from "./inputs/bootstrap.ts"
+import { loadInputsOrExit, processSources, removeDependencyVariables } from "./inputs/bootstrap.ts"
 import { ProtocolServer, serveProgram } from "./server/serve.ts"
 import { Sessions } from "./sessions/hub.ts"
 import { noAgents } from "./sessions/setup.ts"
@@ -64,7 +64,8 @@ const formatTime = (ms: number | null) => (ms === null ? "never" : new Date(ms).
 const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> = {
   async serve(args) {
     if (args.length > 0) usageError("serve takes no arguments")
-    const { inputs } = loadInputsOrExit("serve")
+    const sources = processSources()
+    const { inputs } = loadInputsOrExit("serve", sources)
     removeDependencyVariables(process.env)
     const modelApiKey = inputs.modelApiKey
     if (modelApiKey === null) fail("serve needs ASHE_AGENT_MODEL_API_KEY_FILE")
@@ -84,6 +85,8 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
         Sessions.layer({
           models: inputs.models,
           setup: noAgents,
+          permission: inputs.permission,
+          home: sources.dirs.home,
           runner: (db) =>
             agentRunner({
               port: responsesModelPort({ baseUrl: inputs.modelBaseUrl, apiKey: Redacted.value(modelApiKey!) }),

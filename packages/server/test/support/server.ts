@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { Deferred, Effect, Exit, Layer, ManagedRuntime } from "effect"
 import type { Model } from "@ashe-agent/protocol"
 import { createApiToken } from "../../src/auth/credentials.ts"
+import type { Permission } from "../../src/inputs/shapes.ts"
 import { ProtocolServer } from "../../src/server/serve.ts"
 import { Sessions, type TurnRunner } from "../../src/sessions/hub.ts"
 import { noAgents } from "../../src/sessions/setup.ts"
@@ -22,8 +23,10 @@ export const models: ReadonlyArray<Model> = [
  * message, then, while its gate is closed, takes steered inputs at each
  * step boundary, echoing them. `release(text)` opens the gate of the turn
  * whose input is `text`, which then finishes; turns whose input starts
- * with "fail" fail, and inputs starting with "ask" emit a permission
- * request before waiting. A turn whose input starts with "hold" passes
+ * with "fail" fail, and a turn whose input is "ask <command>" first
+ * authorizes `<command>` under the `shell` permission, granting it as its
+ * own pattern, and says "permission: allowed" or the reason it may not
+ * run. A turn whose input starts with "hold" passes
  * its last step boundary, is listed in `pastLastBoundary`, and finishes
  * only on `release(text + " end")`.
  */
@@ -59,15 +62,13 @@ export class ScriptedRunner {
       say(`echo: ${text}`)
       if (text.startsWith("fail")) return { status: "failed" as const, message: "scripted failure" }
       if (text.startsWith("ask")) {
-        context.emit({
-          type: "PERMISSION_REQUESTED",
-          requestId: crypto.randomUUID(),
-          runId: context.turn.runId,
-          toolCallId: crypto.randomUUID(),
-          permission: "shell",
-          subjects: ["ls"],
-          patterns: ["ls *"],
-        })
+        const command = text.slice("ask".length).trim()
+        const outcome = yield* Effect.tryPromise({
+          try: (signal) =>
+            context.authorize(crypto.randomUUID(), { permission: "shell", subjects: [command], patterns: [command] }, signal),
+          catch: (error) => error as Error,
+        }).pipe(Effect.match({ onSuccess: () => "allowed", onFailure: (error) => error.message }))
+        say(`permission: ${outcome}`)
       }
       const gate = self.gate(text)
       for (;;) {
@@ -93,7 +94,8 @@ export class TestServer {
   private runtime: ManagedRuntime.ManagedRuntime<ProtocolServer | Sessions | Store, never> | null = null
   url = ""
 
-  constructor() {
+  /** `permission` gives the global rules; by default every `shell` call asks. */
+  constructor(readonly permission: Permission = { shell: "ask" }) {
     const db = openDatabase(this.databasePath)
     applyMigrations(db, discoverMigrations(migrationFiles))
     db.close()
@@ -113,7 +115,9 @@ export class TestServer {
 
   async start() {
     const layer = ProtocolServer.layer({ hostname: "127.0.0.1", port: 0, origins: [] }).pipe(
-      Layer.provideMerge(Sessions.layer({ models, runner: () => this.script.runner, setup: noAgents })),
+      Layer.provideMerge(
+        Sessions.layer({ models, runner: () => this.script.runner, setup: noAgents, permission: this.permission, home: this.dir }),
+      ),
       Layer.provideMerge(Store.layer(this.databasePath)),
     )
     this.runtime = ManagedRuntime.make(layer)
