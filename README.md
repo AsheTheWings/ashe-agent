@@ -1,15 +1,15 @@
 # ashe-agent
 
 ashe-agent is a single-owner agent server in development. It currently
-consists of its input layer: the schema declaring every configuration and
-protected input, the resolver that merges and validates them, and the
-files generated from that schema. Nothing about it is stable yet, and
-its configuration may change incompatibly at any revision.
+consists of its input layer, which declares, merges, and validates every
+configuration and protected input, and its client protocol's message
+definitions. Nothing about it is stable yet, and its configuration and
+protocol may change incompatibly at any revision.
 
 ## Repository
 
 The repository is a Bun workspace. `packages/server` holds the server's
-input layer.
+input layer, and `packages/protocol` the protocol's message schemas.
 
 ## Set up
 
@@ -25,5 +25,7 @@ bun run gate
 
 - [Configuration](docs/configuration.md): how inputs reach the server, the
   config file, profiles, and protected files.
+- [Protocol](docs/protocol.md): how clients and the server exchange
+  messages and session events.
 - [Testing](docs/testing.md): the fast gate and the command for each test
   class.
