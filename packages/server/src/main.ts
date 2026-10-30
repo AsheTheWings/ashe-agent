@@ -74,12 +74,13 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
     if (modelApiKey === null) fail("serve needs ASHE_AGENT_MODEL_API_KEY_FILE")
     openCurrentDatabase(inputs.stateDir).close()
     // The agent loop's libraries load only for serve, so operator commands start quickly.
-    const [{ responsesModelPort }, { agentRunner }, { SqliteCheckpointSaver }, { ShellProcesses }, { builtinTools }] = await Promise.all([
+    const [{ responsesModelPort }, { agentRunner }, { SqliteCheckpointSaver }, { ShellProcesses }, { builtinTools }, { McpRegistry }] = await Promise.all([
       import("./agent/model.ts"),
       import("./agent/runner.ts"),
       import("./store/checkpointer.ts"),
       import("./tools/shell/index.ts"),
       import("./tools/builtin.ts"),
+      import("./tools/mcp/servers.ts"),
     ])
     // Commands run in the server user's login shell, without the server's own
     // input variables; every process ends with the server.
@@ -93,7 +94,11 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
     })
     const endProcesses = () => processes.stopAll()
     process.on("exit", endProcesses)
-    const tools = builtinTools(inputs, processes)
+    const builtin = builtinTools(inputs, processes)
+    // MCP servers connect in the background; each server's tools appear once it has listed them.
+    const mcp = new McpRegistry(inputs.mcpServers, { env: commandEnv, version: revision })
+    void mcp.start()
+    const tools = () => [...builtin, ...mcp.tools(true)]
     const layer = ProtocolServer.layer({
       hostname: inputs.listenHost,
       port: inputs.listenPort,
@@ -136,6 +141,7 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
     if (stopping) interrupt()
     const exit = await Effect.runPromise(Fiber.await(fiber))
     endProcesses()
+    await mcp.stop()
     process.off("SIGINT", stop)
     process.off("SIGTERM", stop)
     if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {

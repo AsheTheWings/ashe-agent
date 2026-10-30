@@ -3,7 +3,8 @@ import type { Dirs, Process } from "./catalog.ts"
 import { resolveInputs, type FileRead, type Inputs, type Sources } from "./resolve.ts"
 import type { Profile } from "./shapes.ts"
 
-const readFile = (path: string): FileRead => {
+/** Reads a file with its permission bits, as protected files need. */
+export const readDiskFile = (path: string): FileRead => {
   try {
     const stat = statSync(path)
     if (!stat.isFile()) return { kind: "error", message: "not a regular file" }
@@ -31,7 +32,7 @@ export const platformDirs = (env: Readonly<Record<string, string | undefined>>):
 export const processSources = (): Sources => ({
   env: process.env,
   dirs: platformDirs(process.env),
-  readFile,
+  readFile: readDiskFile,
 })
 
 /** Prefixes of process variables that the model and graph libraries read as their own configuration. */

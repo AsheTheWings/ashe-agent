@@ -15,7 +15,8 @@ import { emptyWindow, renderWindow, unansweredCalls, type Entry, type ToolConten
 
 export interface AgentOptions {
   readonly port: ModelPort
-  readonly tools: ReadonlyArray<Tool>
+  /** The tools, or a function giving the tools available now, read at every model call. */
+  readonly tools: ReadonlyArray<Tool> | (() => ReadonlyArray<Tool>)
   readonly saver: BaseCheckpointSaver
   readonly models: ReadonlyArray<Model>
 }
@@ -227,8 +228,9 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
   if (model === undefined) throw new TurnFailure(`the model ${turn.model} is not configured`, "model_unavailable")
   const usable = Math.min(model.contextWindow, MAX_USABLE_CONTEXT_WINDOW)
   const first = session.firstMessage
-  const tools = new Map(options.tools.map((tool) => [tool.spec.name, tool]))
-  const specs = options.tools.map((tool) => tool.spec)
+  const available = () => (typeof options.tools === "function" ? options.tools() : options.tools)
+  // The tools of the latest model call, which its tool calls run against.
+  let tools = new Map(available().map((tool) => [tool.spec.name, tool]))
 
   const steer = async (state: StateValue) => {
     const steered = context.takeSteered()
@@ -266,6 +268,7 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
     // A summary call that took the agent's last allowed call ends the turn, unless it compacted an
     // overflow: the overflowed call is retried once, as the last call.
     if (steps !== null && state.calls >= steps && !state.retried) return { stopped: true }
+    tools = new Map(available().map((tool) => [tool.spec.name, tool]))
     const chunks: Array<AIMessageChunk> = []
     // The agent's last allowed call goes without tools, after a note saying so.
     const last = steps !== null && state.calls + 1 >= steps
@@ -275,7 +278,7 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
         model: turn.model,
         instructions: REQUEST_INSTRUCTIONS,
         messages: renderWindow(window, first, turn.model, model.imageInput),
-        tools: last ? [] : specs,
+        tools: last ? [] : [...tools.values()].map((tool) => tool.spec),
         ...(temperature === null ? {} : { temperature }),
       }
       for await (const chunk of options.port.stream(call, signal)) {
