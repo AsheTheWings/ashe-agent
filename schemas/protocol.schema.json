@@ -1,0 +1,3551 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ashe-agent protocol",
+  "description": "Messages a client sends (ClientRequest) and a server sends (ServerMessage), as JSON-RPC 2.0 over one WebSocket.",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/ClientRequest"
+    },
+    {
+      "$ref": "#/$defs/ServerMessage"
+    }
+  ],
+  "$defs": {
+    "ClientRequest": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "auth.login"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "password": {
+                  "type": "string"
+                },
+                "protocolVersion": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "password",
+                "protocolVersion"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "auth.refresh"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "refreshToken": {
+                  "type": "string"
+                },
+                "protocolVersion": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "refreshToken",
+                "protocolVersion"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "auth.authenticate"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "token": {
+                  "type": "string"
+                },
+                "protocolVersion": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "token",
+                "protocolVersion"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "models.list"
+              ]
+            },
+            "params": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "agents.list"
+              ]
+            },
+            "params": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "session.list"
+              ]
+            },
+            "params": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "session.create"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "cwd": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "agent": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "cwd"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "session.subscribe"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "afterSeq": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "sessionId"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "session.unsubscribe"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "sessionId"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "session.input"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "text": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "steer",
+                    "queue"
+                  ]
+                }
+              },
+              "required": [
+                "sessionId",
+                "text"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "session.cancel"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "sessionId"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "session.setModel"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "model": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "sessionId",
+                "model"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "session.fork"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "runId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "sessionId"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "session.rewind"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "runId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "sessionId",
+                "runId"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "permission.answer"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "requestId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "answer": {
+                  "type": "string",
+                  "enum": [
+                    "once",
+                    "always",
+                    "reject"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "sessionId",
+                "requestId",
+                "answer"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        }
+      ]
+    },
+    "ServerMessage": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "result": {},
+            "error": {
+              "not": {}
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "error": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "message": {
+                  "type": "string"
+                },
+                "data": {
+                  "type": "object",
+                  "properties": {
+                    "supportedVersions": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "retryAt": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ],
+              "additionalProperties": true
+            },
+            "result": {
+              "not": {}
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "error"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "session.event"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "seq": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "timestamp": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "event": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "RUN_STARTED"
+                          ]
+                        },
+                        "threadId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "runId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "model": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "inputId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "threadId",
+                        "runId",
+                        "model",
+                        "inputId"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "RUN_FINISHED"
+                          ]
+                        },
+                        "threadId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "runId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "outcome": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "success"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "additionalProperties": true
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "cancelled"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ],
+                              "additionalProperties": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "threadId",
+                        "runId",
+                        "outcome"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "RUN_ERROR"
+                          ]
+                        },
+                        "runId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "runId",
+                        "message"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "RUN_INTERRUPTED"
+                          ]
+                        },
+                        "threadId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "runId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "threadId",
+                        "runId"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "TEXT_MESSAGE_START"
+                          ]
+                        },
+                        "messageId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "role": {
+                          "type": "string",
+                          "enum": [
+                            "assistant"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "messageId",
+                        "role"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "TEXT_MESSAGE_CONTENT"
+                          ]
+                        },
+                        "messageId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "delta": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "messageId",
+                        "delta"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "TEXT_MESSAGE_END"
+                          ]
+                        },
+                        "messageId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "messageId"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "REASONING_START"
+                          ]
+                        },
+                        "messageId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "messageId"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "REASONING_MESSAGE_START"
+                          ]
+                        },
+                        "messageId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "role": {
+                          "type": "string",
+                          "enum": [
+                            "reasoning"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "messageId",
+                        "role"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "REASONING_MESSAGE_CONTENT"
+                          ]
+                        },
+                        "messageId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "delta": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "messageId",
+                        "delta"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "REASONING_MESSAGE_END"
+                          ]
+                        },
+                        "messageId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "messageId"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "REASONING_END"
+                          ]
+                        },
+                        "messageId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "messageId"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "TOOL_CALL_START"
+                          ]
+                        },
+                        "toolCallId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "toolCallName": {
+                          "type": "string"
+                        },
+                        "parentMessageId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "toolCallId",
+                        "toolCallName"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "TOOL_CALL_ARGS"
+                          ]
+                        },
+                        "toolCallId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "delta": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "toolCallId",
+                        "delta"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "TOOL_CALL_END"
+                          ]
+                        },
+                        "toolCallId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "toolCallId"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "TOOL_CALL_RESULT"
+                          ]
+                        },
+                        "messageId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "toolCallId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "role": {
+                          "type": "string",
+                          "enum": [
+                            "tool"
+                          ]
+                        },
+                        "content": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "type": "string",
+                          "enum": [
+                            "success",
+                            "failed",
+                            "canceled",
+                            "declined",
+                            "interrupted"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "messageId",
+                        "toolCallId",
+                        "role",
+                        "content",
+                        "outcome"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "SESSION_CREATED"
+                          ]
+                        },
+                        "cwd": {
+                          "type": "string"
+                        },
+                        "agent": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "model": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "forkedFrom": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "sessionId": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "runId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "sessionId",
+                                "runId"
+                              ],
+                              "additionalProperties": true
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "cwd",
+                        "agent",
+                        "model",
+                        "forkedFrom"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "INPUT_RECEIVED"
+                          ]
+                        },
+                        "inputId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "text": {
+                          "type": "string"
+                        },
+                        "mode": {
+                          "type": "string",
+                          "enum": [
+                            "steer",
+                            "queue"
+                          ]
+                        },
+                        "sender": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "token"
+                                  ]
+                                },
+                                "tokenId": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "name": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "tokenId",
+                                "name"
+                              ],
+                              "additionalProperties": true
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "login"
+                                  ]
+                                },
+                                "loginId": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "loginId"
+                              ],
+                              "additionalProperties": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "inputId",
+                        "text",
+                        "mode",
+                        "sender"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "MODEL_CHANGED"
+                          ]
+                        },
+                        "model": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "sender": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "token"
+                                  ]
+                                },
+                                "tokenId": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "name": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "tokenId",
+                                "name"
+                              ],
+                              "additionalProperties": true
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "login"
+                                  ]
+                                },
+                                "loginId": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "loginId"
+                              ],
+                              "additionalProperties": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "model",
+                        "sender"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "SESSION_REWOUND"
+                          ]
+                        },
+                        "runId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "firstRemovedSeq": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "runId",
+                        "firstRemovedSeq"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "COMPACTED"
+                          ]
+                        },
+                        "runId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "tokensBefore": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "tokensAfter": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "promptRevision": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "runId",
+                        "tokensBefore",
+                        "tokensAfter",
+                        "promptRevision"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "PERMISSION_REQUESTED"
+                          ]
+                        },
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "runId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "toolCallId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "permission": {
+                          "type": "string"
+                        },
+                        "subjects": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "patterns": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "requestId",
+                        "runId",
+                        "toolCallId",
+                        "permission",
+                        "subjects",
+                        "patterns"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "PERMISSION_RESOLVED"
+                          ]
+                        },
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "answer": {
+                          "type": "string",
+                          "enum": [
+                            "once",
+                            "always",
+                            "reject"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sender": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "token"
+                                  ]
+                                },
+                                "tokenId": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "name": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "tokenId",
+                                "name"
+                              ],
+                              "additionalProperties": true
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "login"
+                                  ]
+                                },
+                                "loginId": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "loginId"
+                              ],
+                              "additionalProperties": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "requestId",
+                        "answer"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "PERMISSION_WITHDRAWN"
+                          ]
+                        },
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "canceled",
+                            "restart"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "requestId",
+                        "reason"
+                      ],
+                      "additionalProperties": true
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "sessionId",
+                "seq",
+                "timestamp",
+                "event"
+              ],
+              "additionalProperties": true
+            },
+            "id": {
+              "not": {}
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        }
+      ]
+    },
+    "SessionEventBody": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "RUN_STARTED"
+              ]
+            },
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "runId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1
+            },
+            "inputId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "threadId",
+            "runId",
+            "model",
+            "inputId"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "RUN_FINISHED"
+              ]
+            },
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "runId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "success"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ],
+                  "additionalProperties": true
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "cancelled"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ],
+                  "additionalProperties": true
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "threadId",
+            "runId",
+            "outcome"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "RUN_ERROR"
+              ]
+            },
+            "runId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "message": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "runId",
+            "message"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "RUN_INTERRUPTED"
+              ]
+            },
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "runId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "threadId",
+            "runId"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "TEXT_MESSAGE_START"
+              ]
+            },
+            "messageId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "role": {
+              "type": "string",
+              "enum": [
+                "assistant"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "messageId",
+            "role"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "TEXT_MESSAGE_CONTENT"
+              ]
+            },
+            "messageId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "delta": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "messageId",
+            "delta"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "TEXT_MESSAGE_END"
+              ]
+            },
+            "messageId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "messageId"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "REASONING_START"
+              ]
+            },
+            "messageId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "messageId"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "REASONING_MESSAGE_START"
+              ]
+            },
+            "messageId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "role": {
+              "type": "string",
+              "enum": [
+                "reasoning"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "messageId",
+            "role"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "REASONING_MESSAGE_CONTENT"
+              ]
+            },
+            "messageId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "delta": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "messageId",
+            "delta"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "REASONING_MESSAGE_END"
+              ]
+            },
+            "messageId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "messageId"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "REASONING_END"
+              ]
+            },
+            "messageId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "messageId"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "TOOL_CALL_START"
+              ]
+            },
+            "toolCallId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "toolCallName": {
+              "type": "string"
+            },
+            "parentMessageId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "toolCallId",
+            "toolCallName"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "TOOL_CALL_ARGS"
+              ]
+            },
+            "toolCallId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "delta": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "toolCallId",
+            "delta"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "TOOL_CALL_END"
+              ]
+            },
+            "toolCallId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "toolCallId"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "TOOL_CALL_RESULT"
+              ]
+            },
+            "messageId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "toolCallId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "role": {
+              "type": "string",
+              "enum": [
+                "tool"
+              ]
+            },
+            "content": {
+              "type": "string"
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "success",
+                "failed",
+                "canceled",
+                "declined",
+                "interrupted"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "messageId",
+            "toolCallId",
+            "role",
+            "content",
+            "outcome"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "SESSION_CREATED"
+              ]
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "agent": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1
+            },
+            "forkedFrom": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "sessionId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "runId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "sessionId",
+                    "runId"
+                  ],
+                  "additionalProperties": true
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "cwd",
+            "agent",
+            "model",
+            "forkedFrom"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "INPUT_RECEIVED"
+              ]
+            },
+            "inputId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "text": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "steer",
+                "queue"
+              ]
+            },
+            "sender": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "token"
+                      ]
+                    },
+                    "tokenId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "tokenId",
+                    "name"
+                  ],
+                  "additionalProperties": true
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "login"
+                      ]
+                    },
+                    "loginId": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "loginId"
+                  ],
+                  "additionalProperties": true
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "inputId",
+            "text",
+            "mode",
+            "sender"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "MODEL_CHANGED"
+              ]
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sender": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "token"
+                      ]
+                    },
+                    "tokenId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "tokenId",
+                    "name"
+                  ],
+                  "additionalProperties": true
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "login"
+                      ]
+                    },
+                    "loginId": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "loginId"
+                  ],
+                  "additionalProperties": true
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "model",
+            "sender"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "SESSION_REWOUND"
+              ]
+            },
+            "runId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "firstRemovedSeq": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "type",
+            "runId",
+            "firstRemovedSeq"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "COMPACTED"
+              ]
+            },
+            "runId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tokensBefore": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "tokensAfter": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "promptRevision": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "runId",
+            "tokensBefore",
+            "tokensAfter",
+            "promptRevision"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "PERMISSION_REQUESTED"
+              ]
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "runId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "toolCallId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "permission": {
+              "type": "string"
+            },
+            "subjects": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "patterns": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "requestId",
+            "runId",
+            "toolCallId",
+            "permission",
+            "subjects",
+            "patterns"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "PERMISSION_RESOLVED"
+              ]
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "answer": {
+              "type": "string",
+              "enum": [
+                "once",
+                "always",
+                "reject"
+              ]
+            },
+            "message": {
+              "type": "string"
+            },
+            "sender": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "token"
+                      ]
+                    },
+                    "tokenId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "tokenId",
+                    "name"
+                  ],
+                  "additionalProperties": true
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "login"
+                      ]
+                    },
+                    "loginId": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "loginId"
+                  ],
+                  "additionalProperties": true
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "requestId",
+            "answer"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "PERMISSION_WITHDRAWN"
+              ]
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "canceled",
+                "restart"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "requestId",
+            "reason"
+          ],
+          "additionalProperties": true
+        }
+      ]
+    },
+    "auth.login.params": {
+      "type": "object",
+      "properties": {
+        "password": {
+          "type": "string"
+        },
+        "protocolVersion": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "password",
+        "protocolVersion"
+      ],
+      "additionalProperties": true
+    },
+    "auth.login.result": {
+      "type": "object",
+      "properties": {
+        "accessToken": {
+          "type": "string"
+        },
+        "accessTokenExpiresAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "refreshToken": {
+          "type": "string"
+        },
+        "refreshTokenExpiresAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "principal": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "token"
+                  ]
+                },
+                "tokenId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "tokenId",
+                "name"
+              ],
+              "additionalProperties": true
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "login"
+                  ]
+                },
+                "loginId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "kind",
+                "loginId"
+              ],
+              "additionalProperties": true
+            }
+          ]
+        }
+      },
+      "required": [
+        "accessToken",
+        "accessTokenExpiresAt",
+        "refreshToken",
+        "refreshTokenExpiresAt",
+        "principal"
+      ],
+      "additionalProperties": true
+    },
+    "auth.refresh.params": {
+      "type": "object",
+      "properties": {
+        "refreshToken": {
+          "type": "string"
+        },
+        "protocolVersion": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "refreshToken",
+        "protocolVersion"
+      ],
+      "additionalProperties": true
+    },
+    "auth.refresh.result": {
+      "type": "object",
+      "properties": {
+        "accessToken": {
+          "type": "string"
+        },
+        "accessTokenExpiresAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "refreshToken": {
+          "type": "string"
+        },
+        "refreshTokenExpiresAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "principal": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "token"
+                  ]
+                },
+                "tokenId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "tokenId",
+                "name"
+              ],
+              "additionalProperties": true
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "login"
+                  ]
+                },
+                "loginId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "kind",
+                "loginId"
+              ],
+              "additionalProperties": true
+            }
+          ]
+        }
+      },
+      "required": [
+        "accessToken",
+        "accessTokenExpiresAt",
+        "refreshToken",
+        "refreshTokenExpiresAt",
+        "principal"
+      ],
+      "additionalProperties": true
+    },
+    "auth.authenticate.params": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string"
+        },
+        "protocolVersion": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "token",
+        "protocolVersion"
+      ],
+      "additionalProperties": true
+    },
+    "auth.authenticate.result": {
+      "type": "object",
+      "properties": {
+        "principal": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "token"
+                  ]
+                },
+                "tokenId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "tokenId",
+                "name"
+              ],
+              "additionalProperties": true
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "login"
+                  ]
+                },
+                "loginId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "kind",
+                "loginId"
+              ],
+              "additionalProperties": true
+            }
+          ]
+        }
+      },
+      "required": [
+        "principal"
+      ],
+      "additionalProperties": true
+    },
+    "models.list.params": {
+      "type": "object"
+    },
+    "models.list.result": {
+      "type": "object",
+      "properties": {
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "contextWindow": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "imageInput": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "contextWindow",
+              "imageInput"
+            ],
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": [
+        "models"
+      ],
+      "additionalProperties": true
+    },
+    "agents.list.params": {
+      "type": "object"
+    },
+    "agents.list.result": {
+      "type": "object",
+      "properties": {
+        "agents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "primary",
+                  "subagent",
+                  "all"
+                ]
+              },
+              "model": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "description",
+              "mode",
+              "model"
+            ],
+            "additionalProperties": true
+          }
+        },
+        "refused": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "reason"
+            ],
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": [
+        "agents",
+        "refused"
+      ],
+      "additionalProperties": true
+    },
+    "session.list.params": {
+      "type": "object"
+    },
+    "session.list.result": {
+      "type": "object",
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "agent": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "model": {
+                "type": "string",
+                "minLength": 1
+              },
+              "createdAt": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "running": {
+                "type": "boolean"
+              },
+              "lastSeq": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "id",
+              "cwd",
+              "agent",
+              "model",
+              "createdAt",
+              "running",
+              "lastSeq"
+            ],
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": [
+        "sessions"
+      ],
+      "additionalProperties": true
+    },
+    "session.create.params": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "agent": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cwd"
+      ],
+      "additionalProperties": true
+    },
+    "session.create.result": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "agent": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1
+            },
+            "createdAt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "running": {
+              "type": "boolean"
+            },
+            "lastSeq": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "id",
+            "cwd",
+            "agent",
+            "model",
+            "createdAt",
+            "running",
+            "lastSeq"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "additionalProperties": true
+    },
+    "session.subscribe.params": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "afterSeq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "additionalProperties": true
+    },
+    "session.subscribe.result": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "agent": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1
+            },
+            "createdAt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "running": {
+              "type": "boolean"
+            },
+            "lastSeq": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "id",
+            "cwd",
+            "agent",
+            "model",
+            "createdAt",
+            "running",
+            "lastSeq"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "additionalProperties": true
+    },
+    "session.unsubscribe.params": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "additionalProperties": true
+    },
+    "session.unsubscribe.result": {
+      "type": "object"
+    },
+    "session.input.params": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "steer",
+            "queue"
+          ]
+        }
+      },
+      "required": [
+        "sessionId",
+        "text"
+      ],
+      "additionalProperties": true
+    },
+    "session.input.result": {
+      "type": "object",
+      "properties": {
+        "inputId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "inputId"
+      ],
+      "additionalProperties": true
+    },
+    "session.cancel.params": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "additionalProperties": true
+    },
+    "session.cancel.result": {
+      "type": "object"
+    },
+    "session.setModel.params": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "sessionId",
+        "model"
+      ],
+      "additionalProperties": true
+    },
+    "session.setModel.result": {
+      "type": "object"
+    },
+    "session.fork.params": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "additionalProperties": true
+    },
+    "session.fork.result": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "agent": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1
+            },
+            "createdAt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "running": {
+              "type": "boolean"
+            },
+            "lastSeq": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "id",
+            "cwd",
+            "agent",
+            "model",
+            "createdAt",
+            "running",
+            "lastSeq"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "session"
+      ],
+      "additionalProperties": true
+    },
+    "session.rewind.params": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "runId"
+      ],
+      "additionalProperties": true
+    },
+    "session.rewind.result": {
+      "type": "object"
+    },
+    "permission.answer.params": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "answer": {
+          "type": "string",
+          "enum": [
+            "once",
+            "always",
+            "reject"
+          ]
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "requestId",
+        "answer"
+      ],
+      "additionalProperties": true
+    },
+    "permission.answer.result": {
+      "type": "object"
+    }
+  }
+}

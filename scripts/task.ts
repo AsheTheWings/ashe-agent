@@ -26,13 +26,17 @@ const run = async (command: ReadonlyArray<string>, env?: Record<string, string>)
   return await child.exited
 }
 
-/** The only environment a test process receives: no developer or production inputs. */
+/**
+ * The only environment a test process receives: no developer or production
+ * inputs. ASHE_AGENT_TEST_SEED passes through to reproduce randomized tests.
+ */
 const testEnvironment = (home: string): Record<string, string> => ({
-    PATH: `${dirname(process.execPath)}:/usr/local/bin:/usr/bin:/bin`,
-    HOME: home,
-    TMPDIR: tmpdir(),
-    LANG: "C.UTF-8",
-    TZ: "UTC",
+  PATH: `${dirname(process.execPath)}:/usr/local/bin:/usr/bin:/bin`,
+  HOME: home,
+  TMPDIR: tmpdir(),
+  LANG: "C.UTF-8",
+  TZ: "UTC",
+  ...(process.env.ASHE_AGENT_TEST_SEED === undefined ? {} : { ASHE_AGENT_TEST_SEED: process.env.ASHE_AGENT_TEST_SEED }),
 })
 
 const test = async (testClass: TestClass) => {

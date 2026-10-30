@@ -20,3 +20,6 @@ A test's class is the suffix of its file name.
 | conformance | `.conformance.test.ts` | `bun run test:conformance` | read-only checks that generated files, pins, and versions match their sources |
 
 `bun run typecheck` runs the TypeScript checker alone.
+
+Randomized tests print their seed in their names; setting
+`ASHE_AGENT_TEST_SEED` to it reruns them with the same values.
