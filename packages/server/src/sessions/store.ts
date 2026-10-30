@@ -4,6 +4,12 @@ import { copyThread, latestCheckpointId, truncateThread } from "../store/checkpo
 
 export type TurnStatus = "running" | "finished" | "cancelled" | "failed" | "interrupted"
 
+/** The catalogs a developer message lists. */
+export interface Catalogs {
+  readonly skills: string | null
+  readonly codeMode: string | null
+}
+
 export interface SessionRecord {
   readonly id: string
   readonly cwd: string
@@ -14,6 +20,8 @@ export interface SessionRecord {
   readonly nextSeq: number
   /** The first message of every model call, rendered at creation. */
   readonly firstMessage: string
+  /** The catalogs the first message lists. */
+  readonly catalogs: Catalogs
   /** Harness notes the next turn delivers. */
   readonly pendingNotes: ReadonlyArray<string>
 }
@@ -26,8 +34,10 @@ export interface TurnRecord {
   readonly model: string
   readonly status: TurnStatus
   readonly firstSeq: number
-  /** The harness notes the turn delivered. */
+  /** The fork and rewind notes the turn delivered, which a rewind of it delivers again; catalog notes are derived anew. */
   readonly notes: ReadonlyArray<string>
+  /** The catalogs the model knew from the turn on: the first message's, or those a note gave it. */
+  readonly catalogs: Catalogs
   /** The last checkpoint of the session's window when the turn ended. */
   readonly checkpointId: string | null
 }
@@ -41,6 +51,7 @@ interface SessionRow {
   created_at: number
   next_seq: number
   first_message: string
+  catalogs: string
   pending_notes: string
 }
 
@@ -53,6 +64,7 @@ const toSession = (row: SessionRow): SessionRecord => ({
   createdAt: row.created_at,
   nextSeq: row.next_seq,
   firstMessage: row.first_message,
+  catalogs: JSON.parse(row.catalogs),
   pendingNotes: JSON.parse(row.pending_notes),
 })
 
@@ -65,6 +77,7 @@ interface TurnRow {
   status: TurnStatus
   first_seq: number
   notes: string
+  catalogs: string
   checkpoint_id: string | null
 }
 
@@ -77,10 +90,11 @@ const toTurn = (row: TurnRow): TurnRecord => ({
   status: row.status,
   firstSeq: row.first_seq,
   notes: JSON.parse(row.notes),
+  catalogs: JSON.parse(row.catalogs),
   checkpointId: row.checkpoint_id,
 })
 
-const turnColumns = "run_id, position, input_id, input_text, model, status, first_seq, notes, checkpoint_id"
+const turnColumns = "run_id, position, input_id, input_text, model, status, first_seq, notes, catalogs, checkpoint_id"
 
 /** Session, event, and turn persistence. Every write that numbers an event takes the session's counter. */
 export class SessionStore {
@@ -122,8 +136,8 @@ export class SessionStore {
       this.db
         .query(
           `INSERT INTO sessions
-            (id, cwd, agent, model, instructions, forked_from_session, forked_from_run, created_at, next_seq, first_message)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+            (id, cwd, agent, model, instructions, forked_from_session, forked_from_run, created_at, next_seq, first_message, catalogs)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
         )
         .run(
           session.id,
@@ -135,6 +149,7 @@ export class SessionStore {
           forkedFrom?.runId ?? null,
           session.createdAt,
           session.firstMessage,
+          JSON.stringify(session.catalogs),
         )
       this.appendEvent(
         session.id,
@@ -148,8 +163,10 @@ export class SessionStore {
     this.db.query("UPDATE sessions SET model = ? WHERE id = ?").run(model, sessionId)
   }
 
-  setFirstMessage(sessionId: string, firstMessage: string) {
-    this.db.query("UPDATE sessions SET first_message = ? WHERE id = ?").run(firstMessage, sessionId)
+  setFirstMessage(sessionId: string, firstMessage: string, catalogs: Catalogs) {
+    this.db
+      .query("UPDATE sessions SET first_message = ?, catalogs = ? WHERE id = ?")
+      .run(firstMessage, JSON.stringify(catalogs), sessionId)
   }
 
   setPendingNotes(sessionId: string, notes: ReadonlyArray<string>) {
@@ -211,10 +228,21 @@ export class SessionStore {
         ?.p ?? 0) + 1
     this.db
       .query(
-        `INSERT INTO turns (session_id, run_id, position, input_id, input_text, model, status, first_seq, started_at, notes)
-          VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
+        `INSERT INTO turns (session_id, run_id, position, input_id, input_text, model, status, first_seq, started_at, notes, catalogs)
+          VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)`,
       )
-      .run(sessionId, turn.runId, position, turn.inputId, turn.inputText, turn.model, turn.firstSeq, startedAt, JSON.stringify(turn.notes))
+      .run(
+        sessionId,
+        turn.runId,
+        position,
+        turn.inputId,
+        turn.inputText,
+        turn.model,
+        turn.firstSeq,
+        startedAt,
+        JSON.stringify(turn.notes),
+        JSON.stringify(turn.catalogs),
+      )
     return { ...turn, position, status: "running", checkpointId: null }
   }
 
@@ -235,7 +263,8 @@ export class SessionStore {
 
   /**
    * Removes `turn` and every later turn with their events, and returns the
-   * notes those turns delivered. The window returns to the checkpoint of
+   * fork and rewind notes those turns delivered; their catalog notes are
+   * not kept. The window returns to the checkpoint of
    * the turn before, or to none. The counter keeps its value, so no removed
    * number is used again; the caller appends the rewound event in the same
    * transaction.
@@ -271,8 +300,9 @@ export class SessionStore {
       this.db
         .query(
           `INSERT INTO sessions
-            (id, cwd, agent, model, instructions, forked_from_session, forked_from_run, created_at, next_seq, first_message, pending_notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (id, cwd, agent, model, instructions, forked_from_session, forked_from_run, created_at, next_seq,
+             first_message, catalogs, pending_notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           target.id,
@@ -285,6 +315,7 @@ export class SessionStore {
           target.createdAt,
           cutoff,
           target.firstMessage,
+          JSON.stringify(source.catalogs),
           JSON.stringify(target.notes),
         )
       const created: SessionEventBody = {
@@ -305,8 +336,10 @@ export class SessionStore {
       this.db
         .query(
           `INSERT INTO turns
-            (session_id, run_id, position, input_id, input_text, model, status, first_seq, started_at, ended_at, notes, checkpoint_id)
-            SELECT ?, run_id, position, input_id, input_text, model, status, first_seq, started_at, ended_at, notes, checkpoint_id
+            (session_id, run_id, position, input_id, input_text, model, status, first_seq, started_at, ended_at, notes, catalogs,
+             checkpoint_id)
+            SELECT ?, run_id, position, input_id, input_text, model, status, first_seq, started_at, ended_at, notes, catalogs,
+              checkpoint_id
             FROM turns WHERE session_id = ? AND first_seq < ?`,
         )
         .run(target.id, source.id, cutoff)

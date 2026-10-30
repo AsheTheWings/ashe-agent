@@ -12,10 +12,10 @@ import {
   type SessionSummary,
 } from "@ashe-agent/protocol"
 import { firstMessage } from "../agent/blocks.ts"
-import { forkNote, rewindNote, unfinishedResult } from "../agent/notes.ts"
+import { catalogNote, forkNote, rewindNote, unfinishedResult } from "../agent/notes.ts"
 import { ProtocolError } from "../server/websocket.ts"
 import { Store } from "../store/database.ts"
-import { SessionStore, type SessionRecord, type TurnRecord } from "./store.ts"
+import { SessionStore, type Catalogs, type SessionRecord, type TurnRecord } from "./store.ts"
 
 /** An input a client sent, waiting for a turn to take it. */
 export interface Input {
@@ -55,7 +55,8 @@ export interface SessionSetup {
     readonly instructions: string | null
     readonly model: string | null
   }
-  readonly catalogs: () => { readonly skills: string | null; readonly codeMode: string | null }
+  /** The catalogs as they stand now. */
+  readonly catalogs: () => Catalogs
 }
 
 type ToolOutcome = Extract<SessionEventBody, { type: "TOOL_CALL_RESULT" }>["outcome"]
@@ -222,10 +223,9 @@ export class SessionHub {
     return this.store.summary(this.session(sessionId), this.isRunning(sessionId))
   }
 
-  /** The first message of a session with this identity and recorded instructions, with today's catalogs. */
-  private firstMessage(id: string, cwd: string, instructions: string | null) {
-    const { skills, codeMode } = this.options.setup.catalogs()
-    return firstMessage({ instructions, skills, codeMode, sessionId: id, cwd })
+  /** The first message of a session with this identity, recorded instructions, and catalogs. */
+  private firstMessage(id: string, cwd: string, instructions: string | null, catalogs: Catalogs) {
+    return firstMessage({ instructions, skills: catalogs.skills, codeMode: catalogs.codeMode, sessionId: id, cwd })
   }
 
   /**
@@ -240,8 +240,18 @@ export class SessionHub {
     const model = agentModel ?? params.model ?? this.options.models[0]!.id
     if (!this.options.models.some((candidate) => candidate.id === model)) throw invalid(`no configured model ${model}`)
     const id = crypto.randomUUID()
+    const catalogs = this.options.setup.catalogs()
     this.store.createSession(
-      { id, cwd: params.cwd, agent, model, instructions, createdAt: this.now(), firstMessage: this.firstMessage(id, params.cwd, instructions) },
+      {
+        id,
+        cwd: params.cwd,
+        agent,
+        model,
+        instructions,
+        createdAt: this.now(),
+        firstMessage: this.firstMessage(id, params.cwd, instructions, catalogs),
+        catalogs,
+      },
       null,
     )
     return this.summary(id)
@@ -293,23 +303,36 @@ export class SessionHub {
     Effect.runFork(Fiber.interrupt(live.fiber))
   }
 
-  /** Starts a turn with `input`, after `before` writes in the same transaction. */
+  /**
+   * Starts a turn with `input`, after `before` writes in the same
+   * transaction. The turn delivers the session's pending notes, and a
+   * catalog note when the catalogs differ from those the model last knew.
+   */
   private startTurn(sessionId: string, input: Input, before?: (append: (body: SessionEventBody) => SessionEvent) => void) {
     const state = this.state(sessionId)
     const { session, turn, notes } = this.commit(sessionId, (append) => {
       before?.(append)
       let session = this.session(sessionId)
       if (session.firstMessage === "") {
-        this.store.setFirstMessage(sessionId, this.firstMessage(session.id, session.cwd, session.instructions))
+        const catalogs = this.options.setup.catalogs()
+        this.store.setFirstMessage(sessionId, this.firstMessage(session.id, session.cwd, session.instructions, catalogs), catalogs)
         session = this.session(sessionId)
       }
-      const notes = session.pendingNotes
+      const known = this.store.turns(sessionId).at(-1)?.catalogs ?? session.catalogs
+      const catalogs = this.options.setup.catalogs()
+      const changes = [
+        ...(catalogs.skills === known.skills ? [] : [{ name: "Skills", catalog: catalogs.skills }]),
+        ...(catalogs.codeMode === known.codeMode ? [] : [{ name: "Code mode", catalog: catalogs.codeMode }]),
+      ]
+      // A catalog note is not kept with the turn's notes: it is derived from the catalogs, so a rewind derives it again.
+      const carried = session.pendingNotes
+      const notes = changes.length === 0 ? carried : [...carried, catalogNote(changes)]
       this.store.setPendingNotes(sessionId, [])
       const runId = crypto.randomUUID()
       const received = append({ type: "INPUT_RECEIVED", inputId: input.inputId, text: input.text, mode: input.mode, sender: input.sender })
       const turn = this.store.insertTurn(
         sessionId,
-        { runId, inputId: input.inputId, inputText: input.text, model: session.model, firstSeq: received.seq, notes },
+        { runId, inputId: input.inputId, inputText: input.text, model: session.model, firstSeq: received.seq, notes: carried, catalogs },
         this.now(),
       )
       append({ type: "RUN_STARTED", threadId: sessionId, runId, model: turn.model, inputId: input.inputId })
@@ -378,7 +401,8 @@ export class SessionHub {
       {
         id,
         createdAt: this.now(),
-        firstMessage: this.firstMessage(id, source.cwd, source.instructions),
+        // The source's catalogs, so the copied turns' catalog notes stay consistent with the first message.
+        firstMessage: this.firstMessage(id, source.cwd, source.instructions, source.catalogs),
         notes: [...source.pendingNotes, forkNote(source.id, id)],
       },
       runId ?? null,
@@ -389,8 +413,10 @@ export class SessionHub {
   /**
    * Removes the user turn `runId` and every later turn, then starts a turn
    * with its input, or with `text` instead, before taking any other input.
-   * The new turn delivers the notes of the removed turns and a rewind note.
-   * The removal and the new turn's start commit together.
+   * The new turn delivers the fork and rewind notes of the removed turns
+   * and a rewind note, plus a catalog note when the current catalogs differ
+   * from those of the last kept turn. The removal and the new turn's start
+   * commit together.
    */
   rewind(sessionId: string, runId: string, text: string | undefined, sender: Sender) {
     this.session(sessionId)

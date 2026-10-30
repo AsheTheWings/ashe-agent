@@ -180,7 +180,7 @@ export const renderWindow = (window: Window, first: string, model: string, image
         else rest.push(new HumanMessage(clientBlock(entry.text)))
         break
       case "note":
-        rest.push(new HumanMessage(developerBlock(entry.text)))
+        rest.push(new HumanMessage(developerBlock(escapeTags(entry.text))))
         break
       case "assistant":
         rest.push(replayable(entry.message))

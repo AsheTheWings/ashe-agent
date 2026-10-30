@@ -16,7 +16,9 @@ The graph runs in the turn's Effect fiber and receives its `AbortSignal`.
 A cancel interrupts the fiber, which aborts the running model call and
 tool call, ends the open text, reasoning, and tool call streams, and gives
 every tool call of the turn without a result a canceled result saying
-whether it had started.
+whether it had started. A turn that fails gives each of its tool calls
+without a result a failed result the same way, including calls a failed
+model call had streamed.
 
 ## Model calls
 
@@ -67,7 +69,13 @@ heading; nothing else in them changes.
 
 The server renders the first message once, when it creates the session,
 so its text stays the same for every call of the session. A fork renders
-its own first message, with its own session id.
+its own first message, with its own session id and its source's catalogs.
+When a turn starts with a skill or code mode catalog that differs from the
+one the model last knew, from the first message or an earlier note, the
+turn delivers a harness note giving each changed catalog as it now stands.
+
+A tool result's images reach the model as images only when the turn's
+model takes image input; otherwise each becomes `[image: <path>]`.
 
 ## Other models' turns
 
