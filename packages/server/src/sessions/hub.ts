@@ -1,6 +1,5 @@
 import type { Database } from "bun:sqlite"
-import { existsSync, statSync } from "node:fs"
-import { isAbsolute } from "node:path"
+import { mkdirSync, rmdirSync } from "node:fs"
 import { Context, Effect, Exit, Fiber, Layer } from "effect"
 import {
   type Agent,
@@ -359,36 +358,52 @@ export class SessionHub {
   }
 
   /** The first message of a session with this identity, recorded instructions, and catalogs. */
-  private firstMessage(id: string, cwd: string, instructions: string | null, catalogs: Catalogs) {
-    return firstMessage({ instructions, skills: catalogs.skills, codeMode: catalogs.codeMode, sessionId: id, cwd })
+  private firstMessage(id: string, instructions: string | null, catalogs: Catalogs) {
+    const sessionDir = this.store.sessionDir(id)
+    return firstMessage({ instructions, skills: catalogs.skills, codeMode: catalogs.codeMode, sessionId: id, sessionDir })
   }
 
   /**
-   * Creates a session. Its model is the one its agent names, else the one
-   * given, which must be configured, else the first configured model.
+   * Creates the directory of a new session, readable by the server's user
+   * only, then records the session with `record`; the directory is removed
+   * again when recording fails.
    */
-  create(params: { cwd: string; model?: string; agent?: string }): SessionSummary {
-    if (!isAbsolute(params.cwd) || !existsSync(params.cwd) || !statSync(params.cwd).isDirectory()) {
-      throw invalid("the working directory must be an absolute path of an existing directory")
+  private withSessionDir<A>(id: string, record: () => A): A {
+    const dir = this.store.sessionDir(id)
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    try {
+      return record()
+    } catch (error) {
+      rmdirSync(dir)
+      throw error
     }
+  }
+
+  /**
+   * Creates a session in its own new directory. Its model is the one its
+   * agent names, else the one given, which must be configured, else the
+   * first configured model.
+   */
+  create(params: { model?: string; agent?: string }): SessionSummary {
     const { agent, instructions, model: agentModel, settings } = this.options.setup.resolve(params.agent ?? null)
     const model = agentModel ?? params.model ?? this.options.models[0]!.id
     if (!this.options.models.some((candidate) => candidate.id === model)) throw invalid(`no configured model ${model}`)
     const id = crypto.randomUUID()
     const catalogs = this.options.setup.catalogs()
-    this.store.createSession(
-      {
-        id,
-        cwd: params.cwd,
-        agent,
-        model,
-        instructions,
-        agentSettings: settings,
-        createdAt: this.now(),
-        firstMessage: this.firstMessage(id, params.cwd, instructions, catalogs),
-        catalogs,
-      },
-      null,
+    this.withSessionDir(id, () =>
+      this.store.createSession(
+        {
+          id,
+          agent,
+          model,
+          instructions,
+          agentSettings: settings,
+          createdAt: this.now(),
+          firstMessage: this.firstMessage(id, instructions, catalogs),
+          catalogs,
+        },
+        null,
+      ),
     )
     return this.summary(id)
   }
@@ -456,7 +471,7 @@ export class SessionHub {
       let session = this.session(sessionId)
       if (session.firstMessage === "") {
         const catalogs = this.options.setup.catalogs()
-        this.store.setFirstMessage(sessionId, this.firstMessage(session.id, session.cwd, session.instructions, catalogs), catalogs)
+        this.store.setFirstMessage(sessionId, this.firstMessage(session.id, session.instructions, catalogs), catalogs)
         session = this.session(sessionId)
       }
       const known = this.store.turns(sessionId).at(-1)?.catalogs ?? session.catalogs
@@ -533,22 +548,24 @@ export class SessionHub {
     this.startTurn(sessionId, next)
   }
 
-  /** Copies the session through the user turn `runId`, or entirely, into a new session. */
+  /** Copies the session through the user turn `runId`, or entirely, into a new session with its own new directory. */
   fork(sessionId: string, runId: string | undefined): SessionSummary {
     const source = this.session(sessionId)
     if (this.isRunning(sessionId)) throw conflict("a turn is running; fork after it ends")
     if (runId !== undefined && this.store.getTurn(sessionId, runId) === null) throw notFound(`turn ${runId}`)
     const id = crypto.randomUUID()
-    const forked = this.store.fork(
-      source,
-      {
-        id,
-        createdAt: this.now(),
-        // The source's catalogs, so the copied turns' catalog notes stay consistent with the first message.
-        firstMessage: this.firstMessage(id, source.cwd, source.instructions, source.catalogs),
-        notes: [...source.pendingNotes, forkNote(source.id, id)],
-      },
-      runId ?? null,
+    const forked = this.withSessionDir(id, () =>
+      this.store.fork(
+        source,
+        {
+          id,
+          createdAt: this.now(),
+          // The source's catalogs, so the copied turns' catalog notes stay consistent with the first message.
+          firstMessage: this.firstMessage(id, source.instructions, source.catalogs),
+          notes: [...source.pendingNotes, forkNote(source.id, id, this.store.sessionDir(id))],
+        },
+        runId ?? null,
+      ),
     )
     return this.summary(forked.id)
   }
@@ -585,14 +602,20 @@ export class SessionHub {
 /** The server's session hub over its database, stopped when its layer is released. */
 export class Sessions extends Context.Service<Sessions, SessionHub>()("ashe-agent/sessions/Sessions") {
   /** The hub over the `Store` database; `runner` builds the turn runner over that database. */
-  static readonly layer = (options: Omit<HubOptions, "runner"> & { readonly runner: (db: Database) => TurnRunner }) =>
+  static readonly layer = (
+    options: Omit<HubOptions, "runner"> & {
+      readonly runner: (db: Database) => TurnRunner
+      /** The directory holding each session's directory. */
+      readonly sessionsDir: string
+    },
+  ) =>
     Layer.effect(
       Sessions,
       Effect.gen(function* () {
         const { db } = yield* Store
         return yield* Effect.acquireRelease(
           Effect.sync(() => {
-            const hub = new SessionHub(new SessionStore(db), { ...options, runner: options.runner(db) })
+            const hub = new SessionHub(new SessionStore(db, options.sessionsDir), { ...options, runner: options.runner(db) })
             hub.recover()
             return hub
           }),

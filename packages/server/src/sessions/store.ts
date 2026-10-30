@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite"
+import { join } from "node:path"
 import type { SessionEvent, SessionEventBody, SessionSummary } from "@ashe-agent/protocol"
 import type { AgentSettings } from "../agents/agents.ts"
 import { copyThread, latestCheckpointId, truncateThread } from "../store/checkpoint-threads.ts"
@@ -13,7 +14,8 @@ export interface Catalogs {
 
 export interface SessionRecord {
   readonly id: string
-  readonly cwd: string
+  /** The session's own directory under the sessions directory, its starting working directory. */
+  readonly sessionDir: string
   readonly agent: string | null
   readonly model: string
   readonly instructions: string | null
@@ -47,7 +49,6 @@ export interface TurnRecord {
 
 interface SessionRow {
   id: string
-  cwd: string
   agent: string | null
   model: string
   instructions: string | null
@@ -65,9 +66,9 @@ const agentSettingsOf = (json: string): AgentSettings => {
   return { temperature: recorded.temperature ?? null, permission: recorded.permission ?? null }
 }
 
-const toSession = (row: SessionRow): SessionRecord => ({
+const toSession = (row: SessionRow, sessionsDir: string): SessionRecord => ({
   id: row.id,
-  cwd: row.cwd,
+  sessionDir: join(sessionsDir, row.id),
   agent: row.agent,
   model: row.model,
   instructions: row.instructions,
@@ -109,18 +110,27 @@ const turnColumns = "run_id, position, input_id, input_text, model, status, firs
 
 /** Session, event, and turn persistence. Every write that numbers an event takes the session's counter. */
 export class SessionStore {
-  constructor(readonly db: Database) {}
+  /** `sessionsDir` holds each session's directory, named by its id. */
+  constructor(
+    readonly db: Database,
+    readonly sessionsDir: string,
+  ) {}
+
+  /** The directory of the session `id`. */
+  sessionDir(id: string) {
+    return join(this.sessionsDir, id)
+  }
 
   getSession(id: string): SessionRecord | null {
     const row = this.db.query<SessionRow, [string]>("SELECT * FROM sessions WHERE id = ?").get(id)
-    return row === null ? null : toSession(row)
+    return row === null ? null : toSession(row, this.sessionsDir)
   }
 
   listSessions(running: (id: string) => boolean): ReadonlyArray<SessionSummary> {
     return this.db
       .query<SessionRow, []>("SELECT * FROM sessions ORDER BY created_at DESC, id")
       .all()
-      .map((row) => this.summary(toSession(row), running(row.id)))
+      .map((row) => this.summary(toSession(row, this.sessionsDir), running(row.id)))
   }
 
   summary(session: SessionRecord, running: boolean): SessionSummary {
@@ -129,7 +139,7 @@ export class SessionStore {
       .get(session.id)
     return {
       id: session.id,
-      cwd: session.cwd,
+      sessionDir: session.sessionDir,
       agent: session.agent,
       model: session.model,
       createdAt: session.createdAt,
@@ -140,20 +150,19 @@ export class SessionStore {
 
   /** Creates a session with its `SESSION_CREATED` event as event 1. */
   createSession(
-    session: Omit<SessionRecord, "nextSeq" | "pendingNotes">,
+    session: Omit<SessionRecord, "sessionDir" | "nextSeq" | "pendingNotes">,
     forkedFrom: { sessionId: string; runId: string | null } | null,
   ) {
     this.db.transaction(() => {
       this.db
         .query(
           `INSERT INTO sessions
-            (id, cwd, agent, model, instructions, agent_settings, forked_from_session, forked_from_run, created_at, next_seq,
+            (id, agent, model, instructions, agent_settings, forked_from_session, forked_from_run, created_at, next_seq,
              first_message, catalogs)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
         )
         .run(
           session.id,
-          session.cwd,
           session.agent,
           session.model,
           session.instructions,
@@ -166,7 +175,7 @@ export class SessionStore {
         )
       this.appendEvent(
         session.id,
-        { type: "SESSION_CREATED", cwd: session.cwd, agent: session.agent, model: session.model, forkedFrom },
+        { type: "SESSION_CREATED", sessionDir: this.sessionDir(session.id), agent: session.agent, model: session.model, forkedFrom },
         session.createdAt,
       )
     })()
@@ -333,13 +342,12 @@ export class SessionStore {
       this.db
         .query(
           `INSERT INTO sessions
-            (id, cwd, agent, model, instructions, agent_settings, forked_from_session, forked_from_run, created_at, next_seq,
+            (id, agent, model, instructions, agent_settings, forked_from_session, forked_from_run, created_at, next_seq,
              first_message, catalogs, pending_notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           target.id,
-          source.cwd,
           source.agent,
           source.model,
           source.instructions,
@@ -354,7 +362,7 @@ export class SessionStore {
         )
       const created: SessionEventBody = {
         type: "SESSION_CREATED",
-        cwd: source.cwd,
+        sessionDir: this.sessionDir(target.id),
         agent: source.agent,
         model: source.model,
         forkedFrom: { sessionId: source.id, runId: throughRunId },

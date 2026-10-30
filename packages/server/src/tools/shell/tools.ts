@@ -23,7 +23,7 @@ export interface ShellToolOptions {
 const ExecArgs = Schema.Struct({
   cmd: Schema.String.annotate({ description: "Shell command to execute." }),
   workdir: Schema.optionalKey(
-    Schema.String.annotate({ description: "Working directory for the command. Defaults to the session's starting working directory." }),
+    Schema.String.annotate({ description: "Working directory for the command. Defaults to the session directory." }),
   ),
   tty: Schema.optionalKey(
     Schema.Boolean.annotate({ description: "True allocates a PTY for the command; false or omitted uses plain pipes." }),

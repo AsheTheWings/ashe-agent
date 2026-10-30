@@ -38,18 +38,19 @@ const expectProtocolError = (run: () => void, code: number) => {
 
 describe("permission paths", () => {
   test("relative, symlinked, `..` after a symlink, absent, and dangling paths are decided by their resolved paths", async () => {
-    await withHarness({ permission: { edit: { "~/real/*": "deny", "~/outside/*": "deny" } } }, async (h) => {
-      mkdirSync(join(h.dir, "real"))
-      mkdirSync(join(h.dir, "work"))
-      mkdirSync(join(h.dir, "outside", "inner"), { recursive: true })
-      symlinkSync(join(h.dir, "real"), join(h.dir, "link"))
-      symlinkSync(join(h.dir, "outside", "inner"), join(h.dir, "work", "deep"), "dir")
-      symlinkSync("../real/target", join(h.dir, "work", "dangling"))
+    await withHarness({ permission: { edit: { "~/sessions/*/real/*": "deny", "~/sessions/*/outside/*": "deny" } } }, async (h) => {
       const id = h.create()
+      const dir = h.sessionDir(id)
+      mkdirSync(join(dir, "real"))
+      mkdirSync(join(dir, "work"))
+      mkdirSync(join(dir, "outside", "inner"), { recursive: true })
+      symlinkSync(join(dir, "real"), join(dir, "link"))
+      symlinkSync(join(dir, "outside", "inner"), join(dir, "work", "deep"), "dir")
+      symlinkSync("../real/target", join(dir, "work", "dangling"))
       h.model.next(
         callTools([
           { name: "touch", args: { paths: ["real/a"] } },
-          { name: "touch", args: { paths: [join(h.dir, "link", "a")] } },
+          { name: "touch", args: { paths: [join(dir, "link", "a")] } },
           { name: "touch", args: { paths: ["link/new/deeper/file"] } },
           { name: "touch", args: { paths: ["other/../link/b"] } },
           { name: "touch", args: { paths: ["work/deep/../a"] } },
@@ -64,7 +65,7 @@ describe("permission paths", () => {
       expect(contents.slice(0, 6).every((content) => content.includes("denied by configuration"))).toBe(true)
       expect(contents[6]).toBe("touched other/a")
       expect(ofType(h.events(id), "TOOL_EXECUTION_STARTED")).toHaveLength(1)
-      expect(realpathSync(join(h.dir, "link"))).toBe(join(realpathSync(h.dir), "real"))
+      expect(realpathSync(join(dir, "link"))).toBe(join(realpathSync(dir), "real"))
     })
   })
 })
@@ -76,7 +77,7 @@ describe("permission requests", () => {
       h.model.next(callTools([{ name: "touch", args: { paths: ["secret"] } }, { name: "touch", args: { paths: ["a", "b"] } }]), say("done"))
       h.input(id, "go")
       const [request] = await waitRequests(h, id, 1)
-      const root = realpathSync(h.dir)
+      const root = realpathSync(h.sessionDir(id))
       expect(request).toMatchObject({ permission: "edit", subjects: [join(root, "a"), join(root, "b")], patterns: [join(root, "a"), join(root, "b")] })
       expect(results(h, id)).toHaveLength(1)
       expect(results(h, id)[0]).toMatchObject({ outcome: "failed", content: expect.stringContaining("denied by configuration") })
@@ -182,7 +183,7 @@ describe("session grants", () => {
       const [request] = await waitRequests(h, id, 1)
       h.answer(id, request.requestId, "always")
       await h.turnsEnded(id, 1)
-      const grant = [{ permission: "edit", pattern: join(realpathSync(h.dir), "a") }]
+      const grant = [{ permission: "edit", pattern: join(realpathSync(h.sessionDir(id)), "a") }]
       await h.restart()
       expect(h.hub.store.grants(id)).toEqual(grant)
       h.model.next(callTools([{ name: "touch", args: { paths: ["a"] } }]), say("done"))
@@ -197,7 +198,8 @@ describe("session grants", () => {
       const fork = h.hub.fork(id, undefined).id
       expect(h.hub.store.grants(fork)).toEqual(grant)
       const [asked, finished] = [requests(h, fork).length, ofType(h.events(fork), "RUN_FINISHED").length]
-      h.model.next(callTools([{ name: "touch", args: { paths: ["a"] } }]), say("done"))
+      // The fork's relative paths resolve in its own directory, so it names the granted path in the source's.
+      h.model.next(callTools([{ name: "touch", args: { paths: [join(h.sessionDir(id), "a")] } }]), say("done"))
       h.input(fork, "in the fork")
       await waitFor("the fork's turn", () => (ofType(h.events(fork), "RUN_FINISHED").length > finished && !h.hub.isRunning(fork) ? true : undefined))
       expect(requests(h, fork)).toHaveLength(asked)

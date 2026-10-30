@@ -3,8 +3,8 @@
 const effects = "Files, processes, and other effects of turns outside this history may persist on the system."
 
 /** The note of a fork's first model call. */
-export const forkNote = (source: string, target: string) =>
-  `This session was forked: session \`${target}\` is a copy of session \`${source}\` through the turns above. ${effects}`
+export const forkNote = (source: string, target: string, sessionDir: string) =>
+  `This session was forked: session \`${target}\` is a copy of session \`${source}\` through the turns above. Its session directory is \`${sessionDir}\`, where its shell commands now start; the paths above may name the source session's directory. ${effects}`
 
 /** The note of the first model call after a rewind. */
 export const rewindNote = () =>

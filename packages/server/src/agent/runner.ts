@@ -324,7 +324,7 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
             sessionId: session.id,
             runId: turn.runId,
             toolCallId: callId,
-            cwd: session.cwd,
+            cwd: session.sessionDir,
             imageInput: model.imageInput,
             signal,
             authorize: (check) => context.authorize(callId, check, signal),

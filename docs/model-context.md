@@ -63,7 +63,7 @@ The developer message holds these sections, each under a fixed top-level
 heading followed by a one-line introduction, in this order, leaving out
 the ones a session has no content for: the instructions recorded at the
 session's creation, the skill catalog, the code mode catalog, and the
-session's id and starting working directory. Headings inside the
+session's id and its session directory. Headings inside the
 instructions are lowered one level, so they sit below the section's
 heading; nothing else in them changes.
 

@@ -28,7 +28,7 @@ const globalInstructions = (path: string, files: ConfigFiles): string | null => 
 /**
  * Session setup from the agents directory, the global instructions file,
  * and the skill roots, all read when a session is created or agents are
- * listed. Nothing is read from a session's working directory.
+ * listed. Nothing is read from a session's directory.
  */
 export const fileSetup = (options: FileSetupOptions): SessionSetup => {
   const files = options.files ?? diskFiles

@@ -98,7 +98,8 @@ export const ToolCallResult = event("TOOL_CALL_RESULT", {
 
 /** The first event of every session. */
 export const SessionCreated = event("SESSION_CREATED", {
-  cwd: Schema.String,
+  /** The session's own directory, its starting working directory. */
+  sessionDir: Schema.String,
   agent: Schema.NullOr(Schema.String),
   model: Id,
   forkedFrom: Schema.NullOr(

@@ -11,7 +11,7 @@ import { removeDependencyVariables } from "../src/inputs/bootstrap.ts"
 const own = (model: string, runId = "r1") => ({ runId, model })
 const call = (id: string) => new AIMessage({ content: "", tool_calls: [{ id, name: "echo", args: { text: id }, type: "tool_call" }] })
 const result = (model: string, callId: string, text = "out"): Entry => ({ ...own(model), kind: "result", callId, name: "echo", content: text, outcome: "success" })
-const sections = { instructions: null, skills: null, codeMode: null, sessionId: "s", cwd: "/w" }
+const sections = { instructions: null, skills: null, codeMode: null, sessionId: "s", sessionDir: "/state/sessions/s" }
 
 describe("blocks", () => {
   test("every reserved tag is escaped, open or closing, and other tags are kept", () => {

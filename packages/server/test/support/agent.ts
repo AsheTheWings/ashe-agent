@@ -210,7 +210,7 @@ export class AgentHarness {
       models,
     })
     const afterLoop = this.options.afterLoop
-    const hub: SessionHub = new SessionHub(new SessionStore(this.db), {
+    const hub: SessionHub = new SessionHub(new SessionStore(this.db, join(this.dir, "sessions")), {
       models,
       setup: this.options.setup ?? noAgents,
       ...(this.options.permission === undefined ? {} : { permission: this.options.permission }),
@@ -231,7 +231,12 @@ export class AgentHarness {
   }
 
   create(params: { model?: string; agent?: string } = {}) {
-    return this.hub.create({ cwd: this.dir, ...params }).id
+    return this.hub.create(params).id
+  }
+
+  /** The directory of the session `id`, its starting working directory. */
+  sessionDir(id: string) {
+    return this.hub.store.sessionDir(id)
   }
 
   input(sessionId: string, text: string, mode?: "steer" | "queue") {

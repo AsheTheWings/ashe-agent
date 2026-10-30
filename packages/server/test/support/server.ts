@@ -90,6 +90,7 @@ export class ScriptedRunner {
 export class TestServer {
   readonly dir = mkdtempSync(join(tmpdir(), "ashe-agent-server-"))
   readonly databasePath = join(this.dir, "ashe-agent.db")
+  readonly sessionsDir = join(this.dir, "sessions")
   readonly script = new ScriptedRunner()
   private runtime: ManagedRuntime.ManagedRuntime<ProtocolServer | Sessions | Store, never> | null = null
   url = ""
@@ -116,7 +117,14 @@ export class TestServer {
   async start() {
     const layer = ProtocolServer.layer({ hostname: "127.0.0.1", port: 0, origins: [] }).pipe(
       Layer.provideMerge(
-        Sessions.layer({ models, runner: () => this.script.runner, setup: noAgents, permission: this.permission, home: this.dir }),
+        Sessions.layer({
+          models,
+          runner: () => this.script.runner,
+          setup: noAgents,
+          permission: this.permission,
+          home: this.dir,
+          sessionsDir: this.sessionsDir,
+        }),
       ),
       Layer.provideMerge(Store.layer(this.databasePath)),
     )

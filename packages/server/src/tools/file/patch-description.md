@@ -64,4 +64,4 @@ It is important to remember:
 
 - You must include a header with your intended action (Add/Delete/Update)
 - You must prefix new lines with `+` even when creating a new file
-- Relative file references resolve against the session's starting working directory.
+- Relative file references resolve against the session directory.

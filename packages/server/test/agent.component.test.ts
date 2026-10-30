@@ -141,10 +141,10 @@ describe("the agent loop", () => {
     }
     await withHarness(
       async (h) => {
-        expect(h.hub.create({ cwd: h.dir, agent: "pinned", model: alpha }).model).toBe(beta)
-        expect(h.hub.create({ cwd: h.dir, agent: "free", model: beta }).model).toBe(beta)
-        expect(h.hub.create({ cwd: h.dir, agent: "free" }).model).toBe(alpha)
-        expect(() => h.hub.create({ cwd: h.dir, agent: "broken" })).toThrow("no configured model no/such")
+        expect(h.hub.create({ agent: "pinned", model: alpha }).model).toBe(beta)
+        expect(h.hub.create({ agent: "free", model: beta }).model).toBe(beta)
+        expect(h.hub.create({ agent: "free" }).model).toBe(alpha)
+        expect(() => h.hub.create({ agent: "broken" })).toThrow("no configured model no/such")
       },
       { setup },
     )
@@ -392,7 +392,7 @@ describe("fork and rewind", () => {
       expect(forked[0]).toEndWith("<user>\nt1\n</user>")
       expect(forked.slice(1)).toEqual([
         "r1",
-        expect.stringContaining(`session \`${fork}\` is a copy of session \`${id}\``),
+        expect.stringContaining(`session \`${fork}\` is a copy of session \`${id}\` through the turns above. Its session directory is \`${h.sessionDir(fork)}\``),
         "<user>\nfork input\n</user>",
       ])
       expect(forked[2]).toContain("may persist on the system")
