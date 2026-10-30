@@ -52,6 +52,7 @@ cover what AG-UI does not:
 | `RUN_INTERRUPTED` | A run the server was still running when it stopped. |
 | `MODEL_CHANGED` | A new selected model, used from the next run. |
 | `SESSION_REWOUND` | A rewind removed every event from `firstRemovedSeq` on. |
+| `TOOL_EXECUTION_STARTED` | The server started running a tool call. |
 | `COMPACTED` | The model's context was compacted. |
 | `PERMISSION_REQUESTED`, `PERMISSION_RESOLVED`, `PERMISSION_WITHDRAWN` | A tool call waiting for an answer, and its end. |
 

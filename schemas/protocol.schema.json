@@ -1336,6 +1336,26 @@
                         "type": {
                           "type": "string",
                           "enum": [
+                            "TOOL_EXECUTION_STARTED"
+                          ]
+                        },
+                        "toolCallId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "toolCallId"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
                             "TOOL_CALL_RESULT"
                           ]
                         },
@@ -2227,6 +2247,26 @@
               "type": "string",
               "enum": [
                 "TOOL_CALL_END"
+              ]
+            },
+            "toolCallId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "toolCallId"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "TOOL_EXECUTION_STARTED"
               ]
             },
             "toolCallId": {
