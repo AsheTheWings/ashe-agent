@@ -45,3 +45,18 @@ export const resolvePath = (path: string, cwd: string, lookup: PathLookup, links
 
 /** The path a permission decides for `path` given against `cwd`, resolved on the filesystem. */
 export const permissionPath = (path: string, cwd: string) => resolvePath(path, cwd, fileSystemLookup)
+
+/**
+ * The directory entry `path` names, as removing or renaming it acts on it:
+ * every component but the last resolved as `permissionPath` resolves it,
+ * the last kept as written, so a symlink names the link itself. A path
+ * ending in `.` or `..` names the directory it reaches.
+ */
+export const entryPath = (path: string, cwd: string) => {
+  const trimmed = path.replace(/\/+$/, "")
+  const slash = trimmed.lastIndexOf("/")
+  const last = trimmed.slice(slash + 1)
+  if (last === "" || last === "." || last === "..") return permissionPath(path, cwd)
+  const parent = slash === -1 ? "." : slash === 0 ? "/" : trimmed.slice(0, slash)
+  return join(permissionPath(parent, cwd), last)
+}

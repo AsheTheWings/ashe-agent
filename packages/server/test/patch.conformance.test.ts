@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { readdirSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
-import { applyHunks, type PatchFiles } from "../src/tools/file/apply.ts"
+import { applyHunks, lexicalPaths, locate, type PatchFiles } from "../src/tools/file/apply.ts"
 import { parse } from "../src/tools/file/patch.ts"
 
 const scenarios = join(import.meta.dir, "fixtures/codex-apply-patch/scenarios")
@@ -26,12 +26,14 @@ const tree = (dir: string, prefix = ""): Map<string, string> => {
 /** Files in memory under `/work`, so a scenario never writes to disk. */
 const memoryFiles = (files: Map<string, string>): PatchFiles => {
   const key = (path: string) => path.slice("/work/".length)
+  const kind = async (path: string) => {
+    if (files.has(key(path))) return "file" as const
+    const dir = `${key(path)}/`
+    return [...files.keys()].some((name) => name.startsWith(dir)) ? ("directory" as const) : ("absent" as const)
+  }
   return {
-    kind: async (path) => {
-      if (files.has(key(path))) return "file"
-      const dir = `${key(path)}/`
-      return [...files.keys()].some((name) => name.startsWith(dir)) ? "directory" : "absent"
-    },
+    kind,
+    entryKind: kind,
     read: async (path) => files.get(key(path))!,
     write: async (path, contents) => void files.set(key(path), contents),
     remove: async (path) => void files.delete(key(path)),
@@ -49,7 +51,7 @@ describe("Codex apply-patch scenarios", () => {
     test(name, async () => {
       const files = tree(join(scenarios, name, "input"))
       try {
-        await applyHunks(parse(readFileSync(join(scenarios, name, "patch.txt"), "utf8")), "/work", memoryFiles(files))
+        await applyHunks(locate(parse(readFileSync(join(scenarios, name, "patch.txt"), "utf8")), lexicalPaths("/work")), memoryFiles(files))
       } catch {
         // Scenarios are specified by their final files only, as Codex's own runner checks them.
       }

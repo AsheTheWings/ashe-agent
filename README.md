@@ -8,7 +8,8 @@ saver, and consistent dumps, and a WebSocket server that authenticates the
 owner's logins and API tokens and keeps durable sessions that several
 clients share, with steering, queueing, fork, and rewind. Its agent loop
 calls a model through the OpenAI Responses API, switches models within a
-session, and compacts long sessions; it has no built-in tools yet.
+session, and compacts long sessions. Its built-in tools read files,
+documents, and images, and edit files by patch.
 Nothing about it is stable yet, and its configuration,
 protocol, and storage may change incompatibly at any revision.
 
@@ -56,6 +57,8 @@ bun packages/server/src/main.ts serve
   rewind, and restarts.
 - [Permissions](docs/permissions.md): how permission rules decide tool
   calls, and how clients answer permission requests.
+- [Tools](docs/tools.md): the built-in tools, their permissions, and what
+  they read and write.
 - [Model context](docs/model-context.md): what each model call carries,
   model switching, and compaction.
 - [Storage](docs/storage.md): the database, its migrations, and dumps.

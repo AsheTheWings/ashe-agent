@@ -71,10 +71,11 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
     if (modelApiKey === null) fail("serve needs ASHE_AGENT_MODEL_API_KEY_FILE")
     openCurrentDatabase(inputs.stateDir).close()
     // The agent loop's libraries load only for serve, so operator commands start quickly.
-    const [{ responsesModelPort }, { agentRunner }, { SqliteCheckpointSaver }] = await Promise.all([
+    const [{ responsesModelPort }, { agentRunner }, { SqliteCheckpointSaver }, { fileTools }] = await Promise.all([
       import("./agent/model.ts"),
       import("./agent/runner.ts"),
       import("./store/checkpointer.ts"),
+      import("./tools/file/index.ts"),
     ])
     const layer = ProtocolServer.layer({
       hostname: inputs.listenHost,
@@ -90,7 +91,7 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
           runner: (db) =>
             agentRunner({
               port: responsesModelPort({ baseUrl: inputs.modelBaseUrl, apiKey: Redacted.value(modelApiKey!) }),
-              tools: [],
+              tools: [...fileTools()],
               saver: new SqliteCheckpointSaver(db),
               models: inputs.models,
             }),

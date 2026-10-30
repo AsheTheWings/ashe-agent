@@ -61,17 +61,18 @@ export const draft07 = (schema: Schema.Top): Record<string, unknown> => {
  * A built-in tool: the model is offered the draft-07 JSON Schema of `args`,
  * and its arguments are decoded with `args` before `run`. Arguments that do
  * not decode give a failed result naming the problem, and `run` is not
- * called. With `permission`, the decoded call is authorized first, unless
- * `permission` returns a result instead, which ends the call without
- * running it; the call is marked started just before `run`.
+ * called. With `prepare`, the decoded call is authorized by the check it
+ * returns, and `run` receives its plan, so the call acts on exactly what
+ * was authorized; a result from `prepare` ends the call without running
+ * it. The call is marked started just before `run`.
  */
-export const builtinTool = <S extends Schema.Codec<unknown, unknown, never, never>>(definition: {
+export const builtinTool = <S extends Schema.Codec<unknown, unknown, never, never>, P = undefined>(definition: {
   readonly namespace?: string
   readonly name: string
   readonly description: string
   readonly args: S
-  readonly permission?: (args: S["Type"], run: ToolRun) => PermissionCheck | ToolResult | Promise<PermissionCheck | ToolResult>
-  readonly run: (args: S["Type"], run: ToolRun) => Promise<ToolResult>
+  readonly prepare?: (args: S["Type"], run: ToolRun) => Prepared<P> | ToolResult | Promise<Prepared<P> | ToolResult>
+  readonly run: (args: S["Type"], run: ToolRun, plan: P) => Promise<ToolResult>
 }): Tool => {
   const decode = Schema.decodeUnknownExit(definition.args)
   const namespace = definition.namespace ?? null
@@ -88,13 +89,21 @@ export const builtinTool = <S extends Schema.Codec<unknown, unknown, never, neve
       if (decoded._tag === "Failure") {
         return { outcome: "failed", content: `The arguments do not match the tool's schema: ${String(decoded.cause)}` }
       }
-      if (definition.permission !== undefined) {
-        const check = await definition.permission(decoded.value, run)
-        if ("outcome" in check) return check
-        await run.authorize(check)
+      let plan = undefined as P
+      if (definition.prepare !== undefined) {
+        const prepared = await definition.prepare(decoded.value, run)
+        if ("outcome" in prepared) return prepared
+        await run.authorize(prepared.check)
+        plan = prepared.plan
       }
       run.started()
-      return definition.run(decoded.value, run)
+      return definition.run(decoded.value, run, plan)
     },
   }
+}
+
+/** What a call is authorized for, and the plan it then carries out. */
+export interface Prepared<P> {
+  readonly check: PermissionCheck
+  readonly plan: P
 }
