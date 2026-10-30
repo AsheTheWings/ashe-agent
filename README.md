@@ -54,6 +54,8 @@ bun packages/server/src/main.ts serve
   messages and session events.
 - [Sessions](docs/sessions.md): history, input during turns, fork,
   rewind, and restarts.
+- [Permissions](docs/permissions.md): how permission rules decide tool
+  calls, and how clients answer permission requests.
 - [Model context](docs/model-context.md): what each model call carries,
   model switching, and compaction.
 - [Storage](docs/storage.md): the database, its migrations, and dumps.

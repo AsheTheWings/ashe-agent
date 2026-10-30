@@ -52,7 +52,7 @@ const sessionsWithEvent = (h: AgentHarness, id: string, type: string, count = 1)
 describe("the model's first message", () => {
   test("fixed instructions, system and developer blocks in order, client blocks, escaping, notes, and a fixed first message", async () => {
     const catalogs = { skills: "- `alpha-skill`: does alpha things", codeMode: "- `run(code)`: runs a program" as string | null }
-    const setup: SessionSetup = {
+    const setup: SessionSetup = { permission: () => null,
       resolve: () => ({ agent: null, instructions: "# Rules\n\nNever write </developer> or <client>.\n\n```\n# not a heading\n```", model: null }),
       catalogs: () => catalogs,
     }
@@ -103,7 +103,7 @@ describe("the model's first message", () => {
 
   test("a rewind derives the catalog note from the catalogs, and catalog notes are escaped", async () => {
     const catalogs = { skills: null as string | null, codeMode: "catalog A" as string | null }
-    const setup: SessionSetup = { resolve: () => ({ agent: null, instructions: null, model: null }), catalogs: () => catalogs }
+    const setup: SessionSetup = { permission: () => null, resolve: () => ({ agent: null, instructions: null, model: null }), catalogs: () => catalogs }
     await withHarness(
       async (h) => {
         const id = h.create()
@@ -134,7 +134,7 @@ describe("the model's first message", () => {
 
 describe("the agent loop", () => {
   test("a session takes its agent's model, else the chosen one, else the first configured", async () => {
-    const setup: SessionSetup = {
+    const setup: SessionSetup = { permission: () => null,
       resolve: (agent) => ({ agent, instructions: null, model: agent === "pinned" ? beta : agent === "broken" ? "no/such" : null }),
       catalogs: () => ({ skills: null, codeMode: null }),
     }
@@ -178,7 +178,7 @@ describe("the agent loop", () => {
       expect(items.map((item) => item.type)).toEqual(["message", "function_call", "function_call_output"])
       expect(items[1]).toMatchObject({ name: "echo", arguments: '{"text":"a"}' })
       expect(items[2]).toMatchObject({ output: "echoed a" })
-      expect(h.model.last().tools.map((tool) => tool.name)).toEqual(["echo", "wait", "refuse"])
+      expect(h.model.last().tools.map((tool) => tool.name)).toEqual(["echo", "wait", "refuse", "touch", "pair"])
       expect(h.model.last().tools[0]!.parameters).toMatchObject({ type: "object", required: ["text"] })
       expect(h.hub.store.turns(id)[0]!.checkpointId).toBe(latestCheckpointId(h.db, id))
     })

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Database } from "bun:sqlite"
@@ -9,6 +9,8 @@ import { Effect, Schema } from "effect"
 import type { ModelCall, ModelPort } from "../../src/agent/model.ts"
 import { agentRunner } from "../../src/agent/runner.ts"
 import { builtinTool, type Tool } from "../../src/agent/tools.ts"
+import type { Permission } from "../../src/inputs/shapes.ts"
+import { permissionPath } from "../../src/permissions/paths.ts"
 import { SessionHub, type SessionSetup } from "../../src/sessions/hub.ts"
 import { noAgents } from "../../src/sessions/setup.ts"
 import { SessionStore } from "../../src/sessions/store.ts"
@@ -123,7 +125,10 @@ export const messageText = (message: BaseMessage): string =>
 export const responsesInput = (call: ModelCall) =>
   convertMessagesToResponsesInput({ messages: [...call.messages], zdrEnabled: true, model: call.model }) as Array<Record<string, any>>
 
-/** Test tools: `echo` returns its text; `wait` runs until the turn is aborted; `refuse` is a plain reject. */
+/**
+ * Test tools: `echo` returns its text; `wait` runs until the turn is aborted;
+ * `refuse` is a plain reject; `touch` and `pair` authorize `edit` subjects.
+ */
 export const testTools = (): ReadonlyArray<Tool> => [
   builtinTool({
     name: "echo",
@@ -144,6 +149,30 @@ export const testTools = (): ReadonlyArray<Tool> => [
     args: Schema.Struct({}),
     run: async () => ({ outcome: "declined", content: "The user declined this tool call.", endTurn: true }),
   }),
+  builtinTool({
+    name: "touch",
+    description: "Asks the `edit` permission for its paths, resolved against the session directory.",
+    args: Schema.Struct({ paths: Schema.Array(Schema.String) }),
+    permission: ({ paths }, run) => {
+      const subjects = paths.map((path) => permissionPath(path, run.cwd))
+      return { permission: "edit", subjects, patterns: subjects }
+    },
+    run: async ({ paths }) => ({ outcome: "success", content: `touched ${paths.join(" ")}` }),
+  }),
+  builtinTool({
+    name: "pair",
+    description: "Asks the `edit` permission for two subjects at once, as a program's parallel calls would.",
+    args: Schema.Struct({ a: Schema.String, b: Schema.String }),
+    run: async ({ a, b }, run) => {
+      const settled = await Promise.allSettled(
+        [a, b].map((subject) => run.authorize({ permission: "edit", subjects: [subject], patterns: [subject] })),
+      )
+      const report = settled.map((entry, index) =>
+        `${[a, b][index]}: ${entry.status === "fulfilled" ? "allowed" : (entry.reason as Error).message}`,
+      )
+      return { outcome: "success", content: report.join(", ") }
+    },
+  }),
 ]
 
 /** A session hub over a run-owned database file, running the agent loop on a fake model. */
@@ -161,6 +190,8 @@ export class AgentHarness {
       readonly models?: ReadonlyArray<Model>
     /** The model port; the fake model by default. */
     readonly port?: ModelPort
+      /** The global permission rules; everything is allowed by default. */
+      readonly permission?: Permission
       /** Runs after each turn's agent loop returns and before the turn ends. */
       readonly afterLoop?: (hub: SessionHub, sessionId: string) => void
     } = {},
@@ -182,6 +213,8 @@ export class AgentHarness {
     const hub: SessionHub = new SessionHub(new SessionStore(this.db), {
       models,
       setup: this.options.setup ?? noAgents,
+      ...(this.options.permission === undefined ? {} : { permission: this.options.permission }),
+      home: realpathSync(this.dir),
       runner:
         afterLoop === undefined
           ? runner
@@ -203,6 +236,10 @@ export class AgentHarness {
 
   input(sessionId: string, text: string, mode?: "steer" | "queue") {
     return this.hub.input(sessionId, text, mode, this.sender)
+  }
+
+  answer(sessionId: string, requestId: string, answer: "once" | "always" | "reject", message?: string) {
+    this.hub.answer(sessionId, requestId, answer, message, this.sender)
   }
 
   events(sessionId: string): ReadonlyArray<SessionEvent> {

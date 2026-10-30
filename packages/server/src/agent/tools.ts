@@ -1,4 +1,5 @@
 import { JsonSchema, Schema } from "effect"
+import type { PermissionCheck } from "../permissions/rules.ts"
 import type { ToolSpec } from "./model.ts"
 import type { ToolContent } from "./window.ts"
 
@@ -10,6 +11,19 @@ export interface ToolRun {
   readonly cwd: string
   /** Aborted when the turn is canceled or the server stops. */
   readonly signal: AbortSignal
+  /**
+   * Returns when the permission rules let the call run, after an ask if
+   * they ask; throws `PermissionDenied` or `PermissionRejected` otherwise.
+   * A tool lets those errors propagate, so the tool step turns them into
+   * the call's result.
+   */
+  readonly authorize: (check: PermissionCheck) => Promise<void>
+  /**
+   * Marks the call as running, emitting `TOOL_EXECUTION_STARTED` once. A
+   * tool calls it after authorization and before the call's first effect,
+   * so a call that is refused or fails validation never counts as started.
+   */
+  readonly started: () => void
 }
 
 /**
@@ -38,12 +52,15 @@ export const draft07 = (schema: Schema.Top): Record<string, unknown> => {
 /**
  * A built-in tool: the model is offered the draft-07 JSON Schema of `args`,
  * and its arguments are decoded with `args` before `run`. Arguments that do
- * not decode give a failed result naming the problem, and `run` is not called.
+ * not decode give a failed result naming the problem, and `run` is not
+ * called. With `permission`, the decoded call is authorized first; the call
+ * is marked started just before `run`.
  */
 export const builtinTool = <S extends Schema.Codec<unknown, unknown, never, never>>(definition: {
   readonly name: string
   readonly description: string
   readonly args: S
+  readonly permission?: (args: S["Type"], run: ToolRun) => PermissionCheck
   readonly run: (args: S["Type"], run: ToolRun) => Promise<ToolResult>
 }): Tool => {
   const decode = Schema.decodeUnknownExit(definition.args)
@@ -54,6 +71,8 @@ export const builtinTool = <S extends Schema.Codec<unknown, unknown, never, neve
       if (decoded._tag === "Failure") {
         return { outcome: "failed", content: `The arguments do not match the tool's schema: ${String(decoded.cause)}` }
       }
+      if (definition.permission !== undefined) await run.authorize(definition.permission(decoded.value, run))
+      run.started()
       return definition.run(decoded.value, run)
     },
   }

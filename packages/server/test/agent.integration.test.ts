@@ -75,6 +75,8 @@ describe("the Responses model port", () => {
           ["function", "echo"],
           ["function", "wait"],
           ["function", "refuse"],
+          ["function", "touch"],
+          ["function", "pair"],
         ])
       }
       const [first, second] = api.captured.map((request) => request.body.input as Array<Record<string, any>>)

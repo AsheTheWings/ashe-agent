@@ -173,6 +173,25 @@ export class SessionStore {
     this.db.query("UPDATE sessions SET pending_notes = ? WHERE id = ?").run(JSON.stringify(notes), sessionId)
   }
 
+  /** The session's grants, as allow rules in the order they were added. */
+  grants(sessionId: string): ReadonlyArray<{ readonly permission: string; readonly pattern: string }> {
+    return this.db
+      .query<{ permission: string; pattern: string }, [string]>(
+        "SELECT permission, pattern FROM session_grants WHERE session_id = ? ORDER BY position",
+      )
+      .all(sessionId)
+  }
+
+  addGrants(sessionId: string, permission: string, patterns: ReadonlyArray<string>) {
+    const insert = this.db.query(
+      `INSERT INTO session_grants (session_id, position, permission, pattern)
+        VALUES (?, (SELECT coalesce(max(position), 0) + 1 FROM session_grants WHERE session_id = ?), ?, ?)`,
+    )
+    this.db.transaction(() => {
+      for (const pattern of patterns) insert.run(sessionId, sessionId, permission, pattern)
+    })()
+  }
+
   /** The `TOOL_CALL_RESULT` event the session recorded for a tool call, if any. */
   toolResult(sessionId: string, toolCallId: string): Extract<SessionEventBody, { type: "TOOL_CALL_RESULT" }> | null {
     const row = this.db
@@ -282,8 +301,9 @@ export class SessionStore {
   /**
    * Creates `target` as a copy of `source` through the turn `throughRunId`,
    * or all of it: its turns and their events keep their numbers, its window
-   * is the source's as it stood after the last copied turn, and the copy's
-   * first event names its source and gives its settings. Events about the
+   * is the source's as it stood after the last copied turn, it holds the
+   * source's grants, and the copy's first event names its source and gives
+   * its settings. Events about the
    * source session itself, its rewinds and model changes, are not copied.
    */
   fork(
@@ -345,6 +365,12 @@ export class SessionStore {
         .run(target.id, source.id, cutoff)
       if (through === null) copyThread(this.db, source.id, target.id, null)
       else copyThread(this.db, source.id, target.id, through.checkpointId ?? "")
+      this.db
+        .query(
+          `INSERT INTO session_grants (session_id, position, permission, pattern)
+            SELECT ?, position, permission, pattern FROM session_grants WHERE session_id = ?`,
+        )
+        .run(target.id, source.id)
       return this.getSession(target.id)!
     })()
   }

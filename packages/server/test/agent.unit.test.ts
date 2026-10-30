@@ -135,7 +135,7 @@ describe("tools and providers", () => {
       },
     })
     expect(tool.spec.parameters).toMatchObject({ type: "object", required: ["path"], properties: { path: { type: "string" } } })
-    const run = { sessionId: "s", runId: "r", toolCallId: "c", cwd: "/", signal: new AbortController().signal }
+    const run = { sessionId: "s", runId: "r", toolCallId: "c", cwd: "/", signal: new AbortController().signal, authorize: async () => {}, started: () => {} }
     expect((await tool.run({ path: 1 }, run)).outcome).toBe("failed")
     expect(ran).toBe(0)
     expect(await tool.run({ path: "p" }, run)).toEqual({ outcome: "success", content: "ok" })

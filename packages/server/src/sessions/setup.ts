@@ -9,4 +9,5 @@ export const noAgents: SessionSetup = {
     return { agent: null, instructions: null, model: null }
   },
   catalogs: () => ({ skills: null, codeMode: null }),
+  permission: () => null,
 }

@@ -65,6 +65,10 @@ export const sessionHandlers = (hub: SessionHub) => {
       hub.rewind(params.sessionId, params.runId, params.text, context.principal)
       return {}
     },
+    "permission.answer": async (params, context) => {
+      hub.answer(params.sessionId, params.requestId, params.answer, params.message, context.principal)
+      return {}
+    },
   }
 
   const onClose = (connection: Connection) => {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 import { Permission } from "../src/inputs/shapes.ts"
-import { absolutePath } from "../src/permissions/paths.ts"
+import { resolvePath, type PathLookup } from "../src/permissions/paths.ts"
 import { compileRules, decide, evaluate, wildcard } from "../src/permissions/rules.ts"
 
 const home = "/home/owner"
@@ -57,10 +57,19 @@ describe("layered and multi-subject decisions", () => {
     expect(evaluate([...agent, ...global], "edit", "/p/b")).toBe("deny")
   })
 
-  test("given paths are normalized against the working directory", () => {
-    expect(absolutePath("a/../b/./c", "/w")).toBe("/w/b/c")
-    expect(absolutePath("/x//y/", "/w")).toBe("/x/y")
-    expect(absolutePath("..", "/w/v")).toBe("/w")
+  test("given paths are normalized against the working directory, following links before `..`", () => {
+    // An in-memory filesystem: `/w`, `/w/b`, `/o`, `/o/t`, a link `/w/l` to `/o/t`, and a dangling link `/w/d` to `../n`.
+    const lookup: PathLookup = (path) => {
+      if (path === "/w/l") return { kind: "real", path: "/o/t" }
+      if (path === "/w/d") return { kind: "dangling", target: "../n" }
+      return ["/w", "/w/b", "/o", "/o/t"].includes(path) ? { kind: "real", path } : { kind: "absent" }
+    }
+    expect(resolvePath("a/../b/./c", "/w", lookup)).toBe("/w/b/c")
+    expect(resolvePath("/w//b/", "/x", lookup)).toBe("/w/b")
+    expect(resolvePath("..", "/w/b", lookup)).toBe("/w")
+    expect(resolvePath("l/../a", "/w", lookup)).toBe("/o/a")
+    expect(resolvePath("new/../l/x", "/w", lookup)).toBe("/o/t/x")
+    expect(resolvePath("d/x", "/w", lookup)).toBe("/n/x")
   })
 
   test("any denied subject refuses the call, else asked subjects raise one request, else it runs", () => {

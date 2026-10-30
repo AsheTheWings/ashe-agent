@@ -13,6 +13,15 @@ import {
 } from "@ashe-agent/protocol"
 import { firstMessage } from "../agent/blocks.ts"
 import { catalogNote, forkNote, rewindNote, unfinishedResult } from "../agent/notes.ts"
+import type { Permission } from "../inputs/shapes.ts"
+import {
+  compileRules,
+  decide,
+  PermissionDenied,
+  PermissionRejected,
+  type PermissionCheck,
+  type Rule,
+} from "../permissions/rules.ts"
 import { ProtocolError } from "../server/websocket.ts"
 import { Store } from "../store/database.ts"
 import { SessionStore, type Catalogs, type SessionRecord, type TurnRecord } from "./store.ts"
@@ -40,6 +49,14 @@ export interface TurnContext {
   readonly isCancelled: () => boolean
   /** The result the session's events recorded for a tool call, if any. */
   readonly toolResult: (toolCallId: string) => { readonly content: string; readonly outcome: ToolOutcome } | null
+  /**
+   * Decides a tool call by the global rules, the session agent's rules, and
+   * the session's grants. It returns when the call may run, waiting on an
+   * ask until a client answers; it throws `PermissionDenied` for a denied
+   * call, `PermissionRejected` for a rejected one, and the abort reason
+   * when `signal` aborts while it waits.
+   */
+  readonly authorize: (toolCallId: string, check: PermissionCheck, signal: AbortSignal) => Promise<void>
 }
 
 export type TurnOutcome = { readonly status: "finished" } | { readonly status: "failed"; readonly message: string; readonly code?: string }
@@ -57,6 +74,8 @@ export interface SessionSetup {
   }
   /** The catalogs as they stand now. */
   readonly catalogs: () => Catalogs
+  /** The rules of a session's agent, layered over the global ones. */
+  readonly permission: (agent: string | null) => Permission | null
 }
 
 type ToolOutcome = Extract<SessionEventBody, { type: "TOOL_CALL_RESULT" }>["outcome"]
@@ -65,6 +84,10 @@ export interface HubOptions {
   readonly models: ReadonlyArray<Model>
   readonly runner: TurnRunner
   readonly setup: SessionSetup
+  /** The global permission rules. */
+  readonly permission?: Permission
+  /** The home directory `~` and `$HOME` patterns expand to. */
+  readonly home?: string
   readonly now?: () => number
 }
 
@@ -76,6 +99,15 @@ interface Live {
   cancelled: boolean
 }
 
+type AskOutcome = { readonly kind: "allowed" } | { readonly kind: "rejected"; readonly message: string | undefined }
+
+/** A permission request waiting for an answer, in memory only. */
+interface Ask {
+  readonly runId: string
+  readonly check: PermissionCheck
+  readonly settle: (outcome: AskOutcome) => void
+}
+
 interface SessionState {
   readonly listeners: Set<Listener>
   /**
@@ -84,6 +116,8 @@ interface SessionState {
    */
   pending: Array<Input>
   live: Live | null
+  /** Permission requests waiting for an answer, by request id, in arrival order. */
+  readonly asks: Map<string, Ask>
 }
 
 const notFound = (what: string) => new ProtocolError({ code: ErrorCode.notFound, message: `no ${what}` })
@@ -173,10 +207,104 @@ export class SessionHub {
   private state(sessionId: string): SessionState {
     let state = this.states.get(sessionId)
     if (state === undefined) {
-      state = { listeners: new Set(), pending: [], live: null }
+      state = { listeners: new Set(), pending: [], live: null, asks: new Map() }
       this.states.set(sessionId, state)
     }
     return state
+  }
+
+  /** The rules deciding a session's calls: global, then its agent's, then its grants as allow rules. */
+  private rules(session: SessionRecord): ReadonlyArray<Rule> {
+    const home = this.options.home ?? "/"
+    const agent = this.options.setup.permission(session.agent)
+    return [
+      ...compileRules(this.options.permission ?? {}, home),
+      ...(agent === null ? [] : compileRules(agent, home)),
+      ...this.store.grants(session.id).map((grant) => ({ ...grant, action: "allow" as const })),
+    ]
+  }
+
+  private authorize(sessionId: string, runId: string, toolCallId: string, check: PermissionCheck, signal: AbortSignal) {
+    const decision = decide(this.rules(this.session(sessionId)), check)
+    if (decision.action === "allow") return Promise.resolve()
+    if (decision.action === "deny") return Promise.reject(new PermissionDenied(decision.denied))
+    signal.throwIfAborted()
+    const asks = this.state(sessionId).asks
+    const requestId = crypto.randomUUID()
+    return new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        asks.delete(requestId)
+        reject(signal.reason)
+      }
+      asks.set(requestId, {
+        runId,
+        check,
+        settle: (outcome) => {
+          signal.removeEventListener("abort", onAbort)
+          asks.delete(requestId)
+          if (outcome.kind === "allowed") resolve()
+          else reject(new PermissionRejected(outcome.message))
+        },
+      })
+      signal.addEventListener("abort", onAbort, { once: true })
+      this.emit(sessionId, {
+        type: "PERMISSION_REQUESTED",
+        requestId,
+        runId,
+        toolCallId,
+        permission: check.permission,
+        subjects: [...decision.asked],
+        patterns: [...check.patterns],
+      })
+    })
+  }
+
+  /**
+   * Answers a pending permission request. `always` grants the request's
+   * patterns for the rest of the session and approves the session's other
+   * requests the grant now allows; `reject` rejects every other pending
+   * request of the session with the same message.
+   */
+  answer(sessionId: string, requestId: string, answer: "once" | "always" | "reject", message: string | undefined, sender: Sender) {
+    const session = this.session(sessionId)
+    const asks = this.state(sessionId).asks
+    const ask = asks.get(requestId)
+    if (ask === undefined) {
+      const known = this.store
+        .eventsAfter(sessionId, 0)
+        .some(({ event }) => event.type === "PERMISSION_REQUESTED" && event.requestId === requestId)
+      throw known
+        ? new ProtocolError({ code: ErrorCode.alreadyResolved, message: `request ${requestId} is already resolved` })
+        : notFound(`permission request ${requestId}`)
+    }
+    const resolved = (id: string, by: "once" | "always" | "reject", from?: Sender) =>
+      this.emit(sessionId, {
+        type: "PERMISSION_RESOLVED",
+        requestId: id,
+        answer: by,
+        ...(by === "reject" && message !== undefined ? { message } : {}),
+        ...(from === undefined ? {} : { sender: from }),
+      })
+    if (answer === "reject") {
+      const others = [...asks.entries()].filter(([id]) => id !== requestId)
+      resolved(requestId, "reject", sender)
+      ask.settle({ kind: "rejected", message })
+      for (const [id, other] of others) {
+        resolved(id, "reject")
+        other.settle({ kind: "rejected", message })
+      }
+      return
+    }
+    if (answer === "always") this.store.addGrants(sessionId, ask.check.permission, ask.check.patterns)
+    resolved(requestId, answer, sender)
+    ask.settle({ kind: "allowed" })
+    if (answer !== "always") return
+    const rules = this.rules(session)
+    for (const [id, other] of [...asks.entries()]) {
+      if (decide(rules, other.check).action !== "allow") continue
+      resolved(id, "always")
+      other.settle({ kind: "allowed" })
+    }
   }
 
   private session(sessionId: string): SessionRecord {
@@ -355,6 +483,7 @@ export class SessionHub {
       },
       isCancelled: () => live.cancelled,
       toolResult: (toolCallId) => this.store.toolResult(sessionId, toolCallId),
+      authorize: (toolCallId, check, signal) => this.authorize(sessionId, turn.runId, toolCallId, check, signal),
     }
     const fiber = Effect.runFork(this.options.runner(context))
     live.fiber = fiber
@@ -366,6 +495,7 @@ export class SessionHub {
     const state = this.state(sessionId)
     state.live = null
     const runId = live.turn.runId
+    for (const [requestId, ask] of [...state.asks.entries()]) if (ask.runId === runId) state.asks.delete(requestId)
     if (this.stopping) return
     this.commit(sessionId, (append) => {
       // No answer can apply to an ended turn, so its open requests are withdrawn with it.

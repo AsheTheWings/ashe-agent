@@ -55,6 +55,7 @@ file cannot set them either.
 Values that are structured, such as the model list or the permission
 rules, are JSON in process input too, for example
 `ASHE_AGENT_MODELS='[{"id":"…","contextWindow":400000,"imageInput":false}]'`.
+[Permissions](permissions.md) explains the rules.
 
 ## Protected inputs
 
