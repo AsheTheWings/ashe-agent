@@ -12,6 +12,7 @@ const run: ToolRun = {
   authorize: async () => {},
   started: () => {},
   onCancel: () => {},
+  programCall: () => {},
 }
 
 describe("web tools", () => {

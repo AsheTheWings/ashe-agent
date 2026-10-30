@@ -61,6 +61,8 @@ bun packages/server/src/main.ts serve
   agent files, and skills, and where the server reads them.
 - [Tools](docs/tools.md): the built-in tools, their permissions, and what
   they read and write.
+- [Code mode](docs/code-mode.md): the `execute` tool, its catalog, and the
+  permissions and limits of programs.
 - [Model context](docs/model-context.md): what each model call carries,
   model switching, and compaction.
 - [Storage](docs/storage.md): the database, its migrations, and dumps.

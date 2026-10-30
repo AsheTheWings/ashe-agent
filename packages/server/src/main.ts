@@ -74,13 +74,24 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
     if (modelApiKey === null) fail("serve needs ASHE_AGENT_MODEL_API_KEY_FILE")
     openCurrentDatabase(inputs.stateDir).close()
     // The agent loop's libraries load only for serve, so operator commands start quickly.
-    const [{ responsesModelPort }, { agentRunner }, { SqliteCheckpointSaver }, { ShellProcesses }, { builtinTools }, { McpRegistry }] = await Promise.all([
+    const [
+      { responsesModelPort },
+      { agentRunner },
+      { SqliteCheckpointSaver },
+      { ShellProcesses },
+      { builtinTools },
+      { McpRegistry },
+      { executeTool, catalogTools },
+      { renderCatalog },
+    ] = await Promise.all([
       import("./agent/model.ts"),
       import("./agent/runner.ts"),
       import("./store/checkpointer.ts"),
       import("./tools/shell/index.ts"),
       import("./tools/builtin.ts"),
       import("./tools/mcp/servers.ts"),
+      import("./tools/codemode/execute.ts"),
+      import("./tools/codemode/catalog.ts"),
     ])
     // Commands run in the server user's login shell, without the server's own
     // input variables; every process ends with the server.
@@ -98,7 +109,9 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
     // MCP servers connect in the background; each server's tools appear once it has listed them.
     const mcp = new McpRegistry(inputs.mcpServers, { env: commandEnv, version: revision })
     void mcp.start()
-    const tools = () => [...builtin, ...mcp.tools(true)]
+    // Code mode programs call the tools of servers without `codemode: false`; `execute` is offered while there are any.
+    const execute = executeTool(() => mcp.tools(false), inputs.codeModeLimits)
+    const tools = () => [...builtin, ...mcp.tools(true), ...(mcp.tools(false).length === 0 ? [] : [execute])]
     const layer = ProtocolServer.layer({
       hostname: inputs.listenHost,
       port: inputs.listenPort,
@@ -113,6 +126,7 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
             instructionsFile: inputs.instructionsFile,
             skillRoots: inputs.skillRoots,
             modelIds: new Set(inputs.models.map((model) => model.id)),
+            codeMode: () => renderCatalog(catalogTools(mcp.tools(false))),
           }),
           permission: inputs.permission,
           home: sources.dirs.home,

@@ -55,6 +55,7 @@ const run: ToolRun = {
   authorize: async () => {},
   started: () => {},
   onCancel: () => {},
+  programCall: () => {},
 }
 
 /** Whether the process `pid` is still alive. */

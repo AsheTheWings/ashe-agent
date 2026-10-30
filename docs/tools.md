@@ -16,6 +16,7 @@ without running.
 | `web_search` | `web` | the query |
 | `web_fetch` | `web` | each URL |
 | `skill` | `skill` | the skill's name; [agents and skills](agents-and-skills.md) describes it |
+| `execute` | `execute` | `*`; [code mode](code-mode.md) describes the calls a program makes |
 | `<server>_<tool>` | its registered name | `*` |
 
 [Permissions](permissions.md) explains how subjects are resolved and
@@ -215,7 +216,8 @@ its tools. An HTTP server that goes away is noticed at its next request.
 Servers do not reconnect. Stopping the server closes every connection,
 those still connecting included, and ends stdio server processes. A
 server whose entry sets `codemode: false` offers its tools directly to
-the model; the tools of every other server are kept for code mode.
+the model; the tools of every other server are kept for
+[code mode](code-mode.md).
 
 An MCP tool call is decided under its registered name as the permission
 name, by the subject `*`, so `"docs_search": "ask"` asks before every

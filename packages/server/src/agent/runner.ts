@@ -9,8 +9,7 @@ import { REQUEST_INSTRUCTIONS } from "./blocks.ts"
 import { compact, needsCompaction, SUMMARY_PROMPT_REVISION } from "./compaction.ts"
 import { ModelCallError, type ModelPort } from "./model.ts"
 import { unfinishedResult } from "./notes.ts"
-import { PermissionDenied, PermissionRejected } from "../permissions/rules.ts"
-import type { Tool, ToolResult } from "./tools.ts"
+import { failedResult, type Tool, type ToolResult } from "./tools.ts"
 import { emptyWindow, renderWindow, unansweredCalls, type Entry, type ToolContent, type ToolOutcome, type Window } from "./window.ts"
 
 export interface AgentOptions {
@@ -327,9 +326,10 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
             cwd: session.sessionDir,
             imageInput: model.imageInput,
             signal,
-            authorize: (check) => context.authorize(callId, check, signal),
+            authorize: (check, also) => context.authorize(callId, check, also === undefined ? signal : AbortSignal.any([signal, also])),
             started: () => events.started(callId),
             onCancel: (note) => events.cancelNote(callId, note),
+            programCall: (tool, outcome) => events.emit({ type: "PROGRAM_CALL_FINISHED", toolCallId: callId, tool, outcome }),
           })
         } catch (error) {
           if (signal.aborted) throw error
@@ -379,18 +379,4 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
   entries.push({ ...own, kind: "input", text: context.input.text })
   await graph.invoke({ window: { ...window, entries }, overflowed: false, retried: false, stopped: false }, config)
   return { status: "finished" }
-}
-
-
-/** The result of a tool call that threw: a denial, a reject, or a failure. */
-const failedResult = (error: unknown): ToolResult => {
-  if (error instanceof PermissionDenied) {
-    return { outcome: "failed", content: "This tool call was denied by configuration and did not run." }
-  }
-  if (error instanceof PermissionRejected) {
-    return error.reason === undefined
-      ? { outcome: "declined", content: "The user declined this tool call.", endTurn: true }
-      : { outcome: "failed", content: `The user rejected this tool call: ${error.reason}` }
-  }
-  return { outcome: "failed", content: `The tool failed: ${error instanceof Error ? error.message : String(error)}` }
 }

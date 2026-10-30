@@ -19,6 +19,12 @@ export const unfinishedResult = (outcome: "canceled" | "interrupted" | "failed",
     : `The tool call ${ended} before it started.`
 }
 
+/** The note an unfinished `execute` call's result carries: the tool calls its program had finished. */
+export const programCallsNote = (finished: ReadonlyArray<{ readonly tool: string; readonly outcome: string }>) =>
+  finished.length === 0
+    ? "Its program had finished no tool calls."
+    : `Its program had finished these tool calls, in order: ${finished.map(({ tool, outcome }) => `${tool} (${outcome})`).join(", ")}.`
+
 /**
  * The note of a turn whose catalogs differ from those of the session's
  * first message, naming each changed catalog as it now stands.
