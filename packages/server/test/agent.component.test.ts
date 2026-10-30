@@ -4,6 +4,7 @@ import { REQUEST_INSTRUCTIONS } from "../src/agent/blocks.ts"
 import { SUMMARY_MAX_TOKENS, SUMMARY_PROMPT_REVISION } from "../src/agent/compaction.ts"
 import { ModelCallError } from "../src/agent/model.ts"
 import type { Tool } from "../src/agent/tools.ts"
+import { noAgentSettings } from "../src/agents/agents.ts"
 import type { SessionSetup } from "../src/sessions/hub.ts"
 import { latestCheckpointId } from "../src/store/checkpoint-threads.ts"
 import { waitFor } from "./support/cli.ts"
@@ -52,8 +53,8 @@ const sessionsWithEvent = (h: AgentHarness, id: string, type: string, count = 1)
 describe("the model's first message", () => {
   test("fixed instructions, system and developer blocks in order, client blocks, escaping, notes, and a fixed first message", async () => {
     const catalogs = { skills: "- `alpha-skill`: does alpha things", codeMode: "- `run(code)`: runs a program" as string | null }
-    const setup: SessionSetup = { permission: () => null,
-      resolve: () => ({ agent: null, instructions: "# Rules\n\nNever write </developer> or <client>.\n\n```\n# not a heading\n```", model: null }),
+    const setup: SessionSetup = {
+      resolve: () => ({ agent: null, instructions: "# Rules\n\nNever write </developer> or <client>.\n\n```\n# not a heading\n```", model: null, settings: noAgentSettings }),
       catalogs: () => catalogs,
     }
     await withHarness(
@@ -103,7 +104,7 @@ describe("the model's first message", () => {
 
   test("a rewind derives the catalog note from the catalogs, and catalog notes are escaped", async () => {
     const catalogs = { skills: null as string | null, codeMode: "catalog A" as string | null }
-    const setup: SessionSetup = { permission: () => null, resolve: () => ({ agent: null, instructions: null, model: null }), catalogs: () => catalogs }
+    const setup: SessionSetup = { resolve: () => ({ agent: null, instructions: null, model: null, settings: noAgentSettings }), catalogs: () => catalogs }
     await withHarness(
       async (h) => {
         const id = h.create()
@@ -134,8 +135,8 @@ describe("the model's first message", () => {
 
 describe("the agent loop", () => {
   test("a session takes its agent's model, else the chosen one, else the first configured", async () => {
-    const setup: SessionSetup = { permission: () => null,
-      resolve: (agent) => ({ agent, instructions: null, model: agent === "pinned" ? beta : agent === "broken" ? "no/such" : null }),
+    const setup: SessionSetup = {
+      resolve: (agent) => ({ agent, instructions: null, model: agent === "pinned" ? beta : agent === "broken" ? "no/such" : null, settings: noAgentSettings }),
       catalogs: () => ({ skills: null, codeMode: null }),
     }
     await withHarness(

@@ -31,7 +31,7 @@ afterAll(() => {
   processes.stopAll()
 })
 
-const inputs = { shellYieldMs: 10_000, shellMaxOutputTokens: 10_000, exaBaseUrl: exa.baseUrl }
+const inputs = { shellYieldMs: 10_000, shellMaxOutputTokens: 10_000, exaBaseUrl: exa.baseUrl, skillRoots: [] }
 const served = (exaApiKey: Redacted.Redacted<string> | null) => builtinTools({ ...inputs, exaApiKey }, processes)
 const tool = (name: string) => served(Redacted.make(KEY)).find((candidate) => candidate.spec.name === name)!
 

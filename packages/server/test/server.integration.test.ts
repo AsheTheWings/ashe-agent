@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { login as loginDirect, setOwnerPassword } from "../src/auth/credentials.ts"
 import { tokenHash } from "../src/auth/tokens.ts"
@@ -399,6 +399,23 @@ describe("API token lifecycle", () => {
       expect(second.response.result.principal.tokenId).not.toBe(firstId)
       expect((await authenticateWith(url, token)).response.error.code).toBe(-32002)
       expect((await run.run(["token", "list"])).stdout).toContain("laptop")
+    })
+  })
+})
+
+describe("agents over a real WebSocket", () => {
+  test("an authenticated client lists the valid agents and the refused agent files", async () => {
+    await withRun(async (run, url) => {
+      const dir = join(run.dir, ".config", "ashe-agent", "agents")
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, "helper.md"), "---\ndescription: Helps\nmode: primary\nmodel: test/model\n---\nBody")
+      writeFileSync(join(dir, "broken.md"), "---\nmode: sometimes\n---\n")
+      const { client } = await login(url)
+      expect((await client.request("agents.list")).result).toEqual({
+        agents: [{ name: "helper", description: "Helps", mode: "primary", model: "test/model" }],
+        refused: [{ path: join(dir, "broken.md"), reason: "mode is not primary, subagent, or all" }],
+      })
+      client.close()
     })
   })
 })

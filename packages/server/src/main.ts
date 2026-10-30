@@ -14,7 +14,7 @@ import { loadInputsOrExit, processSources, removeDependencyVariables } from "./i
 import { catalog } from "./inputs/catalog.ts"
 import { ProtocolServer, serveProgram } from "./server/serve.ts"
 import { Sessions } from "./sessions/hub.ts"
-import { noAgents } from "./sessions/setup.ts"
+import { fileSetup } from "./agents/setup.ts"
 import { databasePath, openDatabase, openDatabaseReadonly, Store } from "./store/database.ts"
 import { dumpDatabase } from "./store/dump.ts"
 import { migrationFiles } from "./store/migration-files.ts"
@@ -102,7 +102,12 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
       Layer.provideMerge(
         Sessions.layer({
           models: inputs.models,
-          setup: noAgents,
+          setup: fileSetup({
+            agentsDir: inputs.agentsDir,
+            instructionsFile: inputs.instructionsFile,
+            skillRoots: inputs.skillRoots,
+            modelIds: new Set(inputs.models.map((model) => model.id)),
+          }),
           permission: inputs.permission,
           home: sources.dirs.home,
           runner: (db) =>

@@ -3,6 +3,7 @@ import { existsSync, statSync } from "node:fs"
 import { isAbsolute } from "node:path"
 import { Context, Effect, Exit, Fiber, Layer } from "effect"
 import {
+  type Agent,
   ErrorCode,
   type InputMode,
   type Model,
@@ -13,6 +14,7 @@ import {
 } from "@ashe-agent/protocol"
 import { firstMessage } from "../agent/blocks.ts"
 import { catalogNote, forkNote, rewindNote, unfinishedResult } from "../agent/notes.ts"
+import type { AgentSettings } from "../agents/agents.ts"
 import type { Permission } from "../inputs/shapes.ts"
 import {
   compileRules,
@@ -66,16 +68,21 @@ export type TurnRunner = (context: TurnContext) => Effect.Effect<TurnOutcome>
 
 /** What a session takes from its agent, and the catalogs its developer message lists. */
 export interface SessionSetup {
-  /** The session's agent, the instructions recorded at its creation, and the model the agent names, if any. */
+  /**
+   * The session's agent, the instructions recorded at its creation, the
+   * model the agent names, if any, and the agent's settings; it throws a
+   * `ProtocolError` for an agent that cannot run a session.
+   */
   readonly resolve: (agent: string | null) => {
     readonly agent: string | null
     readonly instructions: string | null
     readonly model: string | null
+    readonly settings: AgentSettings
   }
   /** The catalogs as they stand now. */
   readonly catalogs: () => Catalogs
-  /** The rules of a session's agent, layered over the global ones. */
-  readonly permission: (agent: string | null) => Permission | null
+  /** The valid agents and the refused agent files as they stand now; none when absent. */
+  readonly agents?: () => { readonly agents: ReadonlyArray<Agent>; readonly refused: ReadonlyArray<{ readonly path: string; readonly reason: string }> }
 }
 
 type ToolOutcome = Extract<SessionEventBody, { type: "TOOL_CALL_RESULT" }>["outcome"]
@@ -216,7 +223,7 @@ export class SessionHub {
   /** The rules deciding a session's calls: global, then its agent's, then its grants as allow rules. */
   private rules(session: SessionRecord): ReadonlyArray<Rule> {
     const home = this.options.home ?? "/"
-    const agent = this.options.setup.permission(session.agent)
+    const agent = session.agentSettings.permission
     return [
       ...compileRules(this.options.permission ?? {}, home),
       ...(agent === null ? [] : compileRules(agent, home)),
@@ -364,7 +371,7 @@ export class SessionHub {
     if (!isAbsolute(params.cwd) || !existsSync(params.cwd) || !statSync(params.cwd).isDirectory()) {
       throw invalid("the working directory must be an absolute path of an existing directory")
     }
-    const { agent, instructions, model: agentModel } = this.options.setup.resolve(params.agent ?? null)
+    const { agent, instructions, model: agentModel, settings } = this.options.setup.resolve(params.agent ?? null)
     const model = agentModel ?? params.model ?? this.options.models[0]!.id
     if (!this.options.models.some((candidate) => candidate.id === model)) throw invalid(`no configured model ${model}`)
     const id = crypto.randomUUID()
@@ -376,6 +383,7 @@ export class SessionHub {
         agent,
         model,
         instructions,
+        agentSettings: settings,
         createdAt: this.now(),
         firstMessage: this.firstMessage(id, params.cwd, instructions, catalogs),
         catalogs,
@@ -396,6 +404,11 @@ export class SessionHub {
     const listeners = this.state(sessionId).listeners
     listeners.add(listener)
     return () => listeners.delete(listener)
+  }
+
+  /** The valid agents, with their names, descriptions, modes, and models, and the refused agent files with the reason. */
+  agents() {
+    return this.options.setup.agents?.() ?? { agents: [], refused: [] }
   }
 
   setModel(sessionId: string, model: string, sender: Sender) {
