@@ -11,12 +11,15 @@
     "gate": "bun scripts/task.ts gate",
     "typecheck": "bun scripts/task.ts typecheck",
     "test:unit": "bun scripts/task.ts test:unit",
+    "test:integration": "bun scripts/task.ts test:integration",
     "test:conformance": "bun scripts/task.ts test:conformance",
     "generate": "bun scripts/task.ts generate"
   },
   "devDependencies": {
+    "@langchain/langgraph-checkpoint-validation": "1.2.0",
     "@types/bun": "1.4.4",
     "ajv": "8.20.0",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "vitest": "4.1.12"
   }
 }
