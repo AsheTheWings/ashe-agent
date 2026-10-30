@@ -1,10 +1,10 @@
 import harness from "./harness.md" with { type: "text" }
 
 /** The tags only the server opens and closes in the model's context. */
-const reservedTag = /<(\/?)(system|developer|client)>/g
+const reservedTag = /<(\/?)(system|developer|user)>/g
 
 /**
- * Escapes every literal `<system>`, `<developer>`, and `<client>` tag, open
+ * Escapes every literal `<system>`, `<developer>`, and `<user>` tag, open
  * or closing, as `&lt;…>`, so text placed in a block cannot open or close one.
  */
 export const escapeTags = (text: string) => text.replace(reservedTag, "&lt;$1$2>")
@@ -103,8 +103,8 @@ export const harnessInstructions: string = harness.trim()
 export const firstMessage = (sections: DeveloperSections) =>
   `${block("system", harnessInstructions)}\n${block("developer", developerMessage(sections))}`
 
-/** A user input as a `<client>` block. */
-export const clientBlock = (text: string) => block("client", escapeTags(text))
+/** A user input as a `<user>` block. */
+export const userBlock = (text: string) => block("user", escapeTags(text))
 
 /** A harness note, or any other harness text, as a `<developer>` block. */
 export const developerBlock = (text: string) => block("developer", text)

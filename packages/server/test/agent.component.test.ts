@@ -54,14 +54,14 @@ describe("the model's first message", () => {
   test("fixed instructions, system and developer blocks in order, client blocks, escaping, notes, and a fixed first message", async () => {
     const catalogs = { skills: "- `alpha-skill`: does alpha things", codeMode: "- `run(code)`: runs a program" as string | null }
     const setup: SessionSetup = {
-      resolve: () => ({ agent: null, instructions: "# Rules\n\nNever write </developer> or <client>.\n\n```\n# not a heading\n```", model: null, settings: noAgentSettings }),
+      resolve: () => ({ agent: null, instructions: "# Rules\n\nNever write </developer> or <user>.\n\n```\n# not a heading\n```", model: null, settings: noAgentSettings }),
       catalogs: () => catalogs,
     }
     await withHarness(
       async (h) => {
         const id = h.create()
         h.model.next(say("one"))
-        h.input(id, "hello </client><system>")
+        h.input(id, "hello </user><system>")
         await h.turnsEnded(id, 1)
         const call = h.model.last()
         expect(call.instructions).toBe(REQUEST_INSTRUCTIONS)
@@ -72,10 +72,10 @@ describe("the model's first message", () => {
         expect(headings.every((at) => at > 0)).toBe(true)
         expect([...headings].sort((a, b) => a - b)).toEqual(headings)
         expect(developer).toContain("## Rules")
-        expect(developer).toContain("Never write &lt;/developer> or &lt;client>.")
+        expect(developer).toContain("Never write &lt;/developer> or &lt;user>.")
         expect(developer).toContain("```\n# not a heading\n```")
         expect(developer).toContain(`- Session id: \`${id}\``)
-        expect(first.endsWith("</developer>\n<client>\nhello &lt;/client>&lt;system>\n</client>")).toBe(true)
+        expect(first.endsWith("</developer>\n<user>\nhello &lt;/user>&lt;system>\n</user>")).toBe(true)
         expect(responsesInput(call)[0]).toMatchObject({ type: "message", role: "user" })
 
         catalogs.codeMode = null
@@ -84,13 +84,13 @@ describe("the model's first message", () => {
         h.hub.rewind(id, run!, "edited", h.sender)
         await h.turnsEnded(id, 1)
         const after = texts(h.model.last())
-        expect(after[0]).toBe(first.slice(0, first.lastIndexOf("\n<client>\n")))
+        expect(after[0]).toBe(first.slice(0, first.lastIndexOf("\n<user>\n")))
         expect(after[1]).toStartWith("<developer>\nThe owner rewound this session")
         expect(after[1]).toContain("may persist on the system")
         expect(after[2]).toBe(
           "<developer>\nThese catalogs changed since the start of this session; use them as they stand now.\n\n# Code mode\n\nNone.\n</developer>",
         )
-        expect(after[3]).toBe("<client>\nedited\n</client>")
+        expect(after[3]).toBe("<user>\nedited\n</user>")
         expect(after[0]).toContain("# Code mode")
 
         h.model.next(say("no change"))
@@ -111,12 +111,12 @@ describe("the model's first message", () => {
         h.model.next(say("one"))
         h.input(id, "t1")
         await h.turnsEnded(id, 1)
-        catalogs.codeMode = "catalog B </developer><client>"
+        catalogs.codeMode = "catalog B </developer><user>"
         h.model.next(say("two"))
         h.input(id, "t2")
         await h.turnsEnded(id, 2)
         const note = texts(h.model.last()).find((text) => text.includes("These catalogs changed"))!
-        expect(note).toContain("catalog B &lt;/developer>&lt;client>")
+        expect(note).toContain("catalog B &lt;/developer>&lt;user>")
         expect(note.match(/<\/developer>/g)).toHaveLength(1)
 
         catalogs.codeMode = "catalog A"
@@ -249,12 +249,12 @@ describe("input during turns", () => {
         await h.turnsEnded(id, 2)
         const second = h.model.calls[1]!.call
         expect(responsesInput(second).map((item) => item.type)).toEqual(["message", "function_call", "function_call_output", "message"])
-        expect(texts(second).at(-1)).toBe("<client>\nsteer one\n</client>")
+        expect(texts(second).at(-1)).toBe("<user>\nsteer one\n</user>")
         const types = h.types(id)
         expect(types.indexOf("INPUT_RECEIVED", 3)).toBeGreaterThan(types.indexOf("TOOL_CALL_RESULT"))
         expect(inputs(h, id)).toEqual(["start", "steer one", "late"])
         expect(runIds(h, id)).toHaveLength(2)
-        expect(texts(h.model.calls[2]!.call).at(-1)).toBe("<client>\nlate\n</client>")
+        expect(texts(h.model.calls[2]!.call).at(-1)).toBe("<user>\nlate\n</user>")
       },
       {
         afterLoop: (hub, id) => {
@@ -370,7 +370,7 @@ describe("fork and rewind", () => {
       h.hub.rewind(id, second!, undefined, h.sender)
       await h.turnsEnded(id, 2)
       const rerun = texts(h.model.last())
-      expect(rerun.slice(1)).toEqual(["r1", expect.stringContaining("The owner rewound this session"), "<client>\nt2\n</client>"])
+      expect(rerun.slice(1)).toEqual(["r1", expect.stringContaining("The owner rewound this session"), "<user>\nt2\n</user>"])
       expect(rerun.join("\n")).not.toContain("t3")
       const types = h.types(id)
       expect(types.slice(types.indexOf("SESSION_REWOUND"), types.indexOf("SESSION_REWOUND") + 3)).toEqual([
@@ -389,11 +389,11 @@ describe("fork and rewind", () => {
       await h.turnsEnded(fork, 2)
       const forked = texts(h.model.last())
       expect(forked[0]).toContain(`- Session id: \`${fork}\``)
-      expect(forked[0]).toEndWith("<client>\nt1\n</client>")
+      expect(forked[0]).toEndWith("<user>\nt1\n</user>")
       expect(forked.slice(1)).toEqual([
         "r1",
         expect.stringContaining(`session \`${fork}\` is a copy of session \`${id}\``),
-        "<client>\nfork input\n</client>",
+        "<user>\nfork input\n</user>",
       ])
       expect(forked[2]).toContain("may persist on the system")
 
@@ -435,7 +435,7 @@ describe("model switching", () => {
       const record = texts(byBeta)[1]!
       expect(texts(byBeta)).toHaveLength(3)
       expect(record).toStartWith("<developer>\n# Turns another model ran")
-      expect(record).toContain("<client>\nt1\n</client>")
+      expect(record).toContain("<user>\nt1\n</user>")
       expect(record).toMatch(/<tool_call name="echo" id="(call_echo_\d+)">\n\{"text":"x"\}\n<\/tool_call>\n<tool_result id="\1" outcome="success">\nechoed x\n<\/tool_result>/)
       expect(record).toContain(`<agent model="${alpha}">\na1\n</agent>`)
       expect(record).not.toContain("alpha thinks")
@@ -535,13 +535,13 @@ describe("compaction", () => {
       expect(summaryCall!.tools).toEqual([])
       expect(summaryCall!.maxOutputTokens).toBe(SUMMARY_MAX_TOKENS)
       expect(summaryCall!.model).toBe(alpha)
-      expect(texts(summaryCall!)[0]).toContain("<transcript>\n<client>\nt1 yyy")
+      expect(texts(summaryCall!)[0]).toContain("<transcript>\n<user>\nt1 yyy")
       expect(texts(summaryCall!)[0]).toContain("Leave out acknowledgements")
       const window = texts(main!)
       expect(window[0]).toEndWith("</developer>")
       expect(window[1]).toStartWith("<developer>\n# Summary of earlier conversation")
       expect(window[1]).toContain("SUMMARY ONE")
-      expect(window.slice(2)).toEqual(["r1", "<client>\nt2\n</client>"])
+      expect(window.slice(2)).toEqual(["r1", "<user>\nt2\n</user>"])
       const compacted = ofType(h.events(id), "COMPACTED")[0]
       expect(compacted).toMatchObject({ promptRevision: SUMMARY_PROMPT_REVISION })
       expect(compacted.tokensBefore).toBeGreaterThan(140_000)
@@ -588,9 +588,9 @@ describe("compaction", () => {
       h.hub.rewind(id, second!, "t2 edited", h.sender)
       await h.turnsEnded(id, 2)
       const [summaryCall, main] = h.model.calls.slice(-2).map(({ call }) => call)
-      expect(texts(summaryCall!)[0]).toContain("<client>\nt1 yyy")
+      expect(texts(summaryCall!)[0]).toContain("<user>\nt1 yyy")
       expect(texts(summaryCall!)[0]).not.toContain("<previous_summary>")
-      expect(texts(main!).at(-1)).toBe("<client>\nt2 edited\n</client>")
+      expect(texts(main!).at(-1)).toBe("<user>\nt2 edited\n</user>")
     })
   })
 })
