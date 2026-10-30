@@ -186,7 +186,7 @@ describe("the agent loop", () => {
 
   test("built-in arguments are decoded, and other tools get the model's arguments unchanged", async () => {
     const received: Array<unknown> = []
-    const raw: Tool = {
+    const raw: Tool = { namespace: null, name: "raw",
       spec: { name: "raw", description: "Takes anything.", parameters: { type: "object" } },
       run: async (args) => {
         received.push(args)
@@ -475,7 +475,7 @@ describe("model switching", () => {
   })
 
   test("a turn's image decisions follow the model it started with", async () => {
-    const picture: Tool = {
+    const picture: Tool = { namespace: null, name: "picture",
       spec: { name: "picture", description: "Returns an image.", parameters: { type: "object" } },
       run: async () => ({
         outcome: "success",

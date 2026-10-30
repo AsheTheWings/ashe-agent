@@ -9,6 +9,8 @@ export interface ToolRun {
   readonly runId: string
   readonly toolCallId: string
   readonly cwd: string
+  /** Whether the turn's model takes images in tool results. */
+  readonly imageInput: boolean
   /** Aborted when the turn is canceled or the server stops. */
   readonly signal: AbortSignal
   /**
@@ -34,8 +36,14 @@ export type ToolResult =
   | { readonly outcome: "success" | "failed"; readonly content: ToolContent }
   | { readonly outcome: "declined"; readonly content: ToolContent; readonly endTurn: boolean }
 
-/** A tool the model can call. `run` receives the model's arguments, parsed from JSON and otherwise unchanged. */
+/**
+ * A tool the model can call. `run` receives the model's arguments, parsed
+ * from JSON and otherwise unchanged. A tool in a namespace is sent to
+ * models as `<namespace>_<name>`.
+ */
 export interface Tool {
+  readonly namespace: string | null
+  readonly name: string
   readonly spec: ToolSpec
   readonly run: (args: unknown, run: ToolRun) => Promise<ToolResult>
 }
@@ -53,25 +61,38 @@ export const draft07 = (schema: Schema.Top): Record<string, unknown> => {
  * A built-in tool: the model is offered the draft-07 JSON Schema of `args`,
  * and its arguments are decoded with `args` before `run`. Arguments that do
  * not decode give a failed result naming the problem, and `run` is not
- * called. With `permission`, the decoded call is authorized first; the call
- * is marked started just before `run`.
+ * called. With `permission`, the decoded call is authorized first, unless
+ * `permission` returns a result instead, which ends the call without
+ * running it; the call is marked started just before `run`.
  */
 export const builtinTool = <S extends Schema.Codec<unknown, unknown, never, never>>(definition: {
+  readonly namespace?: string
   readonly name: string
   readonly description: string
   readonly args: S
-  readonly permission?: (args: S["Type"], run: ToolRun) => PermissionCheck
+  readonly permission?: (args: S["Type"], run: ToolRun) => PermissionCheck | ToolResult | Promise<PermissionCheck | ToolResult>
   readonly run: (args: S["Type"], run: ToolRun) => Promise<ToolResult>
 }): Tool => {
   const decode = Schema.decodeUnknownExit(definition.args)
+  const namespace = definition.namespace ?? null
   return {
-    spec: { name: definition.name, description: definition.description, parameters: draft07(definition.args) },
+    namespace,
+    name: definition.name,
+    spec: {
+      name: namespace === null ? definition.name : `${namespace}_${definition.name}`,
+      description: definition.description,
+      parameters: draft07(definition.args),
+    },
     run: async (args, run) => {
       const decoded = decode(args)
       if (decoded._tag === "Failure") {
         return { outcome: "failed", content: `The arguments do not match the tool's schema: ${String(decoded.cause)}` }
       }
-      if (definition.permission !== undefined) await run.authorize(definition.permission(decoded.value, run))
+      if (definition.permission !== undefined) {
+        const check = await definition.permission(decoded.value, run)
+        if ("outcome" in check) return check
+        await run.authorize(check)
+      }
       run.started()
       return definition.run(decoded.value, run)
     },
