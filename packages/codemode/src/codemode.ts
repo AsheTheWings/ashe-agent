@@ -17,12 +17,14 @@ export type {
 } from "./tool-runtime.js"
 /** Signature-construction helpers for host-owned catalog instructions. */
 export { searchSignature, toolExpression } from "./tool-runtime.js"
+/** The execution's active-time clock, which host calls pause while they wait outside the program. */
+export { ActiveTime, uncounted } from "./interpreter/active-time.js"
 
 /** Resource budgets enforced independently during each CodeMode program execution. */
 export type ExecutionLimits = {
   /**
-   * Wall-clock milliseconds before interruption. Result delivery waits for tool cleanup.
-   * No default: absent means no timeout.
+   * Milliseconds of active time before interruption: wall-clock time outside the waits host calls
+   * mark with `uncounted`. Result delivery waits for tool cleanup. No default: absent means no timeout.
    */
   readonly timeoutMs?: number
   /** Maximum number of tool calls admitted by the runtime. No default: absent means unlimited. */
