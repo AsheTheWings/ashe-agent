@@ -2,7 +2,7 @@
  * Runs the repository's tasks under the pinned Bun, refusing any other
  * version, and runs tests with an explicit environment allowlist.
  */
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
@@ -54,7 +54,15 @@ const test = async (testClass: TestClass) => {
   const home = mkdtempSync(join(tmpdir(), "ashe-agent-test-home-"))
   try {
     const code = await run(
-      [process.execPath, "test", "--define", `ASHE_AGENT_TEST_SEED=${JSON.stringify(seed)}`, `.${testClass}.test.ts`],
+      [
+        process.execPath,
+        "test",
+        "--define",
+        `ASHE_AGENT_TEST_SEED=${JSON.stringify(seed)}`,
+        // test:test262 runs it over the corpus it fetches.
+        "--path-ignore-patterns=packages/codemode/test/test262.integration.test.ts",
+        `.${testClass}.test.ts`,
+      ],
       testEnvironment(home),
     )
     if (code !== 0 || testClass !== "integration") return code
@@ -66,6 +74,47 @@ const test = async (testClass: TestClass) => {
 }
 
 /** Typechecks the workspace, then `packages/codemode` under the compiler options it was written for. */
+/**
+ * Fetches tc39/test262 at the revision packages/codemode pins, copies its selection into a
+ * run-owned corpus, and runs code mode's test262 suite over it.
+ */
+const test262 = async () => {
+  const seed = testSeed()
+  process.stdout.write(`\n== code mode test262 (seed ${seed}) ==\n`)
+  const codemode = join(root, "packages/codemode")
+  const manifest = (await Bun.file(join(codemode, "test/test262/manifest.json")).json()) as { revision: string }
+  const run262 = mkdtempSync(join(tmpdir(), "ashe-agent-test262-"))
+  const checkout = join(run262, "test262")
+  const corpus = join(run262, "corpus")
+  mkdirSync(join(run262, "home"))
+  const env = testEnvironment(join(run262, "home"))
+  try {
+    for (const command of [
+      ["git", "init", "-q", checkout],
+      ["git", "-C", checkout, "fetch", "-q", "--depth", "1", "https://github.com/tc39/test262.git", manifest.revision],
+      ["git", "-C", checkout, "-c", "advice.detachedHead=false", "checkout", "-q", "FETCH_HEAD"],
+      [process.execPath, join(codemode, "script/sync-test262.ts"), checkout, corpus],
+    ]) {
+      const code = await run(command, env)
+      if (code !== 0) return code
+    }
+    return await run(
+      [
+        process.execPath,
+        "test",
+        "--define",
+        `ASHE_AGENT_TEST_SEED=${JSON.stringify(seed)}`,
+        "--define",
+        `ASHE_AGENT_TEST262_DIR=${JSON.stringify(corpus)}`,
+        "packages/codemode/test/test262.integration.test.ts",
+      ],
+      env,
+    )
+  } finally {
+    rmSync(run262, { recursive: true, force: true })
+  }
+}
+
 const typecheck = async () => {
   process.stdout.write("\n== typecheck ==\n")
   for (const project of ["tsconfig.json", "packages/codemode/tsconfig.json"]) {
@@ -81,6 +130,7 @@ const tasks: Record<string, () => Promise<number>> = {
   "test:component": () => test("component"),
   "test:integration": () => test("integration"),
   "test:conformance": () => test("conformance"),
+  "test:test262": test262,
   generate: () => run([process.execPath, join(root, "scripts/generate.ts")]),
   gate: async () => {
     for (const step of [typecheck, () => test("unit"), () => test("component"), () => test("conformance")]) {
