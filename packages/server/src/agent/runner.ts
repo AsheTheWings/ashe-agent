@@ -55,7 +55,7 @@ class TurnEvents {
   private reasoning: string | null = null
   private readonly streaming = new Map<number, string>()
   /** Tool calls of the turn the model made, by id, with whether they started and got a result. */
-  readonly calls = new Map<string, { started: boolean; answered: boolean }>()
+  readonly calls = new Map<string, { started: boolean; answered: boolean; cancelNote?: string }>()
   private closed = false
 
   constructor(private readonly context: TurnContext) {}
@@ -134,6 +134,12 @@ class TurnEvents {
     this.emit({ type: "TOOL_EXECUTION_STARTED", toolCallId: id })
   }
 
+  /** Sets the note a canceled result of the call carries. */
+  cancelNote(id: string, note: string) {
+    const call = this.calls.get(id)
+    if (call !== undefined) call.cancelNote = note
+  }
+
   result(id: string, content: ToolContent, outcome: ToolOutcome) {
     const call = this.calls.get(id)
     if (call !== undefined) call.answered = true
@@ -144,7 +150,9 @@ class TurnEvents {
   settle(outcome: "canceled" | "failed") {
     this.endCall()
     for (const [id, call] of this.calls) {
-      if (!call.answered) this.result(id, unfinishedResult(outcome, call.started), outcome)
+      if (call.answered) continue
+      const content = unfinishedResult(outcome, call.started)
+      this.result(id, outcome === "canceled" && call.cancelNote !== undefined ? `${content} ${call.cancelNote}` : content, outcome)
     }
   }
 
@@ -315,6 +323,7 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
             signal,
             authorize: (check) => context.authorize(callId, check, signal),
             started: () => events.started(callId),
+            onCancel: (note) => events.cancelNote(callId, note),
           })
         } catch (error) {
           if (signal.aborted) throw error

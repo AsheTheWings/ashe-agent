@@ -8,6 +8,8 @@ provider accepts namespaced or dotted tool names.
 | --- | --- | --- |
 | `file_read` | `read` | each file read, resolved |
 | `file_patch` | `edit` | each path the patch writes, reads to update, or removes, resolved |
+| `shell_exec_command` | `shell` | the command text, `cmd` |
+| `shell_write_stdin` | none | covered by the check of the command that started the process |
 
 [Permissions](permissions.md) explains how subjects are resolved and
 decided. A tool resolves its paths once, when the call is checked, and
@@ -85,3 +87,75 @@ when the turn's model is declared to take images, and as a result saying
 the model cannot view images otherwise. Text renderings of the
 conversation, such as records of another model's work and compaction
 input, show the image as `[image: <path>]`.
+
+## `shell_exec_command` and `shell_write_stdin`
+
+The shell tools follow Codex's `exec_command` and `write_stdin`, so a
+model trained on Codex uses them as it knows them. Codex's `session_id` is
+named `process_id`, and the arguments choosing a shell, an approval, a
+sandbox, or an environment are left out.
+
+`shell_exec_command` runs `cmd` in a new process of the server user's
+login shell, as `<shell> -lc <cmd>`, or `-c` when `login` is false. The
+shell is the one the user database gives the server's user, through
+`getent passwd`, or `/bin/sh` when it gives none; `SHELL` is not read. It
+runs on a pseudo-terminal when `tty` is true and on pipes otherwise, in
+`workdir` resolved against the session's working directory, else in that
+directory. The script the `ASHE_AGENT_SHELL_ENV_FILE` input names, when
+set, is sourced in each command's own shell, after its login startup.
+When the file is missing or unreadable, the command does not run and the
+result says why; when sourcing it returns a nonzero status, for example
+on a syntax error or because its last command failed, the command does
+not run and exits with code 126 after a line saying so. The login shell
+must accept POSIX `.`, `||`, and `{ …; }` syntax, as bash, zsh, and sh do.
+A command starts with the server's environment, without the server's own
+input variables.
+
+A command returns when it exits, with its exit code, or after
+`yield_time_ms`, clamped to 250 to 30,000 ms, with the output so far and a
+`process_id`. The process keeps running, and `shell_write_stdin` writes
+`chars` to it and returns the output since the last result. After a write
+it waits 250 ms by default and at most 30,000 ms; with empty `chars` it
+polls for 5,000 to 300,000 ms. Writing `\u0003` interrupts the process.
+No command has a timeout of its own.
+
+A result reads:
+
+```text
+Wall time: 1.0021 seconds
+Process running with process_id 48213
+Output:
+…
+```
+
+An exited process gives `Process exited with code <n>` instead. A result
+holds at most `max_output_tokens` estimated tokens, at four bytes each,
+else the `ASHE_AGENT_SHELL_MAX_OUTPUT_TOKENS` default: its head and tail
+around a `…<n> tokens truncated…` marker, after a warning and an
+`Original token count` line. Output no result has returned yet is kept up
+to 1 MiB per process the same way, with a `... <n> bytes omitted ...`
+marker.
+
+Processes belong to their session. A command runs in its own process
+group, so interrupting or ending it reaches what it started. Starting a
+process when the session holds `ASHE_AGENT_SHELL_MAX_PROCESSES` ends the
+least recently used one, an exited one first, sparing the eight most
+recently used, or all but one under a smaller limit. A cancel ends the
+waiting call, whose result gives the `process_id`, and leaves the process
+running. A rewind leaves processes running, a fork starts with none, and
+stopping the server ends them all, along with what exited commands left
+running in their process groups, whenever it was started. Each command's
+group holds a holder process, a `sleep` that ignores terminal and
+interrupt signals, so the group id stays the command's until the server
+ends it; the kernel never gives a live group's id to another process. The
+holder is ended once its command has exited and left nothing else in the
+group. A group whose holder was killed by someone else is never
+signaled. A server killed without the chance to stop, for example by
+SIGKILL, leaves them running, as it does a process that moved to a
+process group of its own. A write to a `process_id` that is gone says so.
+
+The `shell` permission is decided on the command text, so a rule such as
+`"git status*": "allow"` matches by how the command is written, not what
+it runs. Input written to a running process is not checked: an allowed
+command that reads its input, such as a shell or an interpreter, runs
+whatever is written to it.
