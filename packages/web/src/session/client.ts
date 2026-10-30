@@ -57,12 +57,22 @@ type AccessToken = { readonly token: string; readonly expiresAt: number }
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
+/** Tokens that arrived after a sign-in or sign-out began a new generation; they are dropped unstored. */
+class Superseded extends Error {
+  constructor() {
+    super("superseded by a later sign-in or sign-out")
+    this.name = "Superseded"
+  }
+}
+
 export class SessionClient {
   readonly store: StoreApi<ClientState>
   private readonly ports: SessionClientPorts
   private connection: Connection | null = null
   private access: AccessToken | null = null
   private refreshTimer: unknown = null
+  /** The connection of a refresh in progress, if any. */
+  private side: Connection | null = null
   private reconnectTimer: unknown = null
   private reconnectDelay = RECONNECT_FIRST_DELAY_MS
   /** Bumped on sign-in and sign-out, so work of an earlier connection ends quietly. */
@@ -123,6 +133,9 @@ export class SessionClient {
     const connection = this.connection
     this.connection = null
     connection?.close()
+    const side = this.side
+    this.side = null
+    side?.close()
   }
 
   private async connect(url: string, generation: number, password: string | null): Promise<void> {
@@ -141,7 +154,7 @@ export class SessionClient {
     this.connection = connection
     let principal: Sender
     try {
-      principal = await this.authenticate(connection, password)
+      principal = await this.authenticate(connection, password, generation)
     } catch (error) {
       if (!current()) return
       if (error instanceof ConnectionClosed && password === null) return
@@ -166,21 +179,21 @@ export class SessionClient {
   }
 
   /** Authenticates a new connection with the password, the access token, or the refresh token. */
-  private async authenticate(connection: Connection, password: string | null): Promise<Sender> {
+  private async authenticate(connection: Connection, password: string | null, generation: number): Promise<Sender> {
     const protocolVersion = PROTOCOL_VERSION
     if (password !== null) {
-      return this.accept(await connection.request("auth.login", { password, protocolVersion }))
+      return this.accept(await connection.request("auth.login", { password, protocolVersion }), generation)
     }
     const access = this.access
     if (access !== null && access.expiresAt - this.ports.now() > ACCESS_TOKEN_MIN_LIFE_MS) {
       const { principal } = await connection.request("auth.authenticate", { token: access.token, protocolVersion })
       return principal
     }
-    return await this.refreshOn(connection)
+    return await this.refreshOn(connection, generation)
   }
 
   /** Exchanges the stored refresh token on `connection`, holding the refresh lock throughout. */
-  private refreshOn(connection: Connection): Promise<Sender> {
+  private refreshOn(connection: Connection, generation: number): Promise<Sender> {
     return this.ports.withLock(REFRESH_LOCK, async () => {
       // Read inside the lock: another page may have just exchanged the token it held.
       const refreshToken = this.ports.storage.getItem(storageKeys.refreshToken)
@@ -188,11 +201,13 @@ export class SessionClient {
         throw new ProtocolError({ code: ErrorCode.authenticationFailed, message: "signed out" })
       }
       const tokens = await connection.request("auth.refresh", { refreshToken, protocolVersion: PROTOCOL_VERSION })
-      return this.accept(tokens)
+      return this.accept(tokens, generation)
     })
   }
 
-  private accept(tokens: Tokens): Sender {
+  /** Stores the tokens of `generation`, unless a sign-in or sign-out has begun another since. */
+  private accept(tokens: Tokens, generation: number): Sender {
+    if (generation !== this.generation) throw new Superseded()
     this.ports.storage.setItem(storageKeys.refreshToken, tokens.refreshToken)
     this.access = { token: tokens.accessToken, expiresAt: tokens.accessTokenExpiresAt }
     this.scheduleRefresh(tokens.accessTokenExpiresAt - REFRESH_MARGIN_MS - this.ports.now())
@@ -212,8 +227,9 @@ export class SessionClient {
     const url = this.state.serverUrl
     if (url === null) return
     const side = new Connection(url, this.ports, { onEvent: () => {}, onClose: () => {} })
+    this.side = side
     try {
-      await this.refreshOn(side)
+      await this.refreshOn(side, generation)
     } catch (error) {
       if (generation !== this.generation) return
       if (error instanceof ProtocolError && error.code === ErrorCode.authenticationFailed) {
@@ -223,6 +239,7 @@ export class SessionClient {
       }
       this.scheduleRefresh(REFRESH_RETRY_DELAY_MS)
     } finally {
+      if (this.side === side) this.side = null
       side.close()
     }
   }

@@ -4,6 +4,7 @@ import { ErrorCode } from "@ashe-agent/protocol"
 import { REFRESH_MARGIN_MS, SessionClient, storageKeys } from "../src/session/client.ts"
 import type { KeyValueStorage, SessionClientPorts, SocketHandlers } from "../src/session/ports.ts"
 import type { SessionView } from "../src/session/projection.ts"
+import { splitPending } from "../src/chat/pending-permissions.ts"
 
 type Request = { readonly id: number; readonly method: string; readonly params: Record<string, unknown> }
 type Answer = { readonly result: unknown } | { readonly error: { code: number; message: string } }
@@ -30,12 +31,15 @@ class FakeSocket {
     const request = JSON.parse(text) as Request
     this.requests.push(request)
     const answer = this.server.answer(request)
-    this.handlers.onMessage(JSON.stringify({ jsonrpc: "2.0", id: request.id, ...answer }))
+    const deliver = () => this.handlers.onMessage(JSON.stringify({ jsonrpc: "2.0", id: request.id, ...answer }))
+    if (this.server.held.has(request.method)) this.server.pending.push(deliver)
+    else deliver()
   }
+  /** Like a browser's, the close event arrives after `close()` returns, so a message already received may come first. */
   close() {
     if (this.closed) return
     this.closed = true
-    this.handlers.onClose(1000, "")
+    queueMicrotask(() => this.handlers.onClose(1000, ""))
   }
   /** The server sends one session event. */
   push(seq: number, event: SessionEventBody) {
@@ -55,6 +59,9 @@ class FakeSocket {
 /** A scripted server behind the socket port, issuing numbered token pairs. */
 class FakeServer {
   readonly sockets: Array<FakeSocket> = []
+  /** Methods whose answers wait in `pending` until the test delivers them. */
+  readonly held = new Set<string>()
+  readonly pending: Array<() => void> = []
   private issued = 0
   now = START
   answer(request: Request): Answer {
@@ -129,7 +136,7 @@ const fakePorts = (server: FakeServer) => {
     timers.delete(entry[0])
     entry[1].callback()
   }
-  return { ports, storage, fire }
+  return { ports, storage, fire, timers: () => timers.size }
 }
 
 /** Yields to pending promise reactions until `condition` holds, within a bounded number of turns. */
@@ -143,11 +150,11 @@ const until = async (what: string, condition: () => boolean) => {
 
 const signedIn = async () => {
   const server = new FakeServer()
-  const { ports, storage, fire } = fakePorts(server)
+  const { ports, storage, fire, timers } = fakePorts(server)
   const client = new SessionClient(ports)
   await client.signIn("ws://server.test/", "owner password")
   await until("models", () => client.store.getState().models.length > 0)
-  return { server, client, storage, fire }
+  return { server, client, storage, fire, timers }
 }
 
 const view = (client: SessionClient): SessionView => client.store.getState().views[SESSION]!
@@ -224,6 +231,24 @@ describe("session client", () => {
     expect(view(client).runId).toBeNull()
   })
 
+  test("two concurrent asks of one tool call both show until each is answered", async () => {
+    const { server, client } = await signedIn()
+    await client.open(SESSION)
+    const socket = server.last()
+    for (const [seq, event] of firstTurn) socket.push(seq, event)
+    socket.push(7, permission)
+    socket.push(8, { ...permission, requestId: "p2", subjects: ["pwd"], patterns: ["pwd *"] })
+    const shown = (current: SessionView) => {
+      const { byToolCall, queued } = splitPending(current.permissions)
+      return { approvals: [...byToolCall.values()].map((request) => request.requestId), queued: queued.map((request) => request.requestId) }
+    }
+    expect(shown(view(client))).toEqual({ approvals: ["p1"], queued: ["p2"] })
+    socket.push(9, { type: "PERMISSION_RESOLVED", requestId: "p1", answer: "once", sender })
+    expect(shown(view(client))).toEqual({ approvals: ["p2"], queued: [] })
+    socket.push(10, { type: "PERMISSION_WITHDRAWN", requestId: "p2", reason: "canceled" })
+    expect(shown(view(client))).toEqual({ approvals: [], queued: [] })
+  })
+
   test("a rewound event applied live removes its range before later events apply", async () => {
     const { server, client } = await signedIn()
     await client.open(SESSION)
@@ -274,5 +299,22 @@ describe("session client", () => {
     await until("the side connection to close", () => side.closed)
     expect(main.closed).toBe(false)
     expect(client.store.getState().status).toBe("connected")
+  })
+
+  test("tokens a refresh receives after sign-out are dropped, and no refresh stays scheduled", async () => {
+    const { server, client, storage, fire, timers } = await signedIn()
+    server.held.add("auth.refresh")
+    server.now += 15 * 60_000 - REFRESH_MARGIN_MS
+    fire(15 * 60_000 - REFRESH_MARGIN_MS)
+    await until("the refresh request", () => server.pending.length === 1)
+    const side = server.last()
+    client.signOut()
+    // The answer was already received when sign-out closed the side connection.
+    server.pending.shift()!()
+    await until("the side connection to close", () => side.closed)
+    for (let turn = 0; turn < 20; turn++) await null
+    expect(storage.entries.has(storageKeys.refreshToken)).toBe(false)
+    expect(timers()).toBe(0)
+    expect(client.store.getState().status).toBe("signedOut")
   })
 })
