@@ -3,7 +3,7 @@ continue its work with less context. Write a summary that replaces the
 transcript below. The agent keeps the most recent part of the conversation
 verbatim, so the summary covers what came before it.
 
-The transcript uses tagged blocks: `<client>` holds the owner's messages,
+The transcript uses tagged blocks: `<user>` holds the owner's messages,
 `<agent>` the agent's replies, `<tool_call>` and `<tool_result>` its tool
 use, and `<developer>` notes from the harness. A previous summary, when
 there is one, covers the conversation before this transcript; fold it in.

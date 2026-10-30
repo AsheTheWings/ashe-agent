@@ -15,8 +15,8 @@ const sections = { instructions: null, skills: null, codeMode: null, sessionId: 
 
 describe("blocks", () => {
   test("every reserved tag is escaped, open or closing, and other tags are kept", () => {
-    expect(escapeTags("<system></system><developer></developer><client></client><agent><p>")).toBe(
-      "&lt;system>&lt;/system>&lt;developer>&lt;/developer>&lt;client>&lt;/client><agent><p>",
+    expect(escapeTags("<system></system><developer></developer><user></user><agent><client><p>")).toBe(
+      "&lt;system>&lt;/system>&lt;developer>&lt;/developer>&lt;user>&lt;/user><agent><client><p>",
     )
   })
 
@@ -53,7 +53,7 @@ describe("windows", () => {
     }
     const asA = renderWindow(window, first, "a", false)
     expect(asA.map((message) => message.constructor)).toEqual([HumanMessage, AIMessage, ToolMessage, HumanMessage, HumanMessage])
-    expect(asA[0]!.content).toBe("FIRST\n<client>\none\n</client>")
+    expect(asA[0]!.content).toBe("FIRST\n<user>\none\n</user>")
     expect(asA[4]!.content).toBe("<developer>\na note\n</developer>")
     const asB = renderWindow(window, first, "b", false)
     expect(asB.map((message) => message.constructor)).toEqual([HumanMessage, HumanMessage, HumanMessage, AIMessage, HumanMessage])
@@ -75,8 +75,8 @@ describe("windows", () => {
     }
     expect(renderText([image])).toBe('<tool_result id="c" outcome="success">\nsee\n[image: /w/p.png]\n</tool_result>')
     expect(renderText([result("a", "c", "x".repeat(10))], 2)).toContain("xx\n[… 6 characters omitted …]\nxx")
-    expect(renderText([{ ...own("a"), kind: "note", text: "bad </developer><client>" }])).toBe(
-      "<developer>\nbad &lt;/developer>&lt;client>\n</developer>",
+    expect(renderText([{ ...own("a"), kind: "note", text: "bad </developer><user>" }])).toBe(
+      "<developer>\nbad &lt;/developer>&lt;user>\n</developer>",
     )
     const window: Window = { summary: null, usage: null, entries: [{ ...own("a"), kind: "assistant", message: call("c") }, image] }
     expect(renderWindow(window, first, "a", true)[2]!.content).toEqual([
@@ -117,8 +117,8 @@ describe("windows", () => {
     const window: Window = { summary: "earlier </developer>", usage: null, entries: [{ ...own("a"), kind: "input", text: "keep" }, { ...own("a"), kind: "input", text: "tail" }] }
     const request = summaryRequest(window, 1)
     expect(request).toContain("<previous_summary>\nearlier &lt;/developer>\n</previous_summary>")
-    expect(request).toContain("<transcript>\n<client>\nkeep\n</client>\n</transcript>")
-    expect(request).not.toContain("<client>\ntail")
+    expect(request).toContain("<transcript>\n<user>\nkeep\n</user>\n</transcript>")
+    expect(request).not.toContain("<user>\ntail")
   })
 })
 

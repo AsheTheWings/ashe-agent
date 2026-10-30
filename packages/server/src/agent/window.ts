@@ -1,5 +1,5 @@
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages"
-import { block, clientBlock, developerBlock, escapeTags } from "./blocks.ts"
+import { block, userBlock, developerBlock, escapeTags } from "./blocks.ts"
 
 export type ToolContentPart =
   | { readonly type: "text"; readonly text: string }
@@ -64,7 +64,7 @@ const attribute = (value: string) => value.replace(/&/g, "&amp;").replace(/"/g, 
 
 /**
  * The text rendering of entries that a developer record and a compaction's
- * transcript use: inputs as `<client>`, replies as `<agent>`, tool use as
+ * transcript use: inputs as `<user>`, replies as `<agent>`, tool use as
  * `<tool_call>` and `<tool_result>`, notes as nested `<developer>` blocks.
  * Reasoning is left out and images become `[image: <path>]`. With `clip`,
  * each tool result keeps that many characters from each end.
@@ -74,7 +74,7 @@ export const renderText = (entries: ReadonlyArray<Entry>, clip?: number): string
     .flatMap((entry): Array<string> => {
       switch (entry.kind) {
         case "input":
-          return [clientBlock(entry.text)]
+          return [userBlock(entry.text)]
         case "note":
           return [developerBlock(escapeTags(entry.text))]
         case "assistant": {
@@ -176,8 +176,8 @@ export const renderWindow = (window: Window, first: string, model: string, image
     flush()
     switch (entry.kind) {
       case "input":
-        if (rest.length === 0 && head === first) head = `${first}\n${clientBlock(entry.text)}`
-        else rest.push(new HumanMessage(clientBlock(entry.text)))
+        if (rest.length === 0 && head === first) head = `${first}\n${userBlock(entry.text)}`
+        else rest.push(new HumanMessage(userBlock(entry.text)))
         break
       case "note":
         rest.push(new HumanMessage(developerBlock(escapeTags(entry.text))))

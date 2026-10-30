@@ -43,18 +43,18 @@ The conversation reaches the model in tagged blocks inside user messages:
   changes.
 - `<developer>` holds the session's developer message, harness notes,
   summaries, and records of other models' turns.
-- `<client>` holds one user input.
+- `<user>` holds one user input.
 
 The first message of every call opens with the `<system>` block, then the
 `<developer>` block of the developer message, then the session's first
-input as a `<client>` block when it is in the window. Every later input is
-a `<client>` block in its own user message, and each harness note, such as
+input as a `<user>` block when it is in the window. Every later input is
+a `<user>` block in its own user message, and each harness note, such as
 a fork or a rewind, a `<developer>` block in its own user message. Tool
 calls and their results use the Responses API's function call and
 function call output items, never blocks.
 
 The server escapes each literal `<system>`, `</system>`, `<developer>`,
-`</developer>`, `<client>`, and `</client>` in the text it places in a
+`</developer>`, `<user>`, and `</user>` in the text it places in a
 block as `&lt;…>`, so only the server opens and closes blocks.
 
 ## The developer message
@@ -83,7 +83,7 @@ Each turn runs every model call with the model selected when it started.
 A call sends the turns that model ran as ordinary messages and items. Each
 run of consecutive turns other models ran becomes one user message
 holding a developer record: a `<developer>` block that holds each input as
-a `<client>` block, each reply as an `<agent model="…">` block, each tool
+a `<user>` block, each reply as an `<agent model="…">` block, each tool
 call and result as `<tool_call>` and `<tool_result>` blocks, and each
 harness note as a nested `<developer>` block. A record leaves out the
 other model's reasoning and shows each image a tool result carried as
