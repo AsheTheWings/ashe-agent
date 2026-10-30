@@ -21,5 +21,7 @@ A test's class is the suffix of its file name.
 
 `bun run typecheck` runs the TypeScript checker alone.
 
-Randomized tests print their seed in their names; setting
-`ASHE_AGENT_TEST_SEED` to it reruns them with the same values.
+Each test command prints the seed of its randomized tests, which also
+appears in their names. Setting `ASHE_AGENT_TEST_SEED` to it for a test
+command reruns them with the same values; the command gives the seed to
+the tests as a build-time constant, not through their environment.

@@ -26,24 +26,37 @@ const run = async (command: ReadonlyArray<string>, env?: Record<string, string>)
   return await child.exited
 }
 
-/**
- * The only environment a test process receives: no developer or production
- * inputs. ASHE_AGENT_TEST_SEED passes through to reproduce randomized tests.
- */
+/** The only environment a test process receives: no developer or production inputs. */
 const testEnvironment = (home: string): Record<string, string> => ({
   PATH: `${dirname(process.execPath)}:/usr/local/bin:/usr/bin:/bin`,
   HOME: home,
   TMPDIR: tmpdir(),
   LANG: "C.UTF-8",
   TZ: "UTC",
-  ...(process.env.ASHE_AGENT_TEST_SEED === undefined ? {} : { ASHE_AGENT_TEST_SEED: process.env.ASHE_AGENT_TEST_SEED }),
 })
 
+/**
+ * The seed of randomized tests: ASHE_AGENT_TEST_SEED when set, else a new
+ * one. It reaches tests as a build-time constant, not as process input.
+ */
+const testSeed = (): string => {
+  const given = process.env.ASHE_AGENT_TEST_SEED
+  if (given !== undefined && !/^\d+$/.test(given)) {
+    process.stderr.write("ASHE_AGENT_TEST_SEED must be a non-negative integer\n")
+    process.exit(1)
+  }
+  return given ?? String(Math.floor(Math.random() * 2 ** 31))
+}
+
 const test = async (testClass: TestClass) => {
-  process.stdout.write(`\n== ${testClass} tests ==\n`)
+  const seed = testSeed()
+  process.stdout.write(`\n== ${testClass} tests (seed ${seed}) ==\n`)
   const home = mkdtempSync(join(tmpdir(), "ashe-agent-test-home-"))
   try {
-    return await run([process.execPath, "test", `.${testClass}.test.ts`], testEnvironment(home))
+    return await run(
+      [process.execPath, "test", "--define", `ASHE_AGENT_TEST_SEED=${JSON.stringify(seed)}`, `.${testClass}.test.ts`],
+      testEnvironment(home),
+    )
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
