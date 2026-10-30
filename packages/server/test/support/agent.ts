@@ -185,7 +185,7 @@ export class AgentHarness {
 
   constructor(
     readonly options: {
-      readonly tools?: ReadonlyArray<Tool>
+      readonly tools?: ReadonlyArray<Tool> | (() => ReadonlyArray<Tool>)
       readonly setup?: SessionSetup
       readonly models?: ReadonlyArray<Model>
     /** The model port; the fake model by default. */

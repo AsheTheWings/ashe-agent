@@ -13,6 +13,7 @@ provider accepts namespaced or dotted tool names.
 | `web_search` | `web` | the query |
 | `web_fetch` | `web` | each URL |
 | `skill` | `skill` | the skill's name; [agents and skills](agents-and-skills.md) describes it |
+| `<server>_<tool>` | its registered name | `*` |
 
 [Permissions](permissions.md) explains how subjects are resolved and
 decided. A tool resolves its paths once, when the call is checked, and
@@ -184,3 +185,39 @@ An Exa request, its response body included, times out after 120 seconds.
 A failed one gives the model the HTTP status and Exa's error tag, or
 `timeout` or `unavailable` when no response arrived whole, never the key,
 the query, or the URLs.
+
+## MCP tools
+
+Each server under the `mcpServers` input is reached through the MCP
+TypeScript SDK, `@modelcontextprotocol/client`: a `stdio` entry runs its
+`command` with `args` as a child process of the server, as the server's
+user, with the server's environment, minus its own input variables, and
+the variables of its `envFile`; an `http` entry speaks Streamable HTTP to
+its `url`, sending the headers of its `headersFile`. Both files are
+protected files read when the server connects: an env file holds one
+`NAME=value` per line and a headers file one `Name: value` per line,
+blank lines and `#` comments aside. The server starts no OAuth flow.
+The client negotiates MCP revision 2026-07-28 and falls back to the
+2025-11-25 handshake for a server that does not support it; for a stdio
+server, negotiation runs on a short-lived second copy of its process.
+
+Servers connect in the background when the server starts. Once a server
+has listed its tools, each is registered as `<server>_<tool>`, with every
+character outside `A-Z`, `a-z`, `0-9`, `_`, and `-` replaced by `_`. When
+two tools, of one server or of two, register under the same name,
+neither is registered. A server takes only its own tools out of later
+model calls when it fails to connect, when its connection closes, or when
+a request to it fails and it then does not answer a fresh request for
+its tool list within 5 seconds; an answer, even an error response, keeps
+its tools. An HTTP server that goes away is noticed at its next request.
+Servers do not reconnect. Stopping the server closes every connection,
+those still connecting included, and ends stdio server processes. A
+server whose entry sets `codemode: false` offers its tools directly to
+the model; the tools of every other server are kept for code mode.
+
+An MCP tool call is decided under its registered name as the permission
+name, by the subject `*`, so `"docs_search": "ask"` asks before every
+call of that tool. A result's text parts come back as text, its images
+as images, and other parts as JSON, as is its structured content when it
+has no other parts; a result the server marks as an error is a failed
+result.

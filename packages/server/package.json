@@ -10,6 +10,10 @@
     "@langchain/langgraph": "1.5.3",
     "@langchain/langgraph-checkpoint": "1.2.1",
     "@langchain/openai": "1.8.0",
+    "@modelcontextprotocol/client": "2.4.0",
     "effect": "4.1.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/server": "2.4.0"
   }
 }
