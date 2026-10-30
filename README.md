@@ -9,7 +9,8 @@ owner's logins and API tokens and keeps durable sessions that several
 clients share, with steering, queueing, fork, and rewind. Its agent loop
 calls a model through the OpenAI Responses API, switches models within a
 session, and compacts long sessions. Its built-in tools read files,
-documents, and images, and edit files by patch.
+documents, and images, and edit files by patch. A web client in the
+browser signs in as the owner and works with sessions live.
 Nothing about it is stable yet, and its configuration,
 protocol, and storage may change incompatibly at any revision.
 
@@ -67,6 +68,8 @@ bun packages/server/src/main.ts serve
   permissions and limits of programs.
 - [Model context](docs/model-context.md): what each model call carries,
   model switching, and compaction.
+- [Web client](docs/web-client.md): running and building the web client,
+  signing in, and what it keeps in the browser.
 - [Telemetry](docs/telemetry.md): the traces, metrics, and logs the server
   emits, and where it exports them.
 - [Storage](docs/storage.md): the database, its migrations, and dumps.
