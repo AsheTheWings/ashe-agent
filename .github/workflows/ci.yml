@@ -28,3 +28,4 @@ jobs:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
       - run: bun run gate
+      - run: bun run test:integration

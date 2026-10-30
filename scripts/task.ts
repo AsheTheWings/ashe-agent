@@ -53,10 +53,13 @@ const test = async (testClass: TestClass) => {
   process.stdout.write(`\n== ${testClass} tests (seed ${seed}) ==\n`)
   const home = mkdtempSync(join(tmpdir(), "ashe-agent-test-home-"))
   try {
-    return await run(
+    const code = await run(
       [process.execPath, "test", "--define", `ASHE_AGENT_TEST_SEED=${JSON.stringify(seed)}`, `.${testClass}.test.ts`],
       testEnvironment(home),
     )
+    if (code !== 0 || testClass !== "integration") return code
+    process.stdout.write("\n== integration tests under Vitest ==\n")
+    return await run([process.execPath, "--bun", "x", "vitest", "run", "--globals"], testEnvironment(home))
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
@@ -70,6 +73,7 @@ const typecheck = async () => {
 const tasks: Record<string, () => Promise<number>> = {
   typecheck,
   "test:unit": () => test("unit"),
+  "test:integration": () => test("integration"),
   "test:conformance": () => test("conformance"),
   generate: () => run([process.execPath, join(root, "scripts/generate.ts")]),
   gate: async () => {
