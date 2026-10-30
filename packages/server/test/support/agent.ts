@@ -153,9 +153,9 @@ export const testTools = (): ReadonlyArray<Tool> => [
     name: "touch",
     description: "Asks the `edit` permission for its paths, resolved against the session directory.",
     args: Schema.Struct({ paths: Schema.Array(Schema.String) }),
-    permission: ({ paths }, run) => {
+    prepare: ({ paths }, run) => {
       const subjects = paths.map((path) => permissionPath(path, run.cwd))
-      return { permission: "edit", subjects, patterns: subjects }
+      return { check: { permission: "edit", subjects, patterns: subjects }, plan: undefined }
     },
     run: async ({ paths }) => ({ outcome: "success", content: `touched ${paths.join(" ")}` }),
   }),

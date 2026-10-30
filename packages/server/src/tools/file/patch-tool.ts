@@ -1,7 +1,6 @@
 import { Schema } from "effect"
 import { builtinTool, type Tool } from "../../agent/tools.ts"
-import { permissionPath } from "../../permissions/paths.ts"
-import { applyHunks, ApplyFailure, type PatchFiles } from "./apply.ts"
+import { applyHunks, ApplyFailure, diskPaths, locate, locatedPaths, type Located, type PatchFiles } from "./apply.ts"
 import { parse, PatchParseError, type Hunk } from "./patch.ts"
 // The description keeps the words of Codex's function-style `apply_patch` tool (Apache-2.0, see
 // test/fixtures/codex-apply-patch/LICENSE and NOTICE).
@@ -10,9 +9,6 @@ import description from "./patch-description.md" with { type: "text" }
 const Args = Schema.Struct({
   patch: Schema.String.annotate({ description: "The entire contents of the patch, from `*** Begin Patch` to `*** End Patch`." }),
 })
-
-/** The paths a hunk writes or removes, as the patch names them. */
-const hunkPaths = (hunk: Hunk) => (hunk.type === "update" && hunk.movePath !== undefined ? [hunk.path, hunk.movePath] : [hunk.path])
 
 const parsed = (patch: string): ReadonlyArray<Hunk> | string => {
   try {
@@ -26,26 +22,38 @@ const parsed = (patch: string): ReadonlyArray<Hunk> | string => {
 
 /**
  * `file_patch`: applies a patch in Codex's format, its paths resolved
- * against the session's starting working directory and authorized under
- * the `edit` permission as one call.
+ * against the session's starting working directory as the operating
+ * system walks them once, before any hunk runs, and authorized under the
+ * `edit` permission as one call for exactly the paths it then reads,
+ * writes, and removes. When the paths resolve differently by the time the
+ * call runs, nothing is changed.
  */
 export const filePatchTool = (files?: PatchFiles): Tool =>
-  builtinTool({
+  builtinTool<typeof Args, ReadonlyArray<Located>>({
     namespace: "file",
     name: "patch",
     description,
     args: Args,
-    permission: ({ patch }, run) => {
+    prepare: ({ patch }, run) => {
       const hunks = parsed(patch)
       if (typeof hunks === "string") return { outcome: "failed", content: hunks }
-      const subjects = [...new Set(hunks.flatMap(hunkPaths).map((path) => permissionPath(path, run.cwd)))]
-      return { permission: "edit", subjects, patterns: subjects }
+      const located = locate(hunks, diskPaths(run.cwd))
+      const subjects = locatedPaths(located)
+      return { check: { permission: "edit", subjects, patterns: subjects }, plan: located }
     },
-    run: async ({ patch }, run) => {
-      const hunks = parsed(patch) as ReadonlyArray<Hunk>
+    run: async ({ patch }, run, located) => {
+      const now = locatedPaths(locate(parsed(patch) as ReadonlyArray<Hunk>, diskPaths(run.cwd)))
+      const authorized = locatedPaths(located)
+      const moved = authorized.filter((path, index) => now[index] !== path)
+      if (moved.length > 0 || now.length !== authorized.length) {
+        return {
+          outcome: "failed",
+          content: `The patch was not applied: its paths resolve differently than when it was authorized (${moved.join(", ")}). Nothing was changed.`,
+        }
+      }
       const summary = (applied: ReadonlyArray<{ kind: string; path: string }>) => applied.map((item) => `${item.kind} ${item.path}`)
       try {
-        const applied = await applyHunks(hunks, run.cwd, files)
+        const applied = await applyHunks(located, files)
         return { outcome: "success", content: ["Success. Updated the following files:", ...summary(applied)].join("\n") }
       } catch (error) {
         if (!(error instanceof ApplyFailure)) throw error

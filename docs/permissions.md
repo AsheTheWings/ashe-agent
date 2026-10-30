@@ -38,7 +38,8 @@ or is refused until the rules say so.
 
 Each tool names the permission it asks under and the subjects of a call,
 such as paths, commands, or URLs, along with the patterns an `always`
-answer grants. A call with several subjects is decided per subject, then
+answer grants; [tools](tools.md) lists them. A call with several subjects
+is decided per subject, then
 as a whole: any denied subject refuses the whole call, else any asked
 subject raises one request naming the asked subjects, else the call runs.
 
@@ -48,6 +49,9 @@ resolves them, so a relative or linked path is decided by the file it
 reaches, and a `..` after a symlink leaves the symlink's target. A part of
 the path that does not exist yet is kept as written, and a dangling
 symlink is replaced by the path it points to.
+A path a call removes or renames is decided as the directory entry it
+names: every part but the last resolves this way, and the last is kept,
+so a symlink is decided as the link itself.
 
 ## Denials and requests
 
