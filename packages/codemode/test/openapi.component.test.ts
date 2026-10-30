@@ -672,7 +672,7 @@ describe("OpenAPI.fromSpec", () => {
     const definitions = isRecord(tool.input.$defs) ? tool.input.$defs : {}
     const leaf = isRecord(definitions[`C${depth - 1}`]) ? definitions[`C${depth - 1}`] : {}
 
-    expect(Object.keys(isRecord(leaf.properties) ? leaf.properties : {})).toEqual(["name"])
+    expect(Object.keys(isRecord(leaf?.properties) ? leaf.properties : {})).toEqual(["name"])
   })
 
   test("resolves hiding through reference cycles regardless of evaluation order", () => {

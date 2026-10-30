@@ -1,9 +1,9 @@
 {
   "compilerOptions": {
-    "target": "ES2024",
+    "target": "ESNext",
     "module": "Preserve",
     "moduleResolution": "bundler",
-    "lib": ["ES2024"],
+    "lib": ["ESNext"],
     "types": ["bun"],
     "strict": true,
     "exactOptionalPropertyTypes": true,
@@ -15,6 +15,5 @@
     "skipLibCheck": true,
     "isolatedModules": true
   },
-  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "scripts/**/*.ts", "test/**/*.ts"],
-  "exclude": ["packages/codemode/**"]
+  "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "scripts/**/*.ts", "test/**/*.ts"]
 }

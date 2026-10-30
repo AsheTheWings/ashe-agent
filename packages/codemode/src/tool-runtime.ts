@@ -335,7 +335,7 @@ const resolve = <R>(root: ToolNode<R>, path: ReadonlyArray<string>, index: Reado
   const node = lookup(root, segments)
   if (node === undefined) {
     const name = segments.join(".")
-    const ns = segments.length > 1 && root.children.has(segments[0]) ? segments[0] : undefined
+    const ns = segments.length > 1 && root.children.has(segments[0]!) ? segments[0] : undefined
     const closest = rank(
       ns ? index.filter((entry) => entry.description.path.startsWith(`${ns}.`)) : index,
       ns ? segments.slice(1).join(" ") : name,

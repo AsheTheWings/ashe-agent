@@ -1328,8 +1328,8 @@ describe("promise construction", () => {
     if (!result.ok) return
     expect(result.value).toBe("done")
     expect(result.warnings).toHaveLength(1)
-    expect(result.warnings?.[0].message).toContain("Unhandled rejection")
-    expect(result.warnings?.[0].message).toContain("dropped")
+    expect(result.warnings?.[0]?.message).toContain("Unhandled rejection")
+    expect(result.warnings?.[0]?.message).toContain("dropped")
   })
 
   test("resolver functions vanish at the data boundary like JSON.stringify", async () => {

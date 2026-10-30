@@ -34,11 +34,15 @@ const isEffectEmptyStruct = (schema: JsonSchema) =>
 const intersection = (members: ReadonlyArray<string>): string => {
   const concrete = members.filter((member) => member !== "unknown")
   if (concrete.length === 0) return "unknown"
-  if (concrete.length === 1) return concrete[0]
+  if (concrete.length === 1) return concrete[0]!
   return concrete.map((member) => (member.includes(" | ") ? `(${member})` : member)).join(" & ")
 }
 
 const MAX_RENDER_DEPTH = 8
+
+/** `schema` without the given keywords. */
+const without = (schema: JsonSchema, ...keys: ReadonlyArray<keyof JsonSchema>): JsonSchema =>
+  Object.fromEntries(Object.entries(schema).filter(([key]) => !keys.includes(key as keyof JsonSchema))) as JsonSchema
 
 type RenderContext = {
   readonly definitions: Readonly<Record<string, JsonSchema>>
@@ -104,7 +108,7 @@ const docLines = (schema: JsonSchema, width: number): Array<string> => {
   const lines = (schema.description ?? "").split("\n").map((line) => line.replace(/\s+$/, ""))
   while (lines.length > 0 && lines[0]!.trim() === "") lines.shift()
   while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") lines.pop()
-  const inline = lines.length === 1 ? `${lines[0]}${lines[0].endsWith(".") ? "" : "."} ${summary}` : summary
+  const inline = lines.length === 1 ? `${lines[0]}${lines[0]!.endsWith(".") ? "" : "."} ${summary}` : summary
   return summary && lines.length === 1 && !summary.includes("\n") && width + inline.length + 7 <= 120
     ? [inline]
     : [...lines, ...(summary ? summary.split("\n") : [])]
@@ -134,7 +138,7 @@ const jsdoc = (schema: JsonSchema, pad: string): string => {
 
   if (content.length === 0) return ""
   const escaped = content.map((line) => line.replaceAll("*/", "* /"))
-  if (escaped.length === 1 && pad.length + escaped[0].length + 7 <= 120) return `${pad}/** ${escaped[0]} */\n`
+  if (escaped.length === 1 && pad.length + escaped[0]!.length + 7 <= 120) return `${pad}/** ${escaped[0]} */\n`
   const body = escaped.map((line) => `${pad} *${line === "" ? "" : ` ${line}`}`).join("\n")
   return `${pad}/**\n${body}\n${pad} */\n`
 }
@@ -154,8 +158,8 @@ const renderSchema = (
     const name = definitionName(schema.$ref)
     if (!name || !nested.definitions[name] || seen.has(name)) return "unknown"
     return intersection([
-      renderSchema(nested.definitions[name], nested, depth, new Set([...seen, name])),
-      renderSchema({ ...schema, $ref: undefined }, nested, depth + 1, seen),
+      renderSchema(nested.definitions[name]!, nested, depth, new Set([...seen, name])),
+      renderSchema(without(schema, "$ref"), nested, depth + 1, seen),
     ])
   }
   if (schema.const !== undefined) return renderLiteral(schema.const)
@@ -186,13 +190,13 @@ const renderSchema = (
     if (members.some((member) => member === "unknown")) return "unknown"
     return intersection([
       members.join(" | "),
-      renderSchema({ ...schema, anyOf: undefined, oneOf: undefined }, nested, depth + 1, seen),
+      renderSchema(without(schema, "anyOf", "oneOf"), nested, depth + 1, seen),
     ])
   }
   if (schema.allOf) {
     if (schema.allOf.some((item) => hasUnresolvedRef(item, nested.definitions))) return "unknown"
     const members = schema.allOf.map((item) => renderSchema(item, nested, depth + 1, seen))
-    return intersection([renderSchema({ ...schema, allOf: undefined }, nested, depth + 1, seen), ...members])
+    return intersection([renderSchema(without(schema, "allOf"), nested, depth + 1, seen), ...members])
   }
   if (Array.isArray(schema.type)) {
     return schema.type.map((item) => renderSchema({ ...schema, type: item }, nested, depth + 1, seen)).join(" | ")

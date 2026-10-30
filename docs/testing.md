@@ -34,9 +34,7 @@ integration suite over the files the manifest selects, skipping those
 integration commands leave that suite out. It needs network access, so it
 stays out of the fast gate; CI runs it after the integration tests.
 
-`bun run typecheck` runs the TypeScript checker alone, over the
-workspace and then over `packages/codemode` with that package's own
-compiler options.
+`bun run typecheck` runs the TypeScript checker alone.
 
 Each test command prints the seed of its randomized tests, which also
 appears in their names. Setting `ASHE_AGENT_TEST_SEED` to it for a test

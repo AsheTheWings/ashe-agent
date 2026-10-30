@@ -117,11 +117,7 @@ const test262 = async () => {
 
 const typecheck = async () => {
   process.stdout.write("\n== typecheck ==\n")
-  for (const project of ["tsconfig.json", "packages/codemode/tsconfig.json"]) {
-    const code = await run([join(root, "node_modules/.bin/tsc"), "-p", project])
-    if (code !== 0) return code
-  }
-  return 0
+  return await run([join(root, "node_modules/.bin/tsc"), "-p", "tsconfig.json"])
 }
 
 const tasks: Record<string, () => Promise<number>> = {
