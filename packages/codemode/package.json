@@ -1,0 +1,15 @@
+{
+  "name": "@ashe-agent/codemode",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Effect-native confined code execution over schema-described tools",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "acorn": "8.15.0",
+    "effect": "4.1.0"
+  }
+}

@@ -65,9 +65,14 @@ const test = async (testClass: TestClass) => {
   }
 }
 
+/** Typechecks the workspace, then `packages/codemode` under the compiler options it was written for. */
 const typecheck = async () => {
   process.stdout.write("\n== typecheck ==\n")
-  return await run([join(root, "node_modules/.bin/tsc"), "-p", "tsconfig.json"])
+  for (const project of ["tsconfig.json", "packages/codemode/tsconfig.json"]) {
+    const code = await run([join(root, "node_modules/.bin/tsc"), "-p", project])
+    if (code !== 0) return code
+  }
+  return 0
 }
 
 const tasks: Record<string, () => Promise<number>> = {
