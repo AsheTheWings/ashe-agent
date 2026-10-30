@@ -6,9 +6,9 @@ their environment, so no developer or production input reaches them.
 
 ## Fast gate
 
-`bun run gate` typechecks the repository and runs the unit and conformance
-tests. CI runs it on every push, on every pull request that is not a
-draft, and on manual dispatch.
+`bun run gate` typechecks the repository and runs the unit, component,
+and conformance tests. CI runs it on every push, on every pull request
+that is not a draft, and on manual dispatch.
 
 ## Test classes
 
@@ -17,6 +17,7 @@ A test's class is the suffix of its file name.
 | Class | File suffix | Command | Boundary |
 | --- | --- | --- | --- |
 | unit | `.unit.test.ts` | `bun run test:unit` | pure functions: no filesystem, sockets, processes, process configuration, or waits |
+| component | `.component.test.ts` | `bun run test:component` | the session hub and agent loop in the test's process, with a fake model port and fake tools, on a SQLite file in the test's own temporary directory |
 | integration | `.integration.test.ts`, `.integration.vitest.ts` | `bun run test:integration` | real SQLite files, `ashe-agent` processes, and WebSocket connections the test creates in its own temporary directory |
 | conformance | `.conformance.test.ts` | `bun run test:conformance` | read-only checks that generated files, pins, and versions match their sources |
 

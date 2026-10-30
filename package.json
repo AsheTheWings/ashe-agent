@@ -11,6 +11,7 @@
     "gate": "bun scripts/task.ts gate",
     "typecheck": "bun scripts/task.ts typecheck",
     "test:unit": "bun scripts/task.ts test:unit",
+    "test:component": "bun scripts/task.ts test:component",
     "test:integration": "bun scripts/task.ts test:integration",
     "test:conformance": "bun scripts/task.ts test:conformance",
     "generate": "bun scripts/task.ts generate"
