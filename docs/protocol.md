@@ -29,7 +29,8 @@ The request is `auth.login` with the owner password, `auth.refresh` with a
 refresh token, or `auth.authenticate` with an access token or an API
 token. A server that does not support the stated version answers with the
 `unsupportedVersion` error, whose `data.supportedVersions` lists the
-versions it does support.
+versions it does support. [Authentication](authentication.md) covers the
+rules for a connection's first message.
 
 ## Session events
 

@@ -1,4 +1,5 @@
 import m0001 from "../../migrations/0001_checkpoints.sql" with { type: "text" }
+import m0002 from "../../migrations/0002_credentials.sql" with { type: "text" }
 
 /**
  * The migration directory `packages/server/migrations`, embedded so a
@@ -7,4 +8,5 @@ import m0001 from "../../migrations/0001_checkpoints.sql" with { type: "text" }
  */
 export const migrationFiles: ReadonlyArray<{ readonly file: string; readonly sql: string }> = [
   { file: "0001_checkpoints.sql", sql: m0001 },
+  { file: "0002_credentials.sql", sql: m0002 },
 ]
