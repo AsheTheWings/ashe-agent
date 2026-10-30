@@ -115,9 +115,26 @@ const test262 = async () => {
   }
 }
 
+/** Checks the workspace, then the web client's browser sources under their own config. */
 const typecheck = async () => {
   process.stdout.write("\n== typecheck ==\n")
-  return await run([join(root, "node_modules/.bin/tsc"), "-p", "tsconfig.json"])
+  const tsc = join(root, "node_modules/.bin/tsc")
+  const code = await run([tsc, "-p", "tsconfig.json"])
+  return code !== 0 ? code : await run([tsc, "-p", "packages/web/tsconfig.json"])
+}
+
+/**
+ * Builds the web client from the checked-out commit, stamping its revision;
+ * a worktree with changes would build something no commit holds, so it is refused.
+ */
+const buildWeb = async () => {
+  process.stdout.write("\n== web build ==\n")
+  const git = (...args: Array<string>) => Bun.spawnSync(["git", ...args], { cwd: root }).stdout.toString().trim()
+  if (git("status", "--porcelain") !== "") {
+    process.stderr.write("the web build stamps the commit it is built from; commit or set aside the changes first\n")
+    return 1
+  }
+  return await run([process.execPath, join(root, "packages/web/scripts/build.ts"), git("rev-parse", "HEAD")])
 }
 
 const tasks: Record<string, () => Promise<number>> = {
@@ -127,6 +144,7 @@ const tasks: Record<string, () => Promise<number>> = {
   "test:integration": () => test("integration"),
   "test:conformance": () => test("conformance"),
   "test:test262": test262,
+  "build:web": buildWeb,
   generate: () => run([process.execPath, join(root, "scripts/generate.ts")]),
   gate: async () => {
     for (const step of [typecheck, () => test("unit"), () => test("component"), () => test("conformance")]) {

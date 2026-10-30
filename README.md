@@ -15,9 +15,11 @@ protocol, and storage may change incompatibly at any revision.
 
 ## Repository
 
-The repository is a Bun workspace. `packages/server` holds the server's
-input layer, store, WebSocket server, agent loop, and the `ashe-agent`
-command, and `packages/protocol` the protocol's message schemas.
+The repository is a Bun workspace of four packages. `packages/server`
+holds the server's input layer, store, WebSocket server, agent loop, and
+the `ashe-agent` command; `packages/protocol` the protocol's message
+schemas; `packages/codemode` the interpreter that runs code mode
+programs; and `packages/web` the web client.
 
 ## Set up
 
