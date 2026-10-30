@@ -45,8 +45,8 @@ events in the same transaction as its final event.
 
 Every tool call gets exactly one result before the session's next model
 call: its own, or a failed one saying it was canceled, declined,
-interrupted, or failed. `TOOL_EXECUTION_STARTED` marks a call the server
-started running.
+interrupted, or failed with its turn, and whether it had started.
+`TOOL_EXECUTION_STARTED` marks a call the server started running.
 
 ## Fork and rewind
 
