@@ -10,24 +10,91 @@ on:
 permissions:
   contents: read
 
+env:
+  ORAS_URL: https://github.com/oras-project/oras/releases/download/v1.3.5/oras_1.3.5_linux_amd64.tar.gz
+  ORAS_ARCHIVE_SHA256: f48a73ea6d026a862c3919fc773da9a8c86fc259c2c737d5baed3b8b9614ad22
+  ORAS_SHA256: 7c43d74f5f64c94932b31c76103bb7f48af837fe8aa5316fba7968b6c523350e
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  gate:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+  # Pull request runs test, build, and qualify the bundle but never get a token.
+  verify:
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: ./.github/actions/qualify
+
+  # Push and dispatch runs on the repository's branches publish the bundle this job qualified.
+  publish:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          bun-version-file: .bun-version
-      - run: bun install --frozen-lockfile
-      - run: bun run gate
-      - run: bun run test:integration
-      - run: bun run test:test262
-      - run: bun run build:web
+          persist-credentials: false
+      - id: qualify
+        uses: ./.github/actions/qualify
+      - name: Install the pinned oras
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/oras"
+          curl -fsSL -o "$RUNNER_TEMP/oras/oras.tar.gz" "$ORAS_URL"
+          echo "$ORAS_ARCHIVE_SHA256  $RUNNER_TEMP/oras/oras.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/oras/oras.tar.gz" -C "$RUNNER_TEMP/oras" oras
+          echo "$ORAS_SHA256  $RUNNER_TEMP/oras/oras" | sha256sum -c -
+      - name: Publish the qualified bundle
+        env:
+          ARTIFACT_REGISTRY: ${{ vars.ARTIFACT_REGISTRY }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          BUNDLE: ${{ steps.qualify.outputs.bundle }}
+          DIGEST: ${{ steps.qualify.outputs.digest }}
+          ORAS: ${{ runner.temp }}/oras/oras
+        run: |
+          set -euo pipefail
+          if [ -z "$ARTIFACT_REGISTRY" ]; then
+            echo "the repository variable ARTIFACT_REGISTRY names no registry" >&2
+            exit 1
+          fi
+          case "$GITHUB_REF" in
+            "refs/heads/$DEFAULT_BRANCH") area=default ;;
+            refs/heads/*) area=branches ;;
+            *) echo "only branches publish" >&2; exit 1 ;;
+          esac
+          audience="$(jq -rn --arg a "https://$ARTIFACT_REGISTRY" '$a | @uri')"
+          token="$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$audience" | jq -r .value)"
+          echo "::add-mask::$token"
+          created="$(TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ "$GITHUB_SHA")"
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT"
+          reference="$ARTIFACT_REGISTRY/${GITHUB_REPOSITORY#*/}/$area:$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir "$RUNNER_TEMP/oras-config"
+          cd "$(dirname "$BUNDLE")"
+          manifest="$(printf '%s' "$token" | "$ORAS" push -u oidc --password-stdin \
+            --registry-config "$RUNNER_TEMP/oras-config/registry-config.json" \
+            --annotation "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --annotation "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --annotation "org.opencontainers.image.url=$run_url" \
+            --annotation "org.opencontainers.image.created=$created" \
+            --export-manifest "$RUNNER_TEMP/manifest.json" \
+            --format go-template='{{.digest}}' \
+            "$reference" "$(basename "$BUNDLE")")"
+          # The pushed manifest must be the one exported, and its only layer the qualified bundle.
+          test "sha256:$(sha256sum "$RUNNER_TEMP/manifest.json" | cut -d ' ' -f 1)" = "$manifest"
+          layers="$(jq -r '[.layers[].digest] | join(" ")' "$RUNNER_TEMP/manifest.json")"
+          if [ "$layers" != "sha256:$DIGEST" ]; then
+            echo "the pushed layers $layers are not the qualified bundle sha256:$DIGEST" >&2
+            exit 1
+          fi
+          echo "Published $reference"
+          echo "SHA-256: ${manifest#sha256:}"

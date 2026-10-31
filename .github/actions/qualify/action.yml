@@ -1,0 +1,47 @@
+name: Test, build, and qualify the bundle
+description: >-
+  Run the fast gate and the other test commands, build the bundle from the
+  checked-out commit, and qualify that exact bundle in the calling job.
+
+outputs:
+  bundle:
+    description: Path of the qualified bundle
+    value: ${{ steps.bundle.outputs.bundle }}
+  digest:
+    description: SHA-256 of the qualified bundle
+    value: ${{ steps.bundle.outputs.digest }}
+
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      with:
+        bun-version-file: .bun-version
+    - shell: bash
+      run: bun install --frozen-lockfile
+    - shell: bash
+      run: bun run gate
+    - shell: bash
+      run: bun run test:integration
+    - shell: bash
+      run: bun run test:test262
+    - name: Build the bundle
+      id: bundle
+      shell: bash
+      run: |
+        set -euo pipefail
+        bun run bundle
+        bundle="$PWD/dist/ashe-agent-linux-x64.tar"
+        echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+        echo "digest=$(sha256sum "$bundle" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+    - name: Qualify the bundle
+      shell: bash
+      env:
+        BUNDLE: ${{ steps.bundle.outputs.bundle }}
+        DIGEST: ${{ steps.bundle.outputs.digest }}
+      run: |
+        set -euo pipefail
+        bun run test:qualification "$BUNDLE"
+        # Publishing checks the pushed layer against this digest, so qualification fails if the file changed.
+        test "$(sha256sum "$BUNDLE" | cut -d ' ' -f 1)" = "$DIGEST"
+        echo "Qualified bundle: $(basename "$BUNDLE") sha256:$DIGEST"
