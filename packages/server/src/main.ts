@@ -29,7 +29,9 @@ declare const ASHE_AGENT_REVISION: string | undefined
 /** The commit the binary was built from, stamped at build time. */
 const revision = typeof ASHE_AGENT_REVISION === "undefined" ? "unknown" : ASHE_AGENT_REVISION
 
-const usage = `usage: ashe-agent <command>
+const usage = `AsheAgent, a single-owner agent server
+
+usage: ashe-agent <command>
 
 commands:
   serve                    run the server
@@ -40,7 +42,7 @@ commands:
   token create <name>      create an API token and print it once
   token list               list active API tokens
   token revoke <name>      revoke an API token
-  --version                print the revision this binary was built from
+  --version                print AsheAgent and the revision this binary was built from
 `
 
 /** Exit codes: 1 for a failed command, 2 for invalid inputs, 64 for a usage error. */
@@ -274,7 +276,7 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
 
 const [name, ...args] = process.argv.slice(2)
 if (name === "--version" || name === "version") {
-  process.stdout.write(`${revision}\n`)
+  process.stdout.write(`AsheAgent ${revision}\n`)
 } else if (name === undefined || name === "--help" || name === "help") {
   process.stdout.write(usage)
 } else {

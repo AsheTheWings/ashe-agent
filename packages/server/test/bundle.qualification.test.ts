@@ -57,7 +57,8 @@ describe("the bundle", () => {
   test("holds the binary and the web build of one revision", async () => {
     const version = Bun.spawnSync([binary, "--version"], { env: { PATH: process.env.PATH ?? "/usr/bin:/bin" } })
     expect(version.exitCode).toBe(0)
-    const revision = version.stdout.toString().trim()
+    const [product, revision = ""] = version.stdout.toString().trim().split(" ")
+    expect(product).toBe("AsheAgent")
     expect(revision).toMatch(/^[0-9a-f]{40}$/)
     expect(existsSync(join(extracted, "web/index.html"))).toBe(true)
     expect(readFileSync(join(extracted, "web/revision.txt"), "utf8").trim()).toBe(revision)
