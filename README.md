@@ -53,8 +53,8 @@ bun packages/server/src/main.ts owner set-password
 bun packages/server/src/main.ts serve
 ```
 
-`serve` also needs the model API key file and the model list; see
-[configuration](docs/configuration.md).
+`serve` also needs the providers, with each provider's API key file, and
+the default model; see [configuration](docs/configuration.md).
 
 ## Documentation
 
@@ -70,8 +70,8 @@ bun packages/server/src/main.ts serve
   rewind, and restarts.
 - [Permissions](docs/permissions.md): how permission rules decide tool
   calls, and how clients answer permission requests.
-- [Agents and skills](docs/agents-and-skills.md): global instructions,
-  agent files, and skills, and where the server reads them.
+- [Agents and skills](docs/agents-and-skills.md): agents, title files,
+  user instructions, and skills, and where the server reads them.
 - [Tools](docs/tools.md): the built-in tools, their permissions, and what
   they read and write.
 - [Code mode](docs/code-mode.md): the `execute` tool, its catalog, and the

@@ -34,6 +34,22 @@ written, and the last rule matching both its permission name and its
 subject decides. A call that no rule matches is allowed, so nothing asks
 or is refused until the rules say so.
 
+## Withheld tools
+
+A tool the session's rules wholly deny is not offered: the model never
+sees it, and a code mode program cannot call it. A rule wholly denies a
+tool when the last rule matching the tool's permission name is a deny for
+the pattern `*`, so a later, narrower allow keeps the tool offered and
+its calls are decided one by one. A tool without a permission of its
+own, such as `shell_write_stdin`, is matched by its own name.
+
+An MCP server's tools ask under their own names, `<server>_<tool>`, so
+`"docs_*": "deny"` withholds every tool of the server `docs`. Wholly
+denying `execute` withholds code mode with its catalog, and the catalog
+leaves out each tool the rules wholly deny. The developer message's
+Skills section leaves out each skill denied under the `skill`
+permission.
+
 ## Subjects
 
 Each tool names the permission it asks under and the subjects of a call,

@@ -1,54 +1,82 @@
 # Agents, instructions, and skills
 
-A session's instructions, its agent, and the skills its model can load
-all come from the server user's configuration, never from the session's
+A session's user instructions, its agent, and the skills its model can
+load all come from the server user's configuration, never from the session's
 directory: the server reads no `AGENTS.md`, `CLAUDE.md`, or skill
 directory there or in its ancestors.
 
-## Global instructions
-
-A session created without an agent records the content of the global
-instructions file, `ASHE_AGENT_INSTRUCTIONS_FILE`, at its creation. When
-the file is absent the session has no instructions; when it is present
-but unreadable, creating the session fails. The recorded text is the
-Instructions section of the session's developer message, as
-[model context](model-context.md) describes.
-
 ## Agents
 
-Each `<name>.md` file in the agents directory, `ASHE_AGENT_AGENTS_DIR`,
-defines the agent `<name>`, in opencode's format: YAML frontmatter, then a
-Markdown body that is the agent's instructions.
+An agent is the configuration a session runs as. The `agents` input maps
+each agent's title to its entry; the
+[config schema](../schemas/config.schema.json) and the generated
+[`.env`](../.env) own each input's name, shape, and default. An entry's fields
+are optional:
+
+| Field | Meaning |
+| --- | --- |
+| `model` | The `<provider>/<model>` id the agent's sessions start with, in place of the one a request names. |
+| `models` | Overrides of each model's `checkpointWindowSize`, `temperature`, and `reasoningEffort`, keyed by model id. |
+| `permission` | Rules in the [permissions](permissions.md) shape, layered after the global rules. |
+
+```json
+{
+  "agents": {
+    "code-reviewer": {
+      "model": "main/thinker",
+      "models": { "main/thinker": { "reasoningEffort": "high" } },
+      "permission": { "edit": "deny", "shell": { "*": "ask", "git diff*": "allow" } }
+    }
+  },
+  "defaultAgent": "code-reviewer"
+}
+```
+
+A title is 1 to 64 characters of `a-z` and `0-9` words joined by single
+dashes, the rule skill names follow. Clients show an agent by its display
+title, the title's words capitalized and joined by spaces, such as
+`Code Reviewer` for `code-reviewer`.
+
+A session created without an agent runs as `defaultAgent`, which must be
+an agent's title. Without a default agent, it runs as the implicit agent,
+which has no title, no model or overrides of its own, and only the
+global rules. Creating a session records its agent's title, model
+overrides, and permission rules; a fork keeps what its source recorded,
+and changing an agent's entry takes a server restart and reaches only
+sessions created after it.
+
+`agents.list` returns each agent with its display title, its title
+file's state and description, its model, and its reasoning effort
+overrides, and the default agent.
+
+## Title files and user instructions
+
+An agent's title file is `<title>.md` in the titles directory,
+`ASHE_AGENT_TITLES_DIR`. It holds YAML frontmatter with only a
+`description` of 1 to 1,024 characters, then a Markdown body that is the
+agent's user instructions:
 
 ```markdown
 ---
 description: Reviews changes without editing them
-mode: primary
-model: provider/model-id
-temperature: 0.2
-permission:
-  edit: deny
-  shell: { "*": ask, "git diff*": allow }
 ---
 You review the working tree and report findings.
 ```
 
-Every field is optional, and the server ignores other keys:
+The server reads a title file as a regular file and never through a
+symlink. A file that is a symlink, is unreadable, or holds any other
+frontmatter key is refused, and `agents.list` reports it as refused with
+the reason; a file named for no agent is ignored.
 
-| Field | Meaning |
-| --- | --- |
-| `description` | Shown to clients that list agents. |
-| `mode` | `primary`, `subagent`, or `all`, `all` by default. Only `primary` and `all` agents can run a session. |
-| `model` | A configured model id the agent's sessions start with. |
-| `temperature` | A finite number from 0 to 2, sent with every model call, compaction's summary call included. |
-| `permission` | Rules in the [permissions](permissions.md) shape, layered after the global rules. |
-
-A file whose frontmatter breaks these rules is refused, and `agents.list`
-returns it with the reason beside the valid agents. Creating a session
-with an agent records the agent's body, which replaces the global
-instructions, and its `temperature` and `permission`; later
-edits to the file do not reach existing sessions, and a fork keeps what
-its source recorded.
+A session's user instructions are its agent's title file body while the
+title file exists, in every session of that agent. Otherwise they are
+the content of the global instructions file,
+`ASHE_AGENT_INSTRUCTIONS_FILE`, and when that file is absent the session
+has none. A refused title file or an unreadable global instructions file
+fails the session's creation, naming the file and the reason. A session
+records its user instructions at creation, as the Instructions section
+of its developer message that [model context](model-context.md)
+describes.
 
 ## Skills
 
@@ -62,7 +90,8 @@ than 1,024 characters. When two roots hold a skill of the same name, the
 earlier root's is used.
 
 The developer message's Skills section lists each skill's name,
-description, and directory, never its body. The `skill` tool returns a
+description, and directory, never its body, leaving out each skill the
+session's rules deny under the `skill` permission. The `skill` tool returns a
 skill's body and directory by name, decided under the `skill`
 permission by that name. A skill's `allowed-tools` field changes no
 permission decision.
