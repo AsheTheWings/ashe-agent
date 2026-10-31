@@ -9,8 +9,7 @@ qualifies.
 ## Fast gate
 
 `bun run gate` typechecks the repository and runs the unit, component,
-and conformance tests. CI runs it on every push, on every pull request
-that is not a draft, and on manual dispatch.
+and conformance tests. CI runs it first; see [CI](#ci).
 
 ## Test classes
 
@@ -59,3 +58,22 @@ a shell command and a `file_read` of a docx.
 
 `bun run release-gate` is the release gate: the fast gate, then the
 bundle built and qualified.
+
+## CI
+
+CI runs on GitHub-hosted runners. Every non-draft pull request, every
+push, and every manual dispatch runs the fast gate, the integration
+tests, test262, the bundle build, and qualification of that bundle.
+Pull request runs receive no secrets and no OIDC token, and no workflow
+uses `pull_request_target`; the repository requires approval before the
+workflows of any outside contributor's pull request run.
+
+On a push or a manual dispatch on a branch, the job that qualified the
+bundle then publishes it to the host's artifact registry, the host the
+`ARTIFACT_REGISTRY` repository variable names: one `oras push`, with the
+job's OIDC token, of the bundle as the single layer of
+`ashe-agent/<area>:<commit>-<run id>-<run attempt>`, where the area is
+`default` on `main` and `branches` elsewhere. Only that job may request
+an OIDC token. It checks that the pushed layer is the qualified bundle
+and logs `SHA-256: <hex>` for the manifest digest. The `oras` it runs is
+a pinned release whose archive and binary SHA-256 it checks first.
