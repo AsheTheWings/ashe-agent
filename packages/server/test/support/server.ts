@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Deferred, Effect, Exit, Layer, ManagedRuntime } from "effect"
@@ -10,6 +10,7 @@ import { noAgents } from "../../src/sessions/setup.ts"
 import { openDatabase, Store } from "../../src/store/database.ts"
 import { migrationFiles } from "../../src/store/migration-files.ts"
 import { applyMigrations, discoverMigrations } from "../../src/store/migrations.ts"
+import { removeTree } from "../../src/sessions/files.ts"
 import { configuredModel } from "./agent.ts"
 import { Client, waitFor } from "./cli.ts"
 
@@ -102,6 +103,8 @@ export class TestServer {
   readonly dir = mkdtempSync(join(tmpdir(), "ashe-agent-server-"))
   readonly databasePath = join(this.dir, "ashe-agent.db")
   readonly sessionsDir = join(this.dir, "sessions")
+  readonly memoryDir = join(this.dir, "memory")
+  readonly scratchRoot = join(this.dir, "scratch")
   readonly script = new ScriptedRunner()
   private runtime: ManagedRuntime.ManagedRuntime<ProtocolServer | Sessions | Store, never> | null = null
   url = ""
@@ -136,6 +139,8 @@ export class TestServer {
           permission: this.permission,
           home: this.dir,
           sessionsDir: this.sessionsDir,
+          memoryDir: this.memoryDir,
+          scratchRoot: this.scratchRoot,
         }),
       ),
       Layer.provideMerge(Store.layer(this.databasePath)),
@@ -161,7 +166,8 @@ export class TestServer {
 
   async cleanup() {
     await this.stop()
-    rmSync(this.dir, { recursive: true, force: true })
+    // Memory generations are read-only, which a plain recursive removal cannot delete.
+    removeTree(this.dir)
   }
 }
 

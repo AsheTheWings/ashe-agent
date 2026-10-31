@@ -3,6 +3,7 @@ import { join } from "node:path"
 import type { SessionEvent, SessionEventBody, SessionSummary } from "@ashe-agent/protocol"
 import type { ModelOverrides, Permission } from "../inputs/shapes.ts"
 import { Conversation } from "./conversation.ts"
+import { FileState } from "./file-state.ts"
 
 export type TurnStatus = "running" | "finished" | "cancelled" | "failed" | "interrupted"
 
@@ -96,6 +97,7 @@ const turnColumns = "run_id, position, cause, user_message_ids, model, reasoning
 /** Session, event, and turn persistence. Every write that numbers an event takes the session's counter. */
 export class SessionStore {
   readonly conversation: Conversation
+  readonly files: FileState
 
   /** `sessionsDir` holds each session's directory, named by its id. */
   constructor(
@@ -103,6 +105,15 @@ export class SessionStore {
     readonly sessionsDir: string,
   ) {
     this.conversation = new Conversation(db)
+    this.files = new FileState(db, this.conversation)
+  }
+
+  /** Every session, oldest first. */
+  sessions(): ReadonlyArray<SessionRecord> {
+    return this.db
+      .query<SessionRow, []>("SELECT * FROM sessions ORDER BY created_at, id")
+      .all()
+      .map((row) => toSession(row, this.sessionsDir))
   }
 
   /** The directory of the session `id`. */

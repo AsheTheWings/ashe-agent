@@ -73,6 +73,8 @@ export interface SeedSources {
   readonly catalogs: Catalogs
   readonly sessionId: string
   readonly dates: Dates
+  readonly scratchGeneration: number
+  readonly memoryRestoreGeneration: number
   readonly tools: ReadonlyArray<ToolSpec>
 }
 
@@ -93,7 +95,13 @@ export const renderSeed = (
     instructions === null ? null : userInstructionsSeed(instructions.text, sources.title, instructionsState(instructions)),
     skillCatalogSeed(sources.catalogs.skills),
     codeModeCatalogSeed(sources.catalogs.codeMode),
-    sessionFacts({ sessionId: sources.sessionId, title: sources.title, dates: sources.dates }),
+    sessionFacts({
+      sessionId: sources.sessionId,
+      title: sources.title,
+      dates: sources.dates,
+      scratchGeneration: sources.scratchGeneration,
+      memoryRestoreGeneration: sources.memoryRestoreGeneration,
+    }),
   ].filter((component) => component !== null)
   for (const component of components) {
     const issue = componentIssue(component)

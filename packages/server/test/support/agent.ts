@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync } from "node:fs"
+import { mkdtempSync, realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Database } from "bun:sqlite"
@@ -14,6 +14,7 @@ import type { ConfiguredModel } from "../../src/models/registry.ts"
 import { permissionPath } from "../../src/permissions/paths.ts"
 import { SessionHub, type SessionSetup } from "../../src/sessions/hub.ts"
 import { noAgents } from "../../src/sessions/setup.ts"
+import { removeTree, SessionFiles } from "../../src/sessions/files.ts"
 import { SessionStore } from "../../src/sessions/store.ts"
 import { openDatabase } from "../../src/store/database.ts"
 import { migrationFiles } from "../../src/store/migration-files.ts"
@@ -209,6 +210,7 @@ export class AgentHarness {
   readonly model = new FakeModel()
   hub: SessionHub
   readonly sender = { kind: "login" as const, loginId: "component" }
+  readonly files = new SessionFiles(join(this.dir, "sessions"), join(this.dir, "memory"), join(this.dir, "scratch"))
 
   constructor(
     readonly options: {
@@ -238,6 +240,7 @@ export class AgentHarness {
     const tools = this.options.tools ?? testTools()
     const afterLoop = this.options.afterLoop
     const hub: SessionHub = new SessionHub(new SessionStore(this.db, join(this.dir, "sessions")), {
+      files: this.files,
       models,
       defaultModel: models[0]!.id,
       setup: this.options.setup ?? noAgents,
@@ -252,8 +255,7 @@ export class AgentHarness {
           ? runner
           : (context) => Effect.tap(runner(context), () => Effect.sync(() => afterLoop(hub, context.session.id))),
     })
-    hub.recover()
-    hub.resumeWaiting()
+    hub.start()
     return hub
   }
 
@@ -304,6 +306,7 @@ export class AgentHarness {
   async cleanup() {
     await this.hub.stop()
     this.db.close()
-    rmSync(this.dir, { recursive: true, force: true })
+    // Memory generations are read-only, which a plain recursive removal cannot delete.
+    removeTree(this.dir)
   }
 }

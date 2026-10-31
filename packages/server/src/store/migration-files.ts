@@ -14,6 +14,9 @@ import m0013 from "../../migrations/0013_first_message_columns.sql" with { type:
 import m0014 from "../../migrations/0014_developer_components.sql" with { type: "text" }
 import m0015 from "../../migrations/0015_waiting_input.sql" with { type: "text" }
 import m0016 from "../../migrations/0016_sessions_without_windows.sql" with { type: "text" }
+import m0017 from "../../migrations/0017_snapshots.sql" with { type: "text" }
+import m0018 from "../../migrations/0018_pending_restores.sql" with { type: "text" }
+import m0019 from "../../migrations/0019_session_generations.sql" with { type: "text" }
 
 /**
  * The migration directory `packages/server/migrations`, embedded so a
@@ -37,4 +40,7 @@ export const migrationFiles: ReadonlyArray<{ readonly file: string; readonly sql
   { file: "0014_developer_components.sql", sql: m0014 },
   { file: "0015_waiting_input.sql", sql: m0015 },
   { file: "0016_sessions_without_windows.sql", sql: m0016 },
+  { file: "0017_snapshots.sql", sql: m0017 },
+  { file: "0018_pending_restores.sql", sql: m0018 },
+  { file: "0019_session_generations.sql", sql: m0019 },
 ]

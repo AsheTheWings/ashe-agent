@@ -1,4 +1,3 @@
-import { existsSync, mkdirSync, rmdirSync } from "node:fs"
 import type { AIMessage } from "@langchain/core/messages"
 import type { Context as TraceContext, Span } from "@opentelemetry/api"
 import { Context, Effect, Exit, Fiber, Layer } from "effect"
@@ -23,12 +22,14 @@ import {
   datesChanged,
   forkComponent,
   harnessInstructions,
+  memoryRestored,
   rewindComponent,
+  scratchLost,
   sameDates,
   type Component,
   type SourceStates,
 } from "../context/components.ts"
-import { SESSION_ID_LENGTH } from "../context/constants.ts"
+import { SCRATCH_FORK_MAX_BYTES, SESSION_ID_LENGTH } from "../context/constants.ts"
 import { allowanceMessage, catalogChanges, instructionsChange, renderSeed } from "../context/seed.ts"
 import type { Permission } from "../inputs/shapes.ts"
 import type { ConfiguredModel } from "../models/registry.ts"
@@ -44,7 +45,9 @@ import {
 import { ProtocolError } from "../server/websocket.ts"
 import { Store } from "../store/database.ts"
 import { endSpan, recordDuration, startSpan, withSpan, type ErrorClass } from "../telemetry/signals.ts"
-import type { Item, WaitingEntry } from "./conversation.ts"
+import type { Item, NewWaitingEntry, WaitingEntry } from "./conversation.ts"
+import type { FileRef } from "./file-state.ts"
+import { SessionFiles, type StoredFile } from "./files.ts"
 import { SessionStore, type Catalogs, type SessionRecord, type TurnRecord } from "./store.ts"
 
 export type { Catalogs } from "./store.ts"
@@ -126,6 +129,8 @@ export interface HubOptions {
   readonly defaultModel: string
   readonly runner: TurnRunner
   readonly setup: SessionSetup
+  /** The sessions' directories, memory generations, and scratch targets. */
+  readonly files: SessionFiles
   /** The tools available now, before a session's rules withhold any. */
   readonly tools?: () => ReadonlyArray<Tool>
   /** The global permission rules. */
@@ -213,6 +218,14 @@ export class SessionHub {
     return this.store.conversation
   }
 
+  private get fileState() {
+    return this.store.files
+  }
+
+  private get files() {
+    return this.options.files
+  }
+
   /**
    * Ends every turn a stopped server left running: withdraws its
    * unanswered permission requests, gives each of its tool calls without a
@@ -259,9 +272,161 @@ export class SessionHub {
     }
   }
 
-  /** Starts turns for the input left waiting at a server stop, in arrival order, once recovery is done. */
-  resumeWaiting() {
-    for (const sessionId of this.conversation.sessionsWaiting()) this.startNext(sessionId)
+  /**
+   * Settles what a stopped server left, before the hub serves, in order:
+   * removes the files of sessions with no row, completes interrupted
+   * memory publishes, attempts pending restores, records interrupted
+   * results, checks the memory of every session without a pending
+   * restore, then starts turns for waiting input in arrival order.
+   */
+  start() {
+    this.files.sweep((id) => this.store.getSession(id) !== null)
+    for (const { id } of this.store.sessions()) this.reportingFailure(id, "memory_publish_failed", () => this.completePublish(id))
+    const failed = new Set(this.fileState.sessionsPendingRestore().filter((id) => !this.restoreIfPending(id)))
+    this.recover()
+    for (const { id } of this.store.sessions()) {
+      if (!failed.has(id)) this.reportingFailure(id, "memory_check_failed", () => this.checkMemory(id))
+    }
+    this.resumeWaiting(failed)
+  }
+
+  /** Runs `work` for the session, turning a failure into a session error event of `code`. */
+  private reportingFailure(sessionId: string, code: string, work: () => void) {
+    try {
+      work()
+    } catch (error) {
+      const message = `${code === "memory_publish_failed" ? "completing the memory publish" : "checking memory"} failed: ${error instanceof Error ? error.message : String(error)}`
+      try {
+        this.commit(sessionId, (append) => append({ type: "SESSION_ERROR", code, message }))
+      } catch {
+        // Nothing more can be recorded; the next turn start checks memory again.
+      }
+    }
+  }
+
+  /**
+   * Publishes `files` as the session's next memory generation: writes its
+   * directory, records it as current, with `also` in the same transaction,
+   * renames a new `memory` symlink over the old one, and removes the
+   * session's other generation directories.
+   */
+  private publish(sessionId: string, files: ReadonlyArray<StoredFile>, also: () => void = () => {}) {
+    const next = this.fileState.generations(sessionId).memory + 1
+    const recorded = this.files.writeGeneration(sessionId, next, files)
+    this.store.db.transaction(() => {
+      this.fileState.recordGeneration(sessionId, next, recorded, this.now())
+      also()
+    })()
+    this.completePublish(sessionId)
+  }
+
+  /** Completes a publish a stop interrupted: points `memory` at the current generation and removes the others. */
+  private completePublish(sessionId: string) {
+    const current = this.fileState.generations(sessionId).memory
+    if (current === 0) return
+    this.files.pointMemory(sessionId, current)
+    this.files.removeOtherGenerations(sessionId, current)
+  }
+
+  /** Stores a notification component as waiting input, in a transaction the caller holds. */
+  private queue(sessionId: string, component: Component, causedBy?: "fork") {
+    const entry: NewWaitingEntry = { kind: "notification", component, ...(causedBy === undefined ? {} : { causedBy }) }
+    this.conversation.addWaiting(sessionId, entry, this.now())
+  }
+
+  /**
+   * Checks the session's memory against its current generation and, on a
+   * mismatch, republishes that generation, raises the memory restore
+   * generation, and queues a memory restored component naming the paths
+   * that differed.
+   */
+  private checkMemory(sessionId: string) {
+    const generations = this.fileState.generations(sessionId)
+    const recorded = this.fileState.generationFiles(sessionId, generations.memory)
+    const check = this.files.checkMemory(sessionId, generations.memory, recorded)
+    if (check.ok) return
+    const restore = generations.memoryRestore + 1
+    this.publish(sessionId, this.fileState.files(recorded), () => {
+      this.fileState.setGenerations(sessionId, { memoryRestore: restore })
+      this.queue(sessionId, memoryRestored(restore, check.paths))
+    })
+  }
+
+  /** Recreates a lost scratch target, raising the scratch generation and queuing a scratch lost component. */
+  private checkScratch(sessionId: string) {
+    if (!this.files.ensureScratch(sessionId)) return
+    this.store.db.transaction(() => {
+      const scratch = this.fileState.generations(sessionId).scratch + 1
+      this.fileState.setGenerations(sessionId, { scratch })
+      this.queue(sessionId, scratchLost(scratch, false))
+    })()
+  }
+
+  /**
+   * Queues, in a transaction the caller holds, the reconciled
+   * notifications a rewind or fork leaves due: scratch lost and memory
+   * restored, without paths, when the session's generation exceeds the one
+   * the current checkpoint window knows.
+   */
+  private queueReconciledNotifications(sessionId: string, causedBy?: "fork") {
+    const generations = this.fileState.generations(sessionId)
+    const known = this.conversation.knownStates(sessionId, this.conversation.currentWindow(sessionId)!.position)
+    if (generations.scratch > (known.scratchGeneration ?? 0)) this.queue(sessionId, scratchLost(generations.scratch, true), causedBy)
+    if (generations.memoryRestore > (known.memoryRestoreGeneration ?? 0)) {
+      this.queue(sessionId, memoryRestored(generations.memoryRestore, null), causedBy)
+    }
+  }
+
+  /**
+   * Completes the session's pending restore, if it has one: writes back its
+   * research files, publishes its memory files as the next generation,
+   * which drops the restore, and deletes the stored contents nothing
+   * references. Returns whether no restore is pending; a failed one stays
+   * pending and emits a session error event.
+   */
+  private restoreIfPending(sessionId: string): boolean {
+    const refs = this.fileState.pendingRestore(sessionId)
+    if (refs === null) return true
+    try {
+      this.files.writeResearch(sessionId, this.fileState.files(refs.filter((ref) => ref.area === "research")))
+      this.publish(sessionId, this.fileState.files(refs.filter((ref) => ref.area === "memory")))
+      // Only a complete publish drops the restore; one that failed after its commit is redone.
+      this.store.db.transaction(() => {
+        this.fileState.deletePendingRestore(sessionId)
+        this.fileState.deleteUnreferencedContents()
+      })()
+      return true
+    } catch (error) {
+      const message = `the rewind's restore of research and memory files failed and stays pending: ${error instanceof Error ? error.message : String(error)}`
+      try {
+        this.commit(sessionId, (append) => append({ type: "SESSION_ERROR", code: "restore_failed", message }))
+      } catch {
+        // The restore stays pending either way; the next request or server start tries again.
+      }
+      return false
+    }
+  }
+
+  /** The research files of the session now and the files of its current memory generation, as a snapshot records them. */
+  private currentFiles(sessionId: string): { readonly research: ReadonlyArray<StoredFile>; readonly refs: ReadonlyArray<FileRef> } {
+    const research = this.files.readResearch(sessionId)
+    const memory = this.fileState.generationFiles(sessionId, this.fileState.generations(sessionId).memory)
+    return {
+      research,
+      refs: [
+        ...research.map((file) => ({ area: "research" as const, name: file.name, sha256: file.sha256 })),
+        ...memory.map((file) => ({ area: "memory" as const, name: file.name, sha256: file.sha256 })),
+      ],
+    }
+  }
+
+  /**
+   * Starts turns for the input left waiting at a server stop, in arrival
+   * order, once recovery is done; sessions in `skip`, whose restore just
+   * failed, wait for a later request.
+   */
+  resumeWaiting(skip: ReadonlySet<string> = new Set()) {
+    for (const sessionId of this.conversation.sessionsWaiting()) if (!skip.has(sessionId)) this.startNext(sessionId)
   }
 
   /** The events of the turn `runId`, from its input on. */
@@ -488,7 +653,7 @@ export class SessionHub {
   private newSessionId() {
     for (;;) {
       const id = randomSessionId()
-      if (this.store.getSession(id) === null && !existsSync(this.store.sessionDir(id))) return id
+      if (this.store.getSession(id) === null) return id
     }
   }
 
@@ -522,16 +687,21 @@ export class SessionHub {
       catalogs: this.options.setup.catalogs(rules),
       sessionId: id,
       dates: this.dates(),
+      scratchGeneration: 0,
+      memoryRestoreGeneration: 0,
       tools: this.offeredTools(rules).map((tool) => tool.spec),
     })
     if (!seed.ok) throw invalid(`the session's first checkpoint window cannot be built: ${allowanceMessage(seed.issue)}`)
     const createdAt = this.now()
-    this.withSessionDir(id, () =>
+    this.withSessionFiles(id, () => {
+      const memory = this.options.files.writeGeneration(id, 1, [])
+      this.options.files.pointMemory(id, 1)
       this.store.db.transaction(() => {
         this.store.createSession(
           { id, agent: agent.key, model: model.id, reasoningEffort, modelOverrides: agent.overrides, permission: agent.permission, createdAt },
           null,
         )
+        this.fileState.recordGeneration(id, 1, memory, createdAt)
         if (instructions !== null) this.conversation.putContent(instructions.sha256, instructions.text)
         const window = this.conversation.insertWindow(id, null, harness, createdAt)
         for (const component of seed.components) this.conversation.appendItem(id, window.position, null, { kind: "component", component })
@@ -540,23 +710,24 @@ export class SessionHub {
           { type: "CHECKPOINT_WINDOW_SEEDED", runId: null, window: window.position, components: seed.components.map(wire) },
           createdAt,
         )
-      })(),
-    )
+      })()
+    })
     return this.summary(id)
   }
 
   /**
-   * Creates the directory of a new session, readable by the server's user
-   * only, then records the session with `record`; the directory is removed
-   * again when recording fails.
+   * Creates the files of a new session, its directory with `research/`,
+   * its memory directory, and its scratch target, readable by the server's
+   * user only, then runs `make`, which writes its first memory generation
+   * and records the session; when `make` fails, exactly the files this
+   * attempt created are removed.
    */
-  private withSessionDir<A>(id: string, record: () => A): A {
-    const dir = this.store.sessionDir(id)
-    mkdirSync(dir, { recursive: true, mode: 0o700 })
+  private withSessionFiles<A>(id: string, make: () => A): A {
+    const remove = this.options.files.createLayout(id)
     try {
-      return record()
+      return make()
     } catch (error) {
-      rmdirSync(dir)
+      remove()
       throw error
     }
   }
@@ -625,16 +796,22 @@ export class SessionHub {
 
   /**
    * Starts a turn on an idle session with waiting input: its first entry,
-   * with every steered message and notification after it. When the turn
-   * cannot start, its input stays waiting for the next start, and a
-   * session error event says why.
+   * with every steered message and notification after it. A pending
+   * restore is completed first, and a session whose restore fails starts
+   * no turn. The turn start checks scratch and memory, which may queue
+   * notifications that join the turn, and snapshots the research and
+   * memory files. When the turn cannot start, its input stays waiting for
+   * the next start, and a session error event says why.
    */
   private startNext(sessionId: string) {
     if (this.stopping || this.state(sessionId).live !== null) return
-    const [first, ...rest] = this.conversation.waiting(sessionId)
-    if (first === undefined) return
+    if (this.conversation.waiting(sessionId).length === 0) return
+    if (!this.restoreIfPending(sessionId)) return
     try {
-      this.startTurn(sessionId, [first, ...rest.filter(joins)])
+      this.checkScratch(sessionId)
+      this.checkMemory(sessionId)
+      const [first, ...rest] = this.conversation.waiting(sessionId)
+      this.startTurn(sessionId, [first!, ...rest.filter(joins)], this.currentFiles(sessionId))
     } catch (error) {
       const message = `the turn could not start, and its input stays waiting: ${error instanceof Error ? error.message : String(error)}`
       try {
@@ -683,7 +860,9 @@ export class SessionHub {
     }
     const dates = this.dates()
     if (known.dates === undefined || !sameDates(known.dates, dates)) components.push(datesChanged(dates))
-    if (known.identity?.sessionId !== session.id) components.push(forkComponent(known.identity?.sessionId ?? session.id, session.id))
+    if (known.identity?.sessionId !== session.id) {
+      components.push(forkComponent(known.identity?.sessionId ?? session.id, session.id, this.fileState.generations(session.id).forkSkipped))
+    }
     return { components, errors }
   }
 
@@ -701,8 +880,13 @@ export class SessionHub {
     for (const error of errors) append({ type: "SESSION_ERROR", code: error.code, message: error.message, runId: turn.runId })
     type Delivered = { readonly kind: "component"; readonly component: Component } | Extract<WaitingEntry, { kind: "user" }>
     const delivered: Array<Delivered> = taken.map((entry) => (entry.kind === "user" ? entry : { kind: "component", component: entry.component }))
+    // The fork component goes directly before the components the fork caused; other state components before the first user message.
+    const forkCaused = taken.findIndex((entry) => entry.kind === "notification" && entry.causedBy === "fork")
+    const fork = forkCaused === -1 ? [] : state.filter((component) => component.name === "fork")
+    const rest = state.filter((component) => !fork.includes(component))
     const firstUser = delivered.findIndex((entry) => entry.kind === "user")
-    delivered.splice(firstUser === -1 ? delivered.length : firstUser, 0, ...state.map((component) => ({ kind: "component" as const, component })))
+    delivered.splice(firstUser === -1 ? delivered.length : firstUser, 0, ...rest.map((component) => ({ kind: "component" as const, component })))
+    if (fork.length > 0) delivered.splice(forkCaused, 0, { kind: "component", component: fork[0]! })
     const owner = { runId: turn.runId, model: turn.model }
     let message: Array<Component> = []
     const closeMessage = () => {
@@ -727,7 +911,11 @@ export class SessionHub {
    * Starts a turn with the `taken` waiting entries as its input, delivered
    * in the transaction that records the turn and its start event.
    */
-  private startTurn(sessionId: string, taken: ReadonlyArray<WaitingEntry>) {
+  private startTurn(
+    sessionId: string,
+    taken: ReadonlyArray<WaitingEntry>,
+    snapshot: { readonly research: ReadonlyArray<StoredFile>; readonly refs: ReadonlyArray<FileRef> },
+  ) {
     const state = this.state(sessionId)
     const { session, turn } = this.commit(sessionId, (append) => {
       const session = this.session(sessionId)
@@ -745,6 +933,8 @@ export class SessionHub {
         },
         this.now(),
       )
+      this.fileState.putFiles(snapshot.research)
+      this.fileState.recordSnapshot(sessionId, turn.runId, snapshot.refs)
       this.deliverInto(sessionId, turn, taken, append)
       append({ type: "RUN_STARTED", threadId: sessionId, runId: turn.runId, model: turn.model, cause, userMessageIds })
       return { session, turn }
@@ -775,6 +965,8 @@ export class SessionHub {
           append(event)
         }),
       deliver: () => {
+        this.checkScratch(sessionId)
+        this.checkMemory(sessionId)
         const taken = this.conversation.waiting(sessionId).filter(joins)
         if (taken.length === 0) return false
         this.commit(sessionId, (append) => this.deliverInto(sessionId, turn, taken, append))
@@ -846,24 +1038,57 @@ export class SessionHub {
 
   /**
    * Copies the session through the turn `runId`, a fork point, or entirely,
-   * into a new session with its own new directory. Its first delivery
-   * reconciles the new session identity with a fork component.
+   * into a new session with its own new directory. The new session gets
+   * the research files and, as its first memory generation, the memory
+   * files the source's next turn after the fork point started with, or the
+   * source's current files without one, and a copy of the source's
+   * scratch. Its first delivery reconciles the new session identity with a
+   * fork component, and scratch lost and memory restored components the
+   * copied history does not know start a turn.
    */
   fork(sessionId: string, runId: string | undefined): SessionSummary {
     const source = this.session(sessionId)
     if (this.isRunning(sessionId)) throw conflict("a turn is running; fork after it ends")
-    if (runId !== undefined) this.point(sessionId, runId)
+    const point = runId === undefined ? null : this.point(sessionId, runId)
+    if (!this.restoreIfPending(sessionId)) throw conflict("the session's files are being restored after a rewind; try again")
+    const size = this.files.scratchSize(sessionId)
+    if (size > SCRATCH_FORK_MAX_BYTES) {
+      throw invalid(`the session's scratch holds ${size} bytes, over the fork limit of ${SCRATCH_FORK_MAX_BYTES} bytes`)
+    }
+    const next = point === null ? undefined : this.store.turns(sessionId).find((turn) => turn.position > point.position)
+    const files =
+      next === undefined
+        ? this.currentFiles(sessionId)
+        : { research: [], refs: this.fileState.snapshot(sessionId, next.runId) }
+    const research = next === undefined ? files.research : this.fileState.files(files.refs.filter((ref) => ref.area === "research"))
+    const memory = this.fileState.files(files.refs.filter((ref) => ref.area === "memory"))
+    const generations = this.fileState.generations(sessionId)
     const id = this.newSessionId()
-    const forked = this.withSessionDir(id, () => this.store.fork(source, { id, createdAt: this.now() }, runId ?? null))
-    return this.summary(forked.id)
+    this.withSessionFiles(id, () => {
+      this.files.writeResearch(id, research)
+      const recorded = this.files.writeGeneration(id, 1, memory)
+      this.files.pointMemory(id, 1)
+      const { skipped } = this.files.copyScratch(sessionId, id)
+      this.store.db.transaction(() => {
+        const createdAt = this.now()
+        this.store.fork(source, { id, createdAt }, runId ?? null)
+        this.fileState.recordGeneration(id, 1, recorded, createdAt)
+        this.fileState.setGenerations(id, { scratch: generations.scratch, memoryRestore: generations.memoryRestore, forkSkipped: skipped })
+        this.queueReconciledNotifications(id, "fork")
+      })()
+    })
+    this.startNext(id)
+    return this.summary(id)
   }
 
   /**
    * Removes the turn `runId`, a rewind point, and every later turn with
-   * every row they own, then stores the rewind component and the user
+   * every row they own, records the restore of the research and memory
+   * files the turn started with, and stores the rewind component, the
+   * reconciled notifications the kept history does not know, and the user
    * messages of the turn's starting input, or `text` instead, as waiting
-   * input with new ids, which starts the rerun turn. The removal and the
-   * waiting input commit together.
+   * input with new ids, all in one transaction. The restore then completes,
+   * and its rerun turn starts after it.
    */
   rewind(sessionId: string, runId: string, text: string | undefined, sender: Sender) {
     this.session(sessionId)
@@ -873,10 +1098,14 @@ export class SessionHub {
       this.conversation.turnItems(sessionId, runId).flatMap((item) => (item.kind === "user" ? [[item.inputId, item.text] as const] : [])),
     )
     const texts = text === undefined ? turn.userMessageIds.map((id) => users.get(id) ?? "") : [text]
+    if (!this.restoreIfPending(sessionId)) throw conflict("the session's files are being restored after a rewind; try again")
+    const restore = this.fileState.snapshot(sessionId, runId)
     this.commit(sessionId, (append) => {
+      this.fileState.recordPendingRestore(sessionId, restore, this.now())
       this.store.removeFrom(sessionId, turn)
       append({ type: "SESSION_REWOUND", runId: turn.runId, firstRemovedSeq: turn.firstSeq })
-      this.conversation.addWaiting(sessionId, { kind: "notification", component: rewindComponent() }, this.now())
+      this.queue(sessionId, rewindComponent())
+      this.queueReconciledNotifications(sessionId)
       for (const message of texts) {
         const inputId = crypto.randomUUID()
         this.conversation.addWaiting(sessionId, { kind: "user", inputId, text: message, mode: "steer", sender }, this.now())
@@ -895,11 +1124,15 @@ export class SessionHub {
 }
 
 export class Sessions extends Context.Service<Sessions, SessionHub>()("ashe-agent/sessions/Sessions") {
-  /** The hub over the `Store` database, recovered and resuming waiting input before it serves. */
+  /** The hub over the `Store` database, started before it serves. */
   static readonly layer = (
-    options: HubOptions & {
+    options: Omit<HubOptions, "files"> & {
       /** The directory holding each session's directory. */
       readonly sessionsDir: string
+      /** The directory holding each session's memory generations. */
+      readonly memoryDir: string
+      /** The directory holding each session's scratch target. */
+      readonly scratchRoot: string
     },
   ) =>
     Layer.effect(
@@ -908,9 +1141,9 @@ export class Sessions extends Context.Service<Sessions, SessionHub>()("ashe-agen
         const { db } = yield* Store
         return yield* Effect.acquireRelease(
           Effect.sync(() => {
-            const hub = new SessionHub(new SessionStore(db, options.sessionsDir), options)
-            hub.recover()
-            hub.resumeWaiting()
+            const files = new SessionFiles(options.sessionsDir, options.memoryDir, options.scratchRoot)
+            const hub = new SessionHub(new SessionStore(db, options.sessionsDir), { ...options, files })
+            hub.start()
             return hub
           }),
           (hub) => Effect.promise(() => hub.stop()),
