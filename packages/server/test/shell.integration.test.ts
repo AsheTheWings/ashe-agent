@@ -132,6 +132,24 @@ describe("shell processes", () => {
     })
   }, 30_000)
 
+  test("a forked session's shell commands run in its own new session directory", async () => {
+    await withShell({}, async (h) => {
+      const id = h.create()
+      h.model.next(say("one"))
+      h.input(id, "first")
+      await h.turnsEnded(id, 1)
+      const fork = h.hub.fork(id, undefined).id
+      h.model.next(callTools([{ name: "shell_exec_command", args: { cmd: "pwd; ls -a" } }]), say("done"))
+      h.input(fork, "where")
+      await h.turnsEnded(fork, 2)
+      const result = h.events(fork).find((event) => event.event.type === "TOOL_CALL_RESULT")!.event as { content: string }
+      const lines = output(result.content).split("\n")
+      expect(lines[0]).toBe(realpathSync(h.sessionDir(fork)))
+      expect(lines).toEqual(expect.arrayContaining(["memory", "research", "scratch"]))
+      expect(h.sessionDir(fork)).not.toBe(h.sessionDir(id))
+    })
+  }, 30_000)
+
   test("a long command yields a process_id; a write, an empty poll, and \\u0003 reach it", async () => {
     await withShell({}, async (h, processes, tool) => {
       const started = await call(tool("shell_exec_command"), h.dir, "s", {

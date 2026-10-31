@@ -77,6 +77,20 @@ directories: configuration under `$XDG_CONFIG_HOME`, state under
 `$XDG_STATE_HOME`, and cache under `$XDG_CACHE_HOME`, falling back to
 `~/.config`, `~/.local/state`, and `~/.cache`.
 
+The scratch root holds each session's scratch target, which the
+session's `scratch` symlink points to. Its files are disposable and its
+default is under the cache directory, so operators may place it on other
+storage, such as a volume excluded from backups; the state directory
+holds everything a session must keep. [Storage](storage.md#session-files)
+explains both.
+
+## The user's time zone
+
+The user's time zone is an IANA zone name. The session facts and each
+dates changed component give the user's date in it beside the server's
+date in the server's own zone, as [model context](model-context.md#developer-components)
+explains. Development defaults it to `UTC`; production requires it.
+
 ## Providers and models
 
 `providers` maps each provider id to one OpenAI Responses endpoint: its
@@ -147,8 +161,8 @@ removes them, as [model context](model-context.md) explains.
 
 The server reads its inputs once, at start. Changing the providers, the
 agents, the default agent, or any other input takes a server restart.
-Title files and the global instructions file are read when a session is
-created, and skills at each turn, as
+Title files, the global instructions file, and the skills are read when a
+session is created and again with each delivery into a turn, as
 [agents and skills](agents-and-skills.md) explains.
 
 ## What else the inputs configure

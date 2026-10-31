@@ -23,6 +23,50 @@ every row they own with them, so the conversation is again what the kept
 turns and creation made. A fork copies the rows that no turn owns and
 those of the turns it copies into the new session.
 
+## Session files
+
+A session's directory, `<state-dir>/sessions/<session-id>/`, holds:
+
+- `research/`: the research files, the regular Markdown files directly
+  inside it. The server reads and writes none of them through a symlink.
+- `memory`: a symlink to the session's current memory generation,
+  `<state-dir>/memory/<session-id>/<n>/`, a directory of mode 0555 whose
+  memory files have mode 0444. Publishing a generation writes a new
+  directory from stored contents, records it as current, renames a new
+  symlink over `memory`, and deletes the session's other generations, so
+  a reader of `memory` sees one whole generation. A server start
+  completes a publish a stop interrupted. Each memory file's metadata is
+  recorded when it is published, so the memory check hashes only a file
+  whose metadata differs; a file whose bytes still hash to the recorded
+  digest counts as unchanged.
+- `scratch`: a symlink to the session's scratch target,
+  `<scratch-root>/<session-id>/`, for disposable files. A missing target
+  is recreated empty at the next turn start or step boundary, which tells
+  the model with a scratch lost component.
+
+Creating or forking a session records it only after its directory,
+first memory generation, and scratch target exist; a failure removes
+exactly what that attempt created. At start, before serving, the server
+removes each entry of the sessions directory, the memory directory, and
+the scratch root that is named like a session id without a session row,
+following no symlink and keeping every other entry.
+
+Before each turn starts, the server snapshots the research files and the
+current memory generation's files: their bytes go to the content store
+and the turn's snapshot rows name each file and its digest. A rewind
+records a pending restore of the removed turn's snapshot in its
+transaction, then writes each research file under a temporary name and
+renames it into place, deletes the research files the snapshot lacks,
+publishes the snapshot's memory files as the next generation, and drops
+the pending restore with the stored contents nothing references any
+longer. A restore that fails or that a stop interrupts stays pending: the
+session starts no turn and refuses rewinds and forks until a later
+request or server start completes it. A fork writes the research and
+memory files of the snapshot of the source's first turn after the fork
+point, or the source's current files without one, and copies the
+source's scratch, keeping symlinks, skipping sockets, FIFOs, and devices,
+and refusing a scratch over 2 GiB.
+
 ## Migrations
 
 The schema comes only from the migrations in `packages/server/migrations`.

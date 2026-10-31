@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test"
+import { rmSync, symlinkSync, unlinkSync } from "node:fs"
+import { join } from "node:path"
 import type { SessionEvent } from "@ashe-agent/protocol"
 import { REQUEST_INSTRUCTIONS } from "../src/agent/blocks.ts"
 import type { Tool } from "../src/agent/tools.ts"
@@ -590,6 +592,47 @@ describe("fork and rewind", () => {
       expect(() => h.hub.fork(id, undefined)).toThrow("a turn is running")
       expect(() => h.hub.rewind(id, first!, undefined, h.sender)).toThrow("a turn is running")
       open.open()
+    })
+  })
+
+  test("reconciled notifications follow the rewind or fork that queued them, and a rewind queues no removed component again", async () => {
+    await withHarness(async (h) => {
+      const id = await threeTurns(h)
+      const [first] = runIds(h, id)
+      // A scratch loss and a memory mismatch arrive with the next turn.
+      rmSync(h.files.scratchTarget(id), { recursive: true })
+      const memory = join(h.sessionDir(id), "memory")
+      unlinkSync(memory)
+      symlinkSync(h.dir, memory)
+      h.model.next(say("r4"))
+      h.input(id, "t4")
+      await h.turnsEnded(id, 4)
+      expect(headings(texts(h.model.last()).at(-1)!)).toEqual(["# Scratch Lost", "# Memory Restored"])
+      expect(texts(h.model.last()).at(-1)).toContain("changed outside a context turn: `memory`.")
+
+      const fork = h.hub.fork(id, first!).id
+      await h.turnsEnded(fork, 2)
+      const forked = texts(h.model.last()).at(-1)!
+      expect(headings(forked)).toEqual(["# Fork", "# Scratch Lost", "# Memory Restored"])
+      expect(forked).toContain("It may hold files written later by turns no longer in your history")
+      expect(forked).toContain("`memory/` may differ from what turns in your history wrote there")
+      expect(ofType(h.events(fork), "RUN_STARTED").at(-1)).toMatchObject({ cause: "notification" })
+
+      const fourth = runIds(h, id)[3]!
+      h.model.next(say("r4 again"))
+      h.hub.rewind(id, fourth, undefined, h.sender)
+      await h.turnsEnded(id, 4)
+      expect(headings(texts(h.model.last()).at(-1)!)).toEqual(["# Rewind", "# Scratch Lost", "# Memory Restored"])
+      expect(texts(h.model.last()).at(-1)).not.toContain("changed outside a context turn")
+
+      // Rewinding past that rewind delivers the rewind component once and nothing it carried.
+      h.model.next(say("r3 again"))
+      h.hub.rewind(id, runIds(h, id)[2]!, undefined, h.sender)
+      await h.turnsEnded(id, 3)
+      const again = texts(h.model.last()).at(-1)!
+      expect(headings(again)).toEqual(["# Rewind", "# Scratch Lost", "# Memory Restored"])
+      expect(again.match(/# Rewind/g)).toHaveLength(1)
+      expect(texts(h.model.last()).join("\n").match(/# Rewind/g)).toHaveLength(1)
     })
   })
 

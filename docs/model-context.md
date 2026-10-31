@@ -121,7 +121,10 @@ A developer component is typed by how it is injected:
   components, and never starts a turn.
 - A notification component, such as the one a rewind queues, joins the
   running turn at its next step boundary, or starts a turn in an idle
-  session.
+  session. Scratch lost and memory restored components report a lost
+  scratch target and a republished memory generation; a rewind or fork
+  whose kept history predates such a report queues it again, without the
+  memory paths.
 
 Each delivery reconciles the sources the components describe: for each
 of the user instructions, the skill catalog, the code mode catalog, the
@@ -144,6 +147,9 @@ reach a turn.
   stays.
 - Changed dates arrive as the server's and the user's dates with their
   time zones.
+- The session facts also establish the session's scratch and memory
+  restore generations, and each scratch lost or memory restored component
+  the generation it reports.
 - A different session id, as in a fork, arrives as the fork component,
   which names the source and the new session.
 

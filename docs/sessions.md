@@ -12,7 +12,8 @@ when it creates the session. That directory is the session's starting
 working directory: shell commands without a `workdir` run there, and a
 relative `workdir`, `file_read` path, or `file_patch` path resolves
 against it. `SessionSummary` and the `SESSION_CREATED` event give it as
-`sessionDir`.
+`sessionDir`. It holds `research/`, `memory`, and `scratch`, which
+[storage](storage.md#session-files) explains.
 
 ## History
 
@@ -81,8 +82,13 @@ interrupted, or failed with its turn, and whether it had started.
 
 Only a turn whose starting input holds a user message is a rewind point
 and a fork point; a message steered into a running turn makes none. Both
-change only the conversation, never files, processes, or other effects of
-earlier turns, and both are refused while a turn runs.
+restore the research and memory files to the turn they return to, as
+[storage](storage.md#session-files) explains, and change no other file,
+process, or effect of earlier turns; both are refused while a turn runs.
+When the kept history does not know about a scratch loss or a memory
+republish, a rewind queues the scratch lost or memory restored component
+again after its own, and a fork queues it after its fork component, which
+starts the fork's first turn.
 
 `session.fork` creates a new session with a new id from a source
 session's turns through one of its fork points, or all of them, keeping

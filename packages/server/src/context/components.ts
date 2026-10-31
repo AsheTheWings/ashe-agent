@@ -6,7 +6,14 @@ import harness from "./harness.md" with { type: "text" }
 export type ComponentType = "seed" | "state" | "notification"
 
 /** A source whose state reconciliation compares with what a checkpoint window knows. */
-export type SourceName = "userInstructions" | "skillCatalog" | "codeModeCatalog" | "identity" | "dates"
+export type SourceName =
+  | "userInstructions"
+  | "skillCatalog"
+  | "codeModeCatalog"
+  | "identity"
+  | "dates"
+  | "scratchGeneration"
+  | "memoryRestoreGeneration"
 
 /** The user instructions a checkpoint window knows: none, or a version of the title or global file. */
 export type InstructionsState =
@@ -30,6 +37,10 @@ export interface SourceStates {
   readonly codeModeCatalog?: { readonly text: string | null }
   readonly identity?: { readonly sessionId: string }
   readonly dates?: Dates
+  /** How often the session's scratch target was found lost. */
+  readonly scratchGeneration?: number
+  /** How often the session's memory was republished after a mismatch. */
+  readonly memoryRestoreGeneration?: number
 }
 
 /** One unit of harness content under its own `#` heading, and the source states it establishes. */
@@ -102,7 +113,13 @@ const dateLines = (dates: Dates) =>
   `- Server date: ${dates.serverDate}, ${dates.serverWeekday} (${dates.serverZone})\n- User date: ${dates.userDate}, ${dates.userWeekday} (${dates.userZone})`
 
 /** The session facts seed component: identity and dates, and no path. */
-export const sessionFacts = (facts: { readonly sessionId: string; readonly title: string | null; readonly dates: Dates }): Component =>
+export const sessionFacts = (facts: {
+  readonly sessionId: string
+  readonly title: string | null
+  readonly dates: Dates
+  readonly scratchGeneration: number
+  readonly memoryRestoreGeneration: number
+}): Component =>
   component(
     "seed",
     "session_facts",
@@ -114,7 +131,12 @@ export const sessionFacts = (facts: { readonly sessionId: string; readonly title
       ...(facts.title === null ? [] : [`- Your title: ${escapeTags(facts.title)}`]),
       dateLines(facts.dates),
     ].join("\n"),
-    { identity: { sessionId: facts.sessionId }, dates: facts.dates },
+    {
+      identity: { sessionId: facts.sessionId },
+      dates: facts.dates,
+      scratchGeneration: facts.scratchGeneration,
+      memoryRestoreGeneration: facts.memoryRestoreGeneration,
+    },
   )
 
 /** A backtick run longer than any in `text`, so a fence around it cannot close early. */
@@ -197,13 +219,13 @@ export const codeModeCatalogChanged = (catalog: string | null): Component =>
 export const datesChanged = (dates: Dates): Component =>
   component("state", "dates_changed", "Dates Changed", `The dates changed since this conversation last showed them.\n\n${dateLines(dates)}`, { dates })
 
-/** The fork state component, which reconciles the session identity. */
-export const forkComponent = (source: string, target: string): Component =>
+/** The fork state component, which reconciles the session identity; `skipped` counts the scratch entries the copy left out. */
+export const forkComponent = (source: string, target: string, skipped = 0): Component =>
   component(
     "state",
     "fork",
     "Fork",
-    `This session was forked: session \`${target}\` is a copy of session \`${source}\` through the turns above. It has its own session directory, with \`research/\` and \`memory/\` as they stood at that point and a copy of \`scratch/\`. Absolute paths above, and files in \`scratch/\`, may still refer to the source's directory; arrange what the work needs. Other files, processes, and effects of the source's turns may persist.`,
+    `This session was forked: session \`${target}\` is a copy of session \`${source}\` through the turns above. It has its own session directory, with \`research/\` and \`memory/\` as they stood at that point and a copy of \`scratch/\`${skipped === 0 ? "" : `, without ${skipped} sockets, FIFOs, and devices`}. Absolute paths above, and files in \`scratch/\`, may still refer to the source's directory; arrange what the work needs. Other files, processes, and effects of the source's turns may persist.`,
     { identity: { sessionId: target } },
   )
 
@@ -214,6 +236,37 @@ export const rewindComponent = (): Component =>
     "rewind",
     "Rewind",
     "The user rewound this session: later turns were removed from the conversation, and the next message starts again from here. `research/` and `memory/` are back to their state at this point; `scratch/` and other files, processes, and effects of the removed turns may persist.",
+  )
+
+/**
+ * The scratch lost notification component, establishing the scratch
+ * generation it reports; `recomputed` when a rewind or fork queues it
+ * again, since scratch may then hold files of turns no longer in the
+ * history.
+ */
+export const scratchLost = (generation: number, recomputed: boolean): Component =>
+  component(
+    "notification",
+    "scratch_lost",
+    "Scratch Lost",
+    `The contents of \`scratch/\` were lost, so files you wrote there earlier are gone. ${recomputed ? "It may hold files written later by turns no longer in your history; check what is there before relying on it. " : ""}Recreate what you need from \`research/\`, \`memory/\`, or the original sources.`,
+    { scratchGeneration: generation },
+  )
+
+/**
+ * The memory restored notification component, establishing the memory
+ * restore generation it reports: naming the paths a republish put back,
+ * or, queued again by a rewind or fork, naming none.
+ */
+export const memoryRestored = (generation: number, paths: ReadonlyArray<string> | null): Component =>
+  component(
+    "notification",
+    "memory_restored",
+    "Memory Restored",
+    paths === null
+      ? "`memory/` may differ from what turns in your history wrote there; it holds the secondary timelines as last checked."
+      : `These files in \`memory/\` changed outside a context turn: ${paths.map((path) => `\`${escapeTags(path)}\``).join(", ")}. The harness put back the secondary timelines as last checked; they change only through \`memory-draft/\` in a context turn.`,
+    { memoryRestoreGeneration: generation },
   )
 
 /** The day and weekday of `at` in `timeZone`, with the zone's name. */

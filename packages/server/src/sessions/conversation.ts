@@ -40,7 +40,13 @@ export type WaitingEntry =
       readonly mode: InputMode
       readonly sender: Sender
     }
-  | { readonly position: number; readonly kind: "notification"; readonly component: Component }
+  | {
+      readonly position: number
+      readonly kind: "notification"
+      readonly component: Component
+      /** Set when a fork queued the component, which a delivery then places directly after the fork component. */
+      readonly causedBy?: "fork"
+    }
 
 export type NewWaitingEntry =
   | Omit<Extract<WaitingEntry, { kind: "user" }>, "position">
@@ -93,7 +99,8 @@ const bodyOf = (body: ItemBody): string => {
 
 /**
  * A session's conversation state: checkpoint windows, their items, the
- * developer components items hold, stored contents, and waiting input.
+ * developer components items hold, research baselines, turn snapshots,
+ * stored contents, and waiting input.
  * Every row is owned by the turn that made it, or by none.
  */
 export class Conversation {
@@ -185,14 +192,21 @@ export class Conversation {
     return known as SourceStates
   }
 
-  /** Stores `data` by its SHA-256 `sha256`, once. */
-  putContent(sha256: string, data: string) {
-    this.db.query("INSERT INTO contents (sha256, data) VALUES (?, ?) ON CONFLICT (sha256) DO NOTHING").run(sha256, Buffer.from(data, "utf8"))
+  /** Stores `data` by its SHA-256 `sha256`, once; text is stored as UTF-8. */
+  putContent(sha256: string, data: string | Uint8Array) {
+    this.db
+      .query("INSERT INTO contents (sha256, data) VALUES (?, ?) ON CONFLICT (sha256) DO NOTHING")
+      .run(sha256, typeof data === "string" ? Buffer.from(data, "utf8") : data)
+  }
+
+  /** The stored bytes of `sha256`, or null. */
+  contentBytes(sha256: string): Uint8Array | null {
+    return this.db.query<{ data: Uint8Array }, [string]>("SELECT data FROM contents WHERE sha256 = ?").get(sha256)?.data ?? null
   }
 
   content(sha256: string): string | null {
-    const row = this.db.query<{ data: Uint8Array }, [string]>("SELECT data FROM contents WHERE sha256 = ?").get(sha256)
-    return row === null ? null : Buffer.from(row.data).toString("utf8")
+    const data = this.contentBytes(sha256)
+    return data === null ? null : Buffer.from(data).toString("utf8")
   }
 
   /** Stores an input waiting for a turn after every other waiting input of the session. */
@@ -262,5 +276,18 @@ export class Conversation {
             AND item_position IN (SELECT position FROM window_items WHERE session_id = ?)`,
       )
       .run(target, source, kept, target)
+    this.db
+      .query(
+        `INSERT INTO research_baselines (session_id, window_position, run_id, name, sha256)
+          SELECT ?, window_position, run_id, name, sha256 FROM research_baselines WHERE session_id = ? AND ${owned}
+            AND window_position IN (SELECT position FROM checkpoint_windows WHERE session_id = ?)`,
+      )
+      .run(target, source, kept, target)
+    this.db
+      .query(
+        `INSERT INTO snapshot_files (session_id, run_id, area, name, sha256)
+          SELECT ?, run_id, area, name, sha256 FROM snapshot_files WHERE session_id = ? AND run_id IN (SELECT value FROM json_each(?))`,
+      )
+      .run(target, source, kept)
   }
 }

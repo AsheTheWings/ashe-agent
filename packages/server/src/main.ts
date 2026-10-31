@@ -147,6 +147,8 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
           models,
           defaultModel: inputs.defaultModel,
           sessionsDir: join(inputs.stateDir, "sessions"),
+          memoryDir: join(inputs.stateDir, "memory"),
+          scratchRoot: inputs.scratchRoot,
           setup: fileSetup({
             agents: new AgentRegistry(inputs.agents, inputs.defaultAgent, inputs.titlesDir),
             instructionsFile: inputs.instructionsFile,
