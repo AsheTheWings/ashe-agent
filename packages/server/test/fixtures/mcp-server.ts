@@ -2,7 +2,7 @@
  * A run-owned MCP server for tests. `bun mcp-server.ts stdio <name> <tool>...`
  * serves the tools over stdio; `mcpHandler` serves them over Streamable
  * HTTP. Each tool returns `<name>:<tool>:<arguments as JSON>`, except
- * `env`, which returns `ASHE_TEST_SECRET`; `quit`, which exits the process
+ * `env`, which returns `ASHE_AGENT_TEST_SECRET`; `quit`, which exits the process
  * just after answering; `parts`, which returns an image, a resource, and
  * text; `structured`, which returns only structured content; `fail`,
  * which returns an error result; and `stall`, which never answers. `bun mcp-server.ts hang <pid-file>` appends
@@ -34,7 +34,7 @@ export const testServer = (name: string, tools: ReadonlyArray<string>) => {
       if (tool === "quit") setTimeout(() => process.exit(0), 50)
       if (tool === "stall") return await new Promise<never>(() => {})
       if (special[tool] !== undefined) return special[tool]() as never
-      const text = tool === "env" ? (process.env.ASHE_TEST_SECRET ?? "unset") : `${name}:${tool}:${JSON.stringify(args)}`
+      const text = tool === "env" ? (process.env.ASHE_AGENT_TEST_SECRET ?? "unset") : `${name}:${tool}:${JSON.stringify(args)}`
       return { content: [{ type: "text", text }] }
     })
   }

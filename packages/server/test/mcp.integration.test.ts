@@ -80,7 +80,7 @@ describe("MCP servers", () => {
     const dir = mkdtempSync(join(tmpdir(), "ashe-agent-mcp-"))
     const remote = httpServer("remote", ["search"])
     try {
-      const envFile = privateFile(dir, "local.env", "# test\nASHE_TEST_SECRET=synthetic=value\n")
+      const envFile = privateFile(dir, "local.env", "# test\nASHE_AGENT_TEST_SECRET=synthetic=value\n")
       const headersFile = privateFile(dir, "remote.headers", "Authorization: Bearer synthetic-token\n")
       await withRegistry(
         {
