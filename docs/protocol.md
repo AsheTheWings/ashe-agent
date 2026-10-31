@@ -40,12 +40,14 @@ rules for a connection's first message.
 A client connects to `/v1/ws`, authenticates with its first request as
 the next section explains, and then sends any of these:
 
-- `models.list` gives the configured models, each with its id, context
-  window, and whether it takes image input; the first is the default for
-  new sessions. `agents.list` gives the valid agents and the refused agent
-  files.
+- `models.list` gives the configured models, each with its id, display
+  name, context limit, whether it takes image input, the reasoning
+  efforts it lists, and its configured effort, and the default model.
+  `agents.list` gives each agent with its title file's state and the
+  default agent, as [agents and skills](agents-and-skills.md) explains.
 - `session.list` gives every session's summary, and `session.create`
-  starts one, with a model from `models.list` and optionally an agent.
+  starts one, optionally with a model from `models.list`, an agent, and a
+  reasoning effort the model lists.
 - `session.subscribe` streams a session's events, as
   [session events](#session-events) explains, and `session.unsubscribe`
   stops them.
@@ -53,8 +55,9 @@ the next section explains, and then sends any of these:
   session or steers the running turn at its next step boundary; with mode
   `queue` it waits for the running turn to end and then starts the next.
   `session.cancel` cancels the running turn.
-- `session.setModel` switches the session's selected model, which the
-  next turn uses; the `MODEL_CHANGED` event records it.
+- `session.setModel` switches the session's selected model and reasoning
+  effort, which the next turn uses; without an effort, the selection is
+  cleared. The `MODEL_CHANGED` event records it.
 - `permission.answer` answers a `PERMISSION_REQUESTED` event with `once`,
   `always`, or `reject`, and a message that a rejection returns as the
   call's result. The first answer resolves the request for every client;
@@ -80,10 +83,10 @@ cover what AG-UI does not:
 
 | Event | Meaning |
 | --- | --- |
-| `SESSION_CREATED` | The session's first event: its `sessionDir`, agent, model, and fork source. |
+| `SESSION_CREATED` | The session's first event: its `sessionDir`, agent, model, reasoning effort, and fork source. |
 | `INPUT_RECEIVED` | An input entering the conversation, with its sender and mode. |
 | `RUN_INTERRUPTED` | A run the server was still running when it stopped. |
-| `MODEL_CHANGED` | A new selected model, used from the next run. |
+| `MODEL_CHANGED` | A new selected model and reasoning effort, used from the next run. |
 | `SESSION_REWOUND` | A rewind removed every event from `firstRemovedSeq` on. |
 | `TOOL_EXECUTION_STARTED` | The server started running a tool call. |
 | `PROGRAM_CALL_FINISHED` | A tool call made by the code mode program of an `execute` call ended. |

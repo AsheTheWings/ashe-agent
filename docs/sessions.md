@@ -68,10 +68,10 @@ session's next model call tells the model so in a harness note.
 `session.fork` creates a new session from a source session's turns
 through one of its user turns, or all of them, keeping their events'
 numbers, and leaves the source unchanged. The new session gets its own
-new session directory, and starts with the source's agent, selected
-model, and recorded
-instructions, which its `SESSION_CREATED` event gives, and with the
-source's [session grants](permissions.md#session-grants); the source's own
+new session directory. Its `SESSION_CREATED` event gives the source's
+agent, selected model, and reasoning effort, which it starts with. It
+also keeps the agent settings and user instructions the source recorded,
+and the source's [session grants](permissions.md#session-grants); the source's own
 `SESSION_REWOUND` and `MODEL_CHANGED` events are not copied. Its model
 context is the source's as it stood after the last copied turn, and its
 first model call is told the source and new session ids and its own

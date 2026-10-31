@@ -39,8 +39,27 @@ The terms these docs use, with the meaning they have in ashe-agent.
 - **Compaction**: replacing the older part of a session's model context
   with a summary so that the next model call fits the model's context
   window.
-- **Agent**: a named set of instructions, model settings, and permission
-  rules from an agent file; see [agents and skills](agents-and-skills.md).
+- **Harness instructions**: the content of the `<system>` block that
+  opens every session's first message.
+- **User instructions**: the content of the global instructions file, or
+  of the body of the title file of the session's agent.
+- **Agent**: the configuration a session runs as, keyed by its title:
+  its starting model, model setting overrides, and permission rules; see
+  [agents and skills](agents-and-skills.md). It is distinct from the agent
+  identity, the speaker of the model's own replies.
+- **Title**: an agent's key, 1 to 64 characters of `a-z` and `0-9` words
+  joined by single dashes, shown as its display title, such as
+  `Code Reviewer`.
+- **Title file**: `<title>.md` in the titles directory, holding an agent's
+  description and user instructions.
+- **Provider**: one OpenAI Responses endpoint with its API key file and
+  the models it serves; see [configuration](configuration.md).
+- **Model id**: `<provider>/<model>`, a provider's id followed by that
+  provider's own id of the model.
+- **Capabilities**: what a model entry says the model accepts: its input
+  types, a temperature, and its reasoning efforts.
+- **Settings**: a model's `checkpointWindowSize`, `temperature`, and
+  `reasoningEffort`, set by its entry and overridden by an agent.
 - **Skill**: an Agent Skills directory whose instructions the model loads
   when it needs them.
 - **Tool namespace**: a group of tools, such as `file` or one MCP server's,

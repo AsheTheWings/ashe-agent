@@ -22,12 +22,22 @@ model call had streamed.
 
 ## Model calls
 
-Model calls use the OpenAI Responses API at the configured base URL, with
-the configured API key and the turn's model id, through LangChain's
-`ChatOpenAI`. Each call asks the provider not to store it, so it carries
+Model calls use the OpenAI Responses API at the base URL of the turn's
+model's provider, with that provider's API key and its own id of the
+model, through LangChain's `ChatOpenAI`. Each call asks the provider not to store it, so it carries
 its whole input, and requests reasoning with its encrypted content, so
 later calls of the same model can send that reasoning back. Every call
 sets `instructions` to the fixed line `You're a helpful assistant.`.
+
+A call to a model that lists reasoning efforts sends the `reasoning`
+field with `summary: "auto"` and, when one resolves, the `effort`: the
+session's selection when the turn started, else the agent's override for
+the model, else the model entry's setting, each only if the model lists
+it. A call to a model without reasoning efforts sends no `reasoning`
+field. A call sends a temperature only to a model that accepts one: the
+agent's override, else the model entry's setting. Compaction's summary
+call sends the same settings as the turn's other calls.
+[Configuration](configuration.md) explains the model entries.
 
 The server reads no `OPENAI_*`, `LANGCHAIN_*`, `LANGSMITH_*`,
 `LANGGRAPH_*`, or `LC_*` process variable: `serve` removes them before the
@@ -96,7 +106,8 @@ Before each model call, the server estimates the call's input tokens: the
 last call's reported input tokens plus about one token per four
 characters of what was added since. When fewer than 60,000 tokens of the
 model's usable window would be left, it compacts first. The usable window
-is the model's configured context window, capped at 480,000 tokens.
+is the model's checkpoint window size for the session's agent, as
+[configuration](configuration.md) explains.
 
 Compaction keeps the most recent entries, up to 20,000 estimated tokens
 and never starting with a tool result, and summarizes everything before
