@@ -83,3 +83,20 @@ window is below 200,000 tokens is refused, and the server uses at most
 The model and graph libraries' own process variables, such as
 `OPENAI_BASE_URL` or `LANGSMITH_TRACING`, configure nothing: `serve`
 removes them, as [model context](model-context.md) explains.
+
+## What else the inputs configure
+
+The schema names every input; these docs explain what each group does:
+
+- [Permissions](permissions.md): the permission rules.
+- [Agents and skills](agents-and-skills.md): the global instructions
+  file, the agents directory with its agent files, and the skill roots.
+- [Tools](tools.md): the shell defaults, such as each command's yield
+  time, output budget, and environment file, and the processes a session
+  may hold; the Exa API key file, whose presence offers the web tools; and
+  the MCP servers, each reached over stdio or Streamable HTTP.
+- [Code mode](code-mode.md): the limits on each program's time, tool
+  calls, and output.
+- [Telemetry](telemetry.md): the exporter for each signal, the OTLP
+  endpoint and its protocol, the protected file of export headers, and
+  the deployment environment every signal reports.

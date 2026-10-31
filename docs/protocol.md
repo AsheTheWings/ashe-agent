@@ -7,6 +7,9 @@ is generated from it for clients in other languages, and accepts and
 rejects exactly what the Effect decoders do. Each message's fields are
 defined there; this page explains how they fit together.
 
+The protocol is at version 1 and may change incompatibly at any revision
+before ashe-agent 1.0.
+
 ## Messages
 
 A client sends requests, each with an `id` the server's response repeats.
@@ -31,6 +34,36 @@ token. A server that does not support the stated version answers with the
 `unsupportedVersion` error, whose `data.supportedVersions` lists the
 versions it does support. [Authentication](authentication.md) covers the
 rules for a connection's first message.
+
+## Methods
+
+A client connects to `/v1/ws`, authenticates with its first request as
+the next section explains, and then sends any of these:
+
+- `models.list` gives the configured models, each with its id, context
+  window, and whether it takes image input; the first is the default for
+  new sessions. `agents.list` gives the valid agents and the refused agent
+  files.
+- `session.list` gives every session's summary, and `session.create`
+  starts one, with a model from `models.list` and optionally an agent.
+- `session.subscribe` streams a session's events, as
+  [session events](#session-events) explains, and `session.unsubscribe`
+  stops them.
+- `session.input` sends input. Without a mode it starts a turn on an idle
+  session or steers the running turn at its next step boundary; with mode
+  `queue` it waits for the running turn to end and then starts the next.
+  `session.cancel` cancels the running turn.
+- `session.setModel` switches the session's selected model, which the
+  next turn uses; the `MODEL_CHANGED` event records it.
+- `permission.answer` answers a `PERMISSION_REQUESTED` event with `once`,
+  `always`, or `reject`, and a message that a rejection returns as the
+  call's result. The first answer resolves the request for every client;
+  [permissions](permissions.md) explains the rules and grants.
+- `session.fork` copies a session through the user turn `runId`, or
+  entirely, into a new session. `session.rewind` removes the user turn
+  `runId` and every later one, then reruns its input or the given `text`.
+
+[Sessions](sessions.md) explains turns, input, fork, and rewind in full.
 
 ## Session events
 

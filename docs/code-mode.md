@@ -49,6 +49,28 @@ Each finished call emits `PROGRAM_CALL_FINISHED` with the called tool's
 registered name and outcome. When a restart interrupts a program, the
 `execute` call's interrupted result lists those finished calls in order.
 
+## The language
+
+Programs are JavaScript run by an interpreter, not by the server's
+JavaScript engine, and they differ from ordinary JavaScript:
+
+- A program is the body of an async function: top-level `await` and
+  `return` work, and a final expression is its result.
+- Values cross between the program and its tools as `JSON.stringify`
+  would carry them, so functions and `undefined` properties vanish and a
+  cyclic value throws.
+- Programs get no host globals, as stated above; the code mode component
+  test "code mode programs > get no fetch, timer, process, or module
+  globals and cause no host effect" in
+  `packages/server/test/codemode.component.test.ts` shows them absent.
+- Some syntax and built-ins are not supported, among them classes,
+  user-defined constructors, getters and setters in object literals,
+  BigInt, and typed arrays other than `Uint8Array`.
+
+[`packages/codemode/interpreter-support.md`](../packages/codemode/interpreter-support.md)
+is the full matrix of supported features and known gaps, checked against
+test262 by `bun run test:test262`.
+
 ## Limits
 
 The code mode limits input bounds each program's time, tool calls, and
