@@ -1,5 +1,5 @@
 import type { Agents, ModelOverrides, Permission } from "../inputs/shapes.ts"
-import { displayTitle, readTitleFile, type TitleFile } from "./titles.ts"
+import { displayTitle, readTitleFile, type FileMetadata, type TitleFile } from "./titles.ts"
 
 /** What a session keeps from its agent, as recorded at its creation. */
 export interface SessionAgent {
@@ -58,9 +58,9 @@ export class AgentRegistry {
     return { key: chosen, model: entry.model ?? null, overrides: entry.models ?? {}, permission: entry.permission ?? null }
   }
 
-  /** The title file of the agent `key`, read now. */
-  titleFile(key: string): TitleFile {
-    return readTitleFile(this.titlesDir, key)
+  /** The title file of the agent `key`, read now, or unchanged when its metadata equals `unchangedFrom`. */
+  titleFile(key: string, unchangedFrom?: FileMetadata): TitleFile {
+    return readTitleFile(this.titlesDir, key, unchangedFrom)
   }
 
   /** Every agent with its display title, its title file's description and state, its starting model, and its effort overrides. */
@@ -77,7 +77,7 @@ export class AgentRegistry {
         description: file.state === "present" ? file.description : null,
         model: entry.model ?? null,
         reasoningEfforts,
-        titleFile: file.state === "refused" ? { state: "refused", reason: file.reason } : { state: file.state },
+        titleFile: file.state === "refused" ? { state: "refused", reason: file.reason } : { state: file.state === "absent" ? "absent" : "present" },
       }
     })
   }

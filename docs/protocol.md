@@ -1,6 +1,6 @@
 # Protocol
 
-Clients talk to ashe-agent over one WebSocket path, `/v1/ws`, in JSON-RPC
+Clients talk to AsheAgent over one WebSocket path, `/v1/ws`, in JSON-RPC
 2.0 messages. `packages/protocol` defines every message once as an Effect
 Schema. [`schemas/protocol.schema.json`](../schemas/protocol.schema.json)
 is generated from it for clients in other languages, and accepts and
@@ -8,7 +8,7 @@ rejects exactly what the Effect decoders do. Each message's fields are
 defined there; this page explains how they fit together.
 
 The protocol is at version 1 and may change incompatibly at any revision
-before ashe-agent 1.0.
+before AsheAgent 1.0.
 
 ## Messages
 
@@ -62,9 +62,10 @@ the next section explains, and then sends any of these:
   `always`, or `reject`, and a message that a rejection returns as the
   call's result. The first answer resolves the request for every client;
   [permissions](permissions.md) explains the rules and grants.
-- `session.fork` copies a session through the user turn `runId`, or
-  entirely, into a new session. `session.rewind` removes the user turn
-  `runId` and every later one, then reruns its input or the given `text`.
+- `session.fork` copies a session through the fork point `runId`, or
+  entirely, into a new session. `session.rewind` removes the rewind point
+  `runId` and every later turn, then reruns its user messages or the
+  given `text`.
 
 [Sessions](sessions.md) explains turns, input, fork, and rewind in full.
 
@@ -84,14 +85,20 @@ cover what AG-UI does not:
 | Event | Meaning |
 | --- | --- |
 | `SESSION_CREATED` | The session's first event: its `sessionDir`, agent, model, reasoning effort, and fork source. |
-| `INPUT_RECEIVED` | An input entering the conversation, with its sender and mode. |
+| `CHECKPOINT_WINDOW_SEEDED` | A checkpoint window's construction, with each seed component's type, heading, and text. |
+| `INPUT_WAITING` | A user message stored as waiting input, with its id, text, mode, and sender. |
+| `INPUT_RECEIVED` | A user message entering the conversation, with its sender and mode. |
+| `DEVELOPER_MESSAGE` | A developer message delivered into a run, with each component's type, heading, and text. |
+| `SESSION_ERROR` | An error that ends nothing, such as unreadable user instructions, with a code, a message, and the run it arose in. |
 | `RUN_INTERRUPTED` | A run the server was still running when it stopped. |
 | `MODEL_CHANGED` | A new selected model and reasoning effort, used from the next run. |
 | `SESSION_REWOUND` | A rewind removed every event from `firstRemovedSeq` on. |
 | `TOOL_EXECUTION_STARTED` | The server started running a tool call. |
 | `PROGRAM_CALL_FINISHED` | A tool call made by the code mode program of an `execute` call ended. |
-| `COMPACTED` | The model's context was compacted. |
 | `PERMISSION_REQUESTED`, `PERMISSION_RESOLVED`, `PERMISSION_WITHDRAWN` | A tool call waiting for an answer, and its end. |
+
+`RUN_STARTED` adds to AG-UI's fields the run's `model`, its `cause`, and
+`userMessageIds`, the user messages its starting input holds.
 
 A client applying `SESSION_REWOUND` drops its events numbered
 `firstRemovedSeq` and later before it applies the events after it.

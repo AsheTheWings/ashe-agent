@@ -58,4 +58,17 @@ describe("title files", () => {
       expect(() => setup.userInstructions(setup.resolve("extra"))).toThrow('its frontmatter holds "model"')
     })
   })
+
+  test("a FIFO at a title file's path is refused without blocking", () => {
+    withConfig((config) => {
+      const titles = join(config, "titles")
+      const made = Bun.spawnSync(["mkfifo", join(titles, "piped.md")])
+      expect(made.exitCode).toBe(0)
+      const setup = fileSetup({ agents: new AgentRegistry({ piped: {} }, null, titles), instructionsFile: join(config, "AGENTS.md"), skillRoots: [] })
+      expect(setup.agents().agents).toEqual([
+        { key: "piped", title: "Piped", description: null, model: null, reasoningEfforts: {}, titleFile: { state: "refused", reason: "it is not a regular file" } },
+      ])
+      expect(() => setup.userInstructions(setup.resolve("piped"))).toThrow("it is not a regular file")
+    })
+  })
 })

@@ -210,7 +210,7 @@ const reduce = (view: SessionView, { seq, event }: SessionEvent): SessionView =>
     }
     case "RUN_STARTED": {
       const items = view.items.map((item) =>
-        item.kind === "user" && item.id === event.inputId ? { ...item, runId: event.runId } : item,
+        item.kind === "user" && event.userMessageIds.includes(item.id) ? { ...item, runId: event.runId } : item,
       )
       return { ...view, items, runId: event.runId }
     }
@@ -269,8 +269,8 @@ const reduce = (view: SessionView, { seq, event }: SessionEvent): SessionView =>
       )
     case "MODEL_CHANGED":
       return notice({ ...view, model: event.model }, seq, `Model changed to ${event.model}`)
-    case "COMPACTED":
-      return notice(view, seq, `Context compacted from ${event.tokensBefore} to ${event.tokensAfter} tokens`)
+    case "SESSION_ERROR":
+      return notice(view, seq, event.message)
     case "PERMISSION_REQUESTED": {
       const { type: _, ...request } = event
       return { ...view, permissions: [...view.permissions, request] }
@@ -291,6 +291,9 @@ const reduce = (view: SessionView, { seq, event }: SessionEvent): SessionView =>
     case "REASONING_END":
     case "TOOL_CALL_END":
     case "SESSION_REWOUND":
+    case "INPUT_WAITING":
+    case "DEVELOPER_MESSAGE":
+    case "CHECKPOINT_WINDOW_SEEDED":
       return view
   }
 }

@@ -25,6 +25,7 @@ export interface FileMetadata {
  */
 export type FileText =
   | { readonly kind: "text"; readonly text: string; readonly metadata: FileMetadata }
+  | { readonly kind: "unchanged" }
   | { readonly kind: "absent" }
   | { readonly kind: "error"; readonly reason: string }
 
@@ -36,14 +37,23 @@ const metadataOf = (stat: { dev: number; ino: number; size: number; mtimeMs: num
   ctimeMs: stat.ctimeMs,
 })
 
+/** Whether two metadata records describe the same unchanged file. */
+export const sameMetadata = (a: FileMetadata, b: FileMetadata) =>
+  a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs
+
 /**
  * Reads a regular file as UTF-8 with its metadata. With `noFollow`, a
- * symlink at `path` is refused rather than followed.
+ * symlink at `path` is refused rather than followed. With `unchangedFrom`,
+ * a file whose metadata equals it is reported unchanged without reading.
+ * The open never blocks, so a FIFO or device is refused as not a regular file.
  */
-export const readFileText = (path: string, options: { readonly noFollow?: boolean } = {}): FileText => {
+export const readFileText = (
+  path: string,
+  options: { readonly noFollow?: boolean; readonly unchangedFrom?: FileMetadata } = {},
+): FileText => {
   let fd: number
   try {
-    fd = openSync(path, constants.O_RDONLY | (options.noFollow === true ? constants.O_NOFOLLOW : 0))
+    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | (options.noFollow === true ? constants.O_NOFOLLOW : 0))
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code
     if (code === "ENOENT") return { kind: "absent" }
@@ -53,6 +63,7 @@ export const readFileText = (path: string, options: { readonly noFollow?: boolea
   try {
     const stat = fstatSync(fd)
     if (!stat.isFile()) return { kind: "error", reason: "it is not a regular file" }
+    if (options.unchangedFrom !== undefined && sameMetadata(metadataOf(stat), options.unchangedFrom)) return { kind: "unchanged" }
     return { kind: "text", text: readFileSync(fd, "utf8"), metadata: metadataOf(stat) }
   } catch (error) {
     return { kind: "error", reason: `it is unreadable (${(error as NodeJS.ErrnoException).code ?? "read failed"})` }
@@ -95,14 +106,20 @@ export type TitleFile =
       readonly text: string
       readonly metadata: FileMetadata
     }
+  | { readonly state: "unchanged"; readonly path: string }
   | { readonly state: "absent"; readonly path: string }
   | { readonly state: "refused"; readonly path: string; readonly reason: string }
 
-/** The title file of the agent `key`: `<dir>/<key>.md`, a regular file read without following a symlink. */
-export const readTitleFile = (dir: string, key: string): TitleFile => {
+/**
+ * The title file of the agent `key`: `<dir>/<key>.md`, a regular file read
+ * without following a symlink; unchanged, unread, when its metadata equals
+ * `unchangedFrom`.
+ */
+export const readTitleFile = (dir: string, key: string, unchangedFrom?: FileMetadata): TitleFile => {
   const path = join(dir, `${key}.md`)
-  const read = readFileText(path, { noFollow: true })
+  const read = readFileText(path, { noFollow: true, ...(unchangedFrom === undefined ? {} : { unchangedFrom }) })
   if (read.kind === "absent") return { state: "absent", path }
+  if (read.kind === "unchanged") return { state: "unchanged", path }
   if (read.kind === "error") return { state: "refused", path, reason: read.reason }
   const parsed = parseTitleFile(read.text)
   if (!parsed.ok) return { state: "refused", path, reason: parsed.reason }

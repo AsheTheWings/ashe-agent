@@ -84,7 +84,10 @@ export const methods = {
     Schema.Struct({ sessionId: Id, runId: Schema.optionalKey(Id) }),
     Schema.Struct({ session: SessionSummary }),
   ),
-  /** Removes the user turn `runId` and every later turn, then reruns its input, or `text` instead. */
+  /**
+   * Removes the turn `runId`, whose starting input holds a user message, and
+   * every later turn, then reruns its user messages, or `text` instead.
+   */
   "session.rewind": method(
     Schema.Struct({ sessionId: Id, runId: Id, text: Schema.optionalKey(Schema.String) }),
     Empty,

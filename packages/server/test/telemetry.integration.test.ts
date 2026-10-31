@@ -169,35 +169,6 @@ describe("telemetry", () => {
     for (const value of [...Object.values(marker), token]) expect(exported).not.toContain(value)
   }, 60_000)
 
-  test("a compaction's summary call is a model call of its turn, traced and timed", async () => {
-    const h = new AgentHarness({})
-    try {
-      const id = h.create()
-      h.model.next(say("r1", { inputTokens: 150_000 }))
-      h.input(id, `t1 ${"y".repeat(100_000)}`)
-      await h.turnsEnded(id, 1)
-      const before = telemetry.spans().length
-      const timedBefore = await modelCallsTimed()
-      h.model.next(say("SUMMARY"), say("r2"))
-      h.input(id, "t2")
-      await h.turnsEnded(id, 2)
-      expect(h.events(id).some((event) => event.event.type === "COMPACTED")).toBe(true)
-
-      const spans = telemetry.spans().slice(before)
-      const turn = spans.find((span) => span.name === "ashe_agent.turn")!
-      const calls = spans.filter((span) => span.name === "ashe_agent.model_call")
-      expect(calls).toHaveLength(2)
-      for (const call of calls) {
-        expect(call.parentSpanContext?.spanId).toBe(turn.spanContext().spanId)
-        expect(call.attributes["ashe_agent.model"]).toBe(turn.attributes["ashe_agent.model"])
-        expect(call.attributes["error.type"]).toBeUndefined()
-      }
-      expect((await modelCallsTimed()) - timedBefore).toBe(2)
-    } finally {
-      await h.cleanup()
-    }
-  }, 60_000)
-
   test("an MCP name collision's log record names both servers, both tools, and the shared name", async () => {
     const before = telemetry.logs().length
     mcpLogEvents.collision!({

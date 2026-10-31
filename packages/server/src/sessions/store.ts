@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite"
 import { join } from "node:path"
 import type { SessionEvent, SessionEventBody, SessionSummary } from "@ashe-agent/protocol"
 import type { ModelOverrides, Permission } from "../inputs/shapes.ts"
-import { copyThread, latestCheckpointId, truncateThread } from "../store/checkpoint-threads.ts"
+import { Conversation } from "./conversation.ts"
 
 export type TurnStatus = "running" | "finished" | "cancelled" | "failed" | "interrupted"
 
@@ -27,30 +27,23 @@ export interface SessionRecord {
   readonly permission: Permission | null
   readonly createdAt: number
   readonly nextSeq: number
-  /** The first message of every model call, rendered at creation. */
-  readonly firstMessage: string
-  /** The catalogs the first message lists. */
-  readonly catalogs: Catalogs
-  /** Harness notes the next turn delivers. */
-  readonly pendingNotes: ReadonlyArray<string>
 }
+
+/** What started a turn: an input holding a user message, a continuation, or another notification component. */
+export type TurnCause = "user" | "continuation" | "notification"
 
 export interface TurnRecord {
   readonly runId: string
   readonly position: number
-  readonly inputId: string
-  readonly inputText: string
+  readonly cause: TurnCause
+  /** The user messages the turn's starting input holds, in order; a turn holding any is a rewind and fork point. */
+  readonly userMessageIds: ReadonlyArray<string>
   readonly model: string
   /** The session's reasoning effort selection when the turn started. */
   readonly reasoningEffort: string | null
   readonly status: TurnStatus
+  /** The number of the turn's first event, where a rewind of it starts removing. */
   readonly firstSeq: number
-  /** The fork and rewind notes the turn delivered, which a rewind of it delivers again; catalog notes are derived anew. */
-  readonly notes: ReadonlyArray<string>
-  /** The catalogs the model knew from the turn on: the first message's, or those a note gave it. */
-  readonly catalogs: Catalogs
-  /** The last checkpoint of the session's window when the turn ended. */
-  readonly checkpointId: string | null
 }
 
 interface SessionRow {
@@ -62,9 +55,6 @@ interface SessionRow {
   permission: string | null
   created_at: number
   next_seq: number
-  first_message: string
-  catalogs: string
-  pending_notes: string
 }
 
 const toSession = (row: SessionRow, sessionsDir: string): SessionRecord => ({
@@ -77,48 +67,43 @@ const toSession = (row: SessionRow, sessionsDir: string): SessionRecord => ({
   permission: row.permission === null ? null : JSON.parse(row.permission),
   createdAt: row.created_at,
   nextSeq: row.next_seq,
-  firstMessage: row.first_message,
-  catalogs: JSON.parse(row.catalogs),
-  pendingNotes: JSON.parse(row.pending_notes),
 })
 
 interface TurnRow {
   run_id: string
   position: number
-  input_id: string
-  input_text: string
+  cause: TurnCause
+  user_message_ids: string
   model: string
   reasoning_effort: string | null
   status: TurnStatus
   first_seq: number
-  notes: string
-  catalogs: string
-  checkpoint_id: string | null
 }
 
 const toTurn = (row: TurnRow): TurnRecord => ({
   runId: row.run_id,
   position: row.position,
-  inputId: row.input_id,
-  inputText: row.input_text,
+  cause: row.cause,
+  userMessageIds: JSON.parse(row.user_message_ids),
   model: row.model,
   reasoningEffort: row.reasoning_effort,
   status: row.status,
   firstSeq: row.first_seq,
-  notes: JSON.parse(row.notes),
-  catalogs: JSON.parse(row.catalogs),
-  checkpointId: row.checkpoint_id,
 })
 
-const turnColumns = "run_id, position, input_id, input_text, model, reasoning_effort, status, first_seq, notes, catalogs, checkpoint_id"
+const turnColumns = "run_id, position, cause, user_message_ids, model, reasoning_effort, status, first_seq"
 
 /** Session, event, and turn persistence. Every write that numbers an event takes the session's counter. */
 export class SessionStore {
+  readonly conversation: Conversation
+
   /** `sessionsDir` holds each session's directory, named by its id. */
   constructor(
     readonly db: Database,
     readonly sessionsDir: string,
-  ) {}
+  ) {
+    this.conversation = new Conversation(db)
+  }
 
   /** The directory of the session `id`. */
   sessionDir(id: string) {
@@ -154,17 +139,14 @@ export class SessionStore {
   }
 
   /** Creates a session with its `SESSION_CREATED` event as event 1. */
-  createSession(
-    session: Omit<SessionRecord, "sessionDir" | "nextSeq" | "pendingNotes">,
-    forkedFrom: { sessionId: string; runId: string | null } | null,
-  ) {
+  createSession(session: Omit<SessionRecord, "sessionDir" | "nextSeq">, forkedFrom: { sessionId: string; runId: string | null } | null) {
     this.db.transaction(() => {
       this.db
         .query(
           `INSERT INTO sessions
             (id, agent_key, model, reasoning_effort, model_overrides, permission, forked_from_session, forked_from_run,
-             created_at, next_seq, first_message, catalogs)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+             created_at, next_seq)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
         )
         .run(
           session.id,
@@ -176,8 +158,6 @@ export class SessionStore {
           forkedFrom?.sessionId ?? null,
           forkedFrom?.runId ?? null,
           session.createdAt,
-          session.firstMessage,
-          JSON.stringify(session.catalogs),
         )
       this.appendEvent(
         session.id,
@@ -198,16 +178,6 @@ export class SessionStore {
     this.db.query("UPDATE sessions SET model = ?, reasoning_effort = ? WHERE id = ?").run(model, reasoningEffort, sessionId)
   }
 
-  setFirstMessage(sessionId: string, firstMessage: string, catalogs: Catalogs) {
-    this.db
-      .query("UPDATE sessions SET first_message = ?, catalogs = ? WHERE id = ?")
-      .run(firstMessage, JSON.stringify(catalogs), sessionId)
-  }
-
-  setPendingNotes(sessionId: string, notes: ReadonlyArray<string>) {
-    this.db.query("UPDATE sessions SET pending_notes = ? WHERE id = ?").run(JSON.stringify(notes), sessionId)
-  }
-
   /** The session's grants, as allow rules in the order they were added. */
   grants(sessionId: string): ReadonlyArray<{ readonly permission: string; readonly pattern: string }> {
     return this.db
@@ -225,17 +195,6 @@ export class SessionStore {
     this.db.transaction(() => {
       for (const pattern of patterns) insert.run(sessionId, sessionId, permission, pattern)
     })()
-  }
-
-  /** The `TOOL_CALL_RESULT` event the session recorded for a tool call, if any. */
-  toolResult(sessionId: string, toolCallId: string): Extract<SessionEventBody, { type: "TOOL_CALL_RESULT" }> | null {
-    const row = this.db
-      .query<{ body: string }, [string, string]>(
-        `SELECT body FROM events WHERE session_id = ? AND json_extract(body, '$.type') = 'TOOL_CALL_RESULT'
-          AND json_extract(body, '$.toolCallId') = ? ORDER BY seq LIMIT 1`,
-      )
-      .get(sessionId, toolCallId)
-    return row === null ? null : JSON.parse(row.body)
   }
 
   /** Persists an event under the session's next sequence number, advancing the counter first, and returns it. */
@@ -276,37 +235,32 @@ export class SessionStore {
     return row === null ? null : toTurn(row)
   }
 
-  insertTurn(sessionId: string, turn: Omit<TurnRecord, "position" | "status" | "checkpointId">, startedAt: number): TurnRecord {
+  insertTurn(sessionId: string, turn: Omit<TurnRecord, "position" | "status">, startedAt: number): TurnRecord {
     const position =
       (this.db.query<{ p: number | null }, [string]>("SELECT max(position) AS p FROM turns WHERE session_id = ?").get(sessionId)
         ?.p ?? 0) + 1
     this.db
       .query(
         `INSERT INTO turns
-          (session_id, run_id, position, input_id, input_text, model, reasoning_effort, status, first_seq, started_at, notes, catalogs)
-          VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)`,
+          (session_id, run_id, position, cause, user_message_ids, model, reasoning_effort, status, first_seq, started_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)`,
       )
       .run(
         sessionId,
         turn.runId,
         position,
-        turn.inputId,
-        turn.inputText,
+        turn.cause,
+        JSON.stringify(turn.userMessageIds),
         turn.model,
         turn.reasoningEffort,
         turn.firstSeq,
         startedAt,
-        JSON.stringify(turn.notes),
-        JSON.stringify(turn.catalogs),
       )
-    return { ...turn, position, status: "running", checkpointId: null }
+    return { ...turn, position, status: "running" }
   }
 
-  /** Ends a turn, recording the session's latest checkpoint as the turn's window. */
   endTurn(sessionId: string, runId: string, status: Exclude<TurnStatus, "running">, endedAt: number) {
-    this.db
-      .query("UPDATE turns SET status = ?, ended_at = ?, checkpoint_id = ? WHERE session_id = ? AND run_id = ?")
-      .run(status, endedAt, latestCheckpointId(this.db, sessionId), sessionId, runId)
+    this.db.query("UPDATE turns SET status = ?, ended_at = ? WHERE session_id = ? AND run_id = ?").run(status, endedAt, sessionId, runId)
   }
 
   /** Turns left running by a stopped server, with their sessions. */
@@ -318,36 +272,33 @@ export class SessionStore {
   }
 
   /**
-   * Removes `turn` and every later turn with their events, and returns the
-   * fork and rewind notes those turns delivered; their catalog notes are
-   * not kept. The window returns to the checkpoint of
-   * the turn before, or to none. The counter keeps its value, so no removed
-   * number is used again; the caller appends the rewound event in the same
-   * transaction.
+   * Removes `turn` and every later turn, with their events, the
+   * `INPUT_WAITING` events of the user messages they took, and every row of
+   * conversation state they own, which their foreign keys delete with them.
+   * The counter keeps its value, so no removed number is used again; the
+   * caller appends the rewound event in the same transaction.
    */
-  removeFrom(sessionId: string, turn: TurnRecord): ReadonlyArray<string> {
-    const turns = this.turns(sessionId)
-    const removed = turns.filter((candidate) => candidate.position >= turn.position)
-    const before = turns.filter((candidate) => candidate.position < turn.position).at(-1)
-    this.db.query("DELETE FROM events WHERE session_id = ? AND seq >= ?").run(sessionId, turn.firstSeq)
+  removeFrom(sessionId: string, turn: TurnRecord) {
+    const removed = this.turns(sessionId).filter((candidate) => candidate.position >= turn.position)
+    const taken = JSON.stringify(removed.flatMap((candidate) => candidate.userMessageIds))
+    this.db
+      .query(
+        `DELETE FROM events WHERE session_id = ? AND (seq >= ? OR (json_extract(body, '$.type') = 'INPUT_WAITING'
+          AND json_extract(body, '$.inputId') IN (SELECT value FROM json_each(?))))`,
+      )
+      .run(sessionId, turn.firstSeq, taken)
     this.db.query("DELETE FROM turns WHERE session_id = ? AND position >= ?").run(sessionId, turn.position)
-    truncateThread(this.db, sessionId, before?.checkpointId ?? null)
-    return removed.flatMap((candidate) => candidate.notes)
   }
 
   /**
    * Creates `target` as a copy of `source` through the turn `throughRunId`,
-   * or all of it: its turns and their events keep their numbers, its window
-   * is the source's as it stood after the last copied turn, it holds the
+   * or all of it: its turns and their events keep their numbers, it holds
+   * the conversation state owned by no turn or by a copied turn and the
    * source's grants, and the copy's first event names its source and gives
-   * its settings. Events about the
-   * source session itself, its rewinds and model changes, are not copied.
+   * its settings. Events about the source session itself, its rewinds and
+   * model changes, and inputs no copied turn took, are not copied.
    */
-  fork(
-    source: SessionRecord,
-    target: { id: string; createdAt: number; firstMessage: string; notes: ReadonlyArray<string> },
-    throughRunId: string | null,
-  ): SessionRecord {
+  fork(source: SessionRecord, target: { id: string; createdAt: number }, throughRunId: string | null): SessionRecord {
     return this.db.transaction(() => {
       const turns = this.turns(source.id)
       const through = throughRunId === null ? null : turns.find((turn) => turn.runId === throughRunId)
@@ -358,8 +309,8 @@ export class SessionStore {
         .query(
           `INSERT INTO sessions
             (id, agent_key, model, reasoning_effort, model_overrides, permission, forked_from_session, forked_from_run,
-             created_at, next_seq, first_message, catalogs, pending_notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             created_at, next_seq)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           target.id,
@@ -372,9 +323,6 @@ export class SessionStore {
           throughRunId,
           target.createdAt,
           cutoff,
-          target.firstMessage,
-          JSON.stringify(source.catalogs),
-          JSON.stringify(target.notes),
         )
       const created: SessionEventBody = {
         type: "SESSION_CREATED",
@@ -385,25 +333,26 @@ export class SessionStore {
         forkedFrom: { sessionId: source.id, runId: throughRunId },
       }
       const insert = this.db.query("INSERT INTO events (session_id, seq, timestamp, body) VALUES (?, ?, ?, ?)")
-      for (const event of this.eventsAfter(source.id, 0)) {
-        if (event.seq >= cutoff) break
+      const copied = this.eventsAfter(source.id, 0).filter((event) => event.seq < cutoff)
+      // A waiting input's event is copied only with the copied turn that took it.
+      const taken = new Set(copied.flatMap(({ event }) => (event.type === "INPUT_RECEIVED" ? [event.inputId] : [])))
+      for (const event of copied) {
         const type = event.event.type
         if (type === "SESSION_REWOUND" || type === "MODEL_CHANGED") continue
+        if (event.event.type === "INPUT_WAITING" && !taken.has(event.event.inputId)) continue
         const body = type === "SESSION_CREATED" ? created : withThread(event.event, target.id)
         insert.run(target.id, event.seq, type === "SESSION_CREATED" ? target.createdAt : event.timestamp, JSON.stringify(body))
       }
       this.db
         .query(
           `INSERT INTO turns
-            (session_id, run_id, position, input_id, input_text, model, reasoning_effort, status, first_seq, started_at, ended_at,
-             notes, catalogs, checkpoint_id)
-            SELECT ?, run_id, position, input_id, input_text, model, reasoning_effort, status, first_seq, started_at, ended_at,
-              notes, catalogs, checkpoint_id
+            (session_id, run_id, position, cause, user_message_ids, model, reasoning_effort, status, first_seq, started_at, ended_at)
+            SELECT ?, run_id, position, cause, user_message_ids, model, reasoning_effort, status, first_seq, started_at, ended_at
             FROM turns WHERE session_id = ? AND first_seq < ?`,
         )
         .run(target.id, source.id, cutoff)
-      if (through === null) copyThread(this.db, source.id, target.id, null)
-      else copyThread(this.db, source.id, target.id, through.checkpointId ?? "")
+      const kept = turns.filter((turn) => turn.firstSeq < cutoff).map((turn) => turn.runId)
+      this.conversation.copy(source.id, target.id, kept)
       this.db
         .query(
           `INSERT INTO session_grants (session_id, position, permission, pattern)

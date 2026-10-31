@@ -36,11 +36,11 @@ export const processSources = (): Sources => ({
   readFile: readDiskFile,
 })
 
-/** Prefixes of process variables that the model and graph libraries read as their own configuration. */
-const dependencyVariable = /^(OPENAI|LANGCHAIN|LANGSMITH|LANGGRAPH|LC)_/
+/** Prefixes of process variables that the model libraries read as their own configuration. */
+const dependencyVariable = /^(OPENAI|LANGCHAIN|LANGSMITH|LC)_/
 
 /**
- * Removes from `env` every variable the model and graph libraries would read
+ * Removes from `env` every variable the model libraries would read
  * as configuration, such as `OPENAI_BASE_URL` or `LANGSMITH_TRACING`, so
  * only the declared inputs configure the server. Returns the removed names.
  */

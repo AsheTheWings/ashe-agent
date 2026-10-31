@@ -7,15 +7,21 @@ where SQLite cannot use WAL. The `database` directory holds only the
 database file and SQLite's `ashe-agent.db-wal` and `ashe-agent.db-shm`
 beside it, so a backup can leave the live database's directory out and
 copy a consistent dump instead.
-LangGraph checkpoints live there too, through the server's own checkpoint
-saver.
 
-Each session's model context is a LangGraph thread named by the session
-id, with a checkpoint after every step of a turn; each checkpoint stores
-the whole context. A turn records the thread's latest checkpoint when it
-ends. A rewind removes the checkpoints after the last kept turn's, and a
-fork copies the source's checkpoints through the last copied turn's into
-its own thread.
+## Conversation state
+
+A session's conversation state is rows of its own: its checkpoint
+windows, each window's items, the developer component each component item
+holds, and its waiting input. The content store keeps text that
+components refer to by SHA-256, such as each version of the user
+instructions. Every row a turn makes names that turn and references its
+`turns` row with a cascading foreign key; rows made at session creation,
+such as the first window and its seed, name no turn.
+
+A rewind deletes the removed turns' rows, and the foreign keys delete
+every row they own with them, so the conversation is again what the kept
+turns and creation made. A fork copies the rows that no turn owns and
+those of the turns it copies into the new session.
 
 ## Migrations
 

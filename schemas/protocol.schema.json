@@ -953,9 +953,20 @@
                           "type": "string",
                           "minLength": 1
                         },
-                        "inputId": {
+                        "cause": {
                           "type": "string",
-                          "minLength": 1
+                          "enum": [
+                            "user",
+                            "continuation",
+                            "notification"
+                          ]
+                        },
+                        "userMessageIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          }
                         }
                       },
                       "required": [
@@ -963,7 +974,8 @@
                         "threadId",
                         "runId",
                         "model",
-                        "inputId"
+                        "cause",
+                        "userMessageIds"
                       ],
                       "additionalProperties": true
                     },
@@ -1520,6 +1532,87 @@
                         "type": {
                           "type": "string",
                           "enum": [
+                            "INPUT_WAITING"
+                          ]
+                        },
+                        "inputId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "text": {
+                          "type": "string"
+                        },
+                        "mode": {
+                          "type": "string",
+                          "enum": [
+                            "steer",
+                            "queue"
+                          ]
+                        },
+                        "sender": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "token"
+                                  ]
+                                },
+                                "tokenId": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "name": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "tokenId",
+                                "name"
+                              ],
+                              "additionalProperties": true
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "login"
+                                  ]
+                                },
+                                "loginId": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "loginId"
+                              ],
+                              "additionalProperties": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "inputId",
+                        "text",
+                        "mode",
+                        "sender"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
                             "INPUT_RECEIVED"
                           ]
                         },
@@ -1707,33 +1800,135 @@
                         "type": {
                           "type": "string",
                           "enum": [
-                            "COMPACTED"
+                            "DEVELOPER_MESSAGE"
                           ]
                         },
                         "runId": {
                           "type": "string",
                           "minLength": 1
                         },
-                        "tokensBefore": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        "tokensAfter": {
-                          "type": "integer",
-                          "minimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        "promptRevision": {
-                          "type": "string"
+                        "components": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "seed",
+                                  "state",
+                                  "notification"
+                                ]
+                              },
+                              "heading": {
+                                "type": "string"
+                              },
+                              "text": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "heading",
+                              "text"
+                            ],
+                            "additionalProperties": true
+                          }
                         }
                       },
                       "required": [
                         "type",
                         "runId",
-                        "tokensBefore",
-                        "tokensAfter",
-                        "promptRevision"
+                        "components"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "CHECKPOINT_WINDOW_SEEDED"
+                          ]
+                        },
+                        "runId": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "window": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "components": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "seed",
+                                  "state",
+                                  "notification"
+                                ]
+                              },
+                              "heading": {
+                                "type": "string"
+                              },
+                              "text": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "heading",
+                              "text"
+                            ],
+                            "additionalProperties": true
+                          }
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "runId",
+                        "window",
+                        "components"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "SESSION_ERROR"
+                          ]
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "runId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "code",
+                        "message"
                       ],
                       "additionalProperties": true
                     },
@@ -1940,9 +2135,20 @@
               "type": "string",
               "minLength": 1
             },
-            "inputId": {
+            "cause": {
               "type": "string",
-              "minLength": 1
+              "enum": [
+                "user",
+                "continuation",
+                "notification"
+              ]
+            },
+            "userMessageIds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             }
           },
           "required": [
@@ -1950,7 +2156,8 @@
             "threadId",
             "runId",
             "model",
-            "inputId"
+            "cause",
+            "userMessageIds"
           ],
           "additionalProperties": true
         },
@@ -2507,6 +2714,87 @@
             "type": {
               "type": "string",
               "enum": [
+                "INPUT_WAITING"
+              ]
+            },
+            "inputId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "text": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "steer",
+                "queue"
+              ]
+            },
+            "sender": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "token"
+                      ]
+                    },
+                    "tokenId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "tokenId",
+                    "name"
+                  ],
+                  "additionalProperties": true
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "login"
+                      ]
+                    },
+                    "loginId": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "loginId"
+                  ],
+                  "additionalProperties": true
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "inputId",
+            "text",
+            "mode",
+            "sender"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
                 "INPUT_RECEIVED"
               ]
             },
@@ -2694,33 +2982,135 @@
             "type": {
               "type": "string",
               "enum": [
-                "COMPACTED"
+                "DEVELOPER_MESSAGE"
               ]
             },
             "runId": {
               "type": "string",
               "minLength": 1
             },
-            "tokensBefore": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
-            "tokensAfter": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
-            "promptRevision": {
-              "type": "string"
+            "components": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "seed",
+                      "state",
+                      "notification"
+                    ]
+                  },
+                  "heading": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "heading",
+                  "text"
+                ],
+                "additionalProperties": true
+              }
             }
           },
           "required": [
             "type",
             "runId",
-            "tokensBefore",
-            "tokensAfter",
-            "promptRevision"
+            "components"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "CHECKPOINT_WINDOW_SEEDED"
+              ]
+            },
+            "runId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "window": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "components": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "seed",
+                      "state",
+                      "notification"
+                    ]
+                  },
+                  "heading": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "heading",
+                  "text"
+                ],
+                "additionalProperties": true
+              }
+            }
+          },
+          "required": [
+            "type",
+            "runId",
+            "window",
+            "components"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "SESSION_ERROR"
+              ]
+            },
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "runId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "code",
+            "message"
           ],
           "additionalProperties": true
         },

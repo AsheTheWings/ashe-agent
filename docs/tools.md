@@ -92,8 +92,8 @@ the pages that need OCR.
 A PNG, JPEG, GIF, or WebP file of at most 20 MB is returned as an image
 when the turn's model is declared to take images, and as a result saying
 the model cannot view images otherwise. Text renderings of the
-conversation, such as records of another model's work and compaction
-input, show the image as `[image: <path>]`.
+conversation, such as transcripts of another model's work, show the
+image as `[image: <path>]`.
 
 ## `shell_exec_command` and `shell_write_stdin`
 

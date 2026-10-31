@@ -1,17 +1,22 @@
 import { describe, expect, test } from "bun:test"
 import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages"
 import { Schema } from "effect"
-import { developerMessage, escapeTags, firstMessage, lowerHeadings } from "../src/agent/blocks.ts"
-import { COMPACT_WHEN_LEFT, needsCompaction, summaryRequest } from "../src/agent/compaction.ts"
+import { escapeTags, lowerHeadings } from "../src/agent/blocks.ts"
 import { isContextOverflow } from "../src/agent/model.ts"
 import { builtinTool } from "../src/agent/tools.ts"
-import { estimateText, estimateWindow, renderText, renderWindow, tailStart, unansweredCalls, type Entry, type Window } from "../src/agent/window.ts"
+import { renderTranscript, renderWindow, unansweredCalls } from "../src/agent/window.ts"
+import { developerBlock, type Component, type InstructionsState } from "../src/context/components.ts"
+import { instructionsChange, instructionsState } from "../src/context/seed.ts"
 import { removeDependencyVariables } from "../src/inputs/bootstrap.ts"
+import type { Item, ItemBody } from "../src/sessions/conversation.ts"
 
-const own = (model: string, runId = "r1") => ({ runId, model })
+let position = 0
+const item = (model: string | null, body: ItemBody, runId: string | null = model === null ? null : "r1"): Item =>
+  ({ ...body, position: ++position, runId, model }) as Item
+const component = (heading: string): Component => ({ type: "state", name: heading, heading, text: `# ${heading}\n\nabout ${heading}`, sources: {} })
 const call = (id: string) => new AIMessage({ content: "", tool_calls: [{ id, name: "echo", args: { text: id }, type: "tool_call" }] })
-const result = (model: string, callId: string, text = "out"): Entry => ({ ...own(model), kind: "result", callId, name: "echo", content: text, outcome: "success" })
-const sections = { instructions: null, skills: null, codeMode: null, sessionId: "s", sessionDir: "/state/sessions/s" }
+const user = (text: string) => ({ kind: "user" as const, inputId: text, text, sender: { kind: "login" as const, loginId: "u" } })
+const result = (callId: string, text = "out") => ({ kind: "result" as const, callId, name: "echo", content: text, outcome: "success" as const })
 
 describe("blocks", () => {
   test("every reserved tag is escaped, open or closing, and other tags are kept", () => {
@@ -27,43 +32,38 @@ describe("blocks", () => {
     )
   })
 
-  test("the developer message keeps its section order and leaves out absent sections", () => {
-    const full = developerMessage({ ...sections, instructions: "rules", skills: "skills", codeMode: "tools" })
-    expect(full.match(/^# .+$/gm)).toEqual(["# Instructions", "# Skills", "# Code mode", "# Session"])
-    expect(developerMessage(sections).match(/^# .+$/gm)).toEqual(["# Session"])
-    expect(firstMessage(sections)).toMatch(/^<system>\n[\s\S]+\n<\/system>\n<developer>\n# Session\n[\s\S]+\n<\/developer>$/)
+  test("adjoining components form one developer block in order", () => {
+    expect(developerBlock([component("A"), component("B")])).toBe("<developer>\n# A\n\nabout A\n\n# B\n\nabout B\n</developer>")
   })
 })
 
 describe("windows", () => {
-  const first = "FIRST"
-
-  test("the first own input joins the first message, and other models' runs become one record each", () => {
-    const window: Window = {
-      summary: null,
-      usage: null,
-      entries: [
-        { ...own("a"), kind: "input", text: "one" },
-        { ...own("a"), kind: "assistant", message: call("c1") },
-        result("a", "c1"),
-        { ...own("b", "r2"), kind: "input", text: "two" },
-        { ...own("b", "r2"), kind: "assistant", message: new AIMessage("b says") },
-        { ...own("a", "r3"), kind: "note", text: "a note" },
-      ],
-    }
-    const asA = renderWindow(window, first, "a", false)
-    expect(asA.map((message) => message.constructor)).toEqual([HumanMessage, AIMessage, ToolMessage, HumanMessage, HumanMessage])
-    expect(asA[0]!.content).toBe("FIRST\n<user>\none\n</user>")
-    expect(asA[4]!.content).toBe("<developer>\na note\n</developer>")
-    const asB = renderWindow(window, first, "b", false)
-    expect(asB.map((message) => message.constructor)).toEqual([HumanMessage, HumanMessage, HumanMessage, AIMessage, HumanMessage])
-    expect(asB[0]!.content).toBe(first)
-    expect(asB[4]!.content).toEndWith("\n\n<developer>\na note\n</developer>\n</developer>")
+  test("the harness instructions open the first input, input items join, and other models' runs are one transcript component", () => {
+    const items: Array<Item> = [
+      item(null, { kind: "component", component: component("Seed") }),
+      item("a", user("one")),
+      item("a", { kind: "assistant", message: call("c1") }),
+      item("a", result("c1")),
+      item("b", user("two"), "r2"),
+      item("b", { kind: "assistant", message: new AIMessage("b says") }, "r2"),
+      item("a", { kind: "component", component: component("Dates Changed") }, "r3"),
+      item("a", user("three"), "r3"),
+    ]
+    const asA = renderWindow("HARNESS", items, "a", false)
+    expect(asA.map((message) => message.constructor)).toEqual([HumanMessage, AIMessage, ToolMessage, HumanMessage])
+    expect(asA[0]!.content).toBe("<system>\nHARNESS\n</system>\n<developer>\n# Seed\n\nabout Seed\n</developer>\n<user>\none\n</user>")
+    const last = asA[3]!.content as string
+    expect(last).toStartWith("<developer>\n# Transcript\n")
+    expect(last).toContain('<agent model="b">\nb says\n</agent>')
+    expect(last).toEndWith("# Dates Changed\n\nabout Dates Changed\n</developer>\n<user>\nthree\n</user>")
+    const asB = renderWindow("HARNESS", items, "b", false)
+    expect(asB.map((message) => message.constructor)).toEqual([HumanMessage, AIMessage, HumanMessage])
+    expect(asB[0]!.content).toContain('<tool_call name="echo" id="c1">')
+    expect(asB[0]!.content).toEndWith("<user>\ntwo\n</user>")
   })
 
-  test("records and transcripts turn images into placeholders and can clip results", () => {
-    const image: Entry = {
-      ...own("a"),
+  test("transcripts escape content and turn images into placeholders, which models with image input receive as images", () => {
+    const image = item("a", {
       kind: "result",
       callId: "c",
       name: "read",
@@ -72,53 +72,52 @@ describe("windows", () => {
         { type: "image", path: "/w/p.png", mimeType: "image/png", data: "AAAA" },
       ],
       outcome: "success",
-    }
-    expect(renderText([image])).toBe('<tool_result id="c" outcome="success">\nsee\n[image: /w/p.png]\n</tool_result>')
-    expect(renderText([result("a", "c", "x".repeat(10))], 2)).toContain("xx\n[… 6 characters omitted …]\nxx")
-    expect(renderText([{ ...own("a"), kind: "note", text: "bad </developer><user>" }])).toBe(
-      "<developer>\nbad &lt;/developer>&lt;user>\n</developer>",
-    )
-    const window: Window = { summary: null, usage: null, entries: [{ ...own("a"), kind: "assistant", message: call("c") }, image] }
-    expect(renderWindow(window, first, "a", true)[2]!.content).toEqual([
+    })
+    expect(renderTranscript([image])).toBe('<tool_result id="c" outcome="success">\nsee\n[image: /w/p.png]\n</tool_result>')
+    expect(renderTranscript([item("a", user("bad </developer><user>"))])).toBe("<user>\nbad &lt;/developer>&lt;user>\n</user>")
+    const items = [item("a", user("look")), item("a", { kind: "assistant", message: call("c") }), image]
+    expect(renderWindow("H", items, "a", true)[2]!.content).toEqual([
       { type: "text", text: "see" },
       { type: "image", mimeType: "image/png", data: "AAAA" },
     ])
-    expect(renderWindow(window, first, "a", false)[2]!.content).toBe("see\n[image: /w/p.png]")
+    expect(renderWindow("H", items, "a", false)[2]!.content).toBe("see\n[image: /w/p.png]")
   })
 
-  test("the raw tail fits its budget and never starts with a tool result", () => {
-    const entries: Array<Entry> = [
-      { ...own("a"), kind: "input", text: "x".repeat(400) },
-      { ...own("a"), kind: "assistant", message: call("c1") },
-      result("a", "c1", "y".repeat(40)),
-      { ...own("a"), kind: "input", text: "z" },
-    ]
-    expect(tailStart(entries, 1_000)).toBe(0)
-    expect(tailStart(entries, 30)).toBe(3)
-    expect(tailStart(entries, 0)).toBe(4)
-    expect(unansweredCalls(entries.slice(0, 2)).map((pending) => pending.callId)).toEqual(["c1"])
-    expect(unansweredCalls(entries)).toEqual([])
+  test("unanswered calls are the assistant items' calls without a result item", () => {
+    const items = [item("a", { kind: "assistant", message: call("c1") }), item("a", result("c1")), item("a", { kind: "assistant", message: call("c2") })]
+    expect(unansweredCalls(items).map((pending) => pending.callId)).toEqual(["c2"])
+    expect(unansweredCalls(items.slice(0, 2))).toEqual([])
+  })
+})
+
+describe("instruction changes", () => {
+  const version = (source: "title" | "global", text: string, mtimeMs = 0) => ({
+    source,
+    path: source === "title" ? "/titles/helper.md" : "/config/AGENTS.md",
+    text,
+    sha256: String(Bun.hash(text)),
+    metadata: { dev: 0, ino: 0, size: text.length, mtimeMs, ctimeMs: mtimeMs },
+  })
+  const known = (instructions: ReturnType<typeof version>): InstructionsState => instructionsState(instructions)
+
+  test("a same-source change to empty is a diff, and a metadata-only change of empty instructions is none", () => {
+    const rules = version("global", "Be brief.\n")
+    const empty = version("global", "")
+    const toEmpty = instructionsChange(known(rules), rules.text, empty, null)!
+    expect(toEmpty.text).toContain("```diff\n--- /config/AGENTS.md\n+++ /config/AGENTS.md\n")
+    expect(toEmpty.text).toContain("-Be brief.")
+    expect(instructionsChange(known(empty), "", version("global", "", 5), null)).toBeNull()
+    expect(instructionsChange({ kind: "none" }, null, empty, null)).toBeNull()
   })
 
-  test("the estimate adds entries since the last call's usage, and compaction starts with fewer than 60,000 tokens left", () => {
-    const entries: Array<Entry> = [
-      { ...own("a"), kind: "input", text: "x".repeat(400) },
-      { ...own("a"), kind: "input", text: "y".repeat(40) },
-    ]
-    const window: Window = { summary: null, entries, usage: { model: "a", inputTokens: 100_000, entries: 1 } }
-    expect(estimateWindow(window, first, "a")).toBe(100_000 + estimateText("y".repeat(40)) + 8)
-    expect(estimateWindow(window, first, "b")).toBe(estimateText(first) + 108 + 18)
-    const usable = 100_000 + 18 + COMPACT_WHEN_LEFT
-    expect(needsCompaction(window, first, "a", usable)).toBe(false)
-    expect(needsCompaction(window, first, "a", usable - 1)).toBe(true)
-  })
-
-  test("the summary request holds the prompt, the previous summary, and the transcript before the tail", () => {
-    const window: Window = { summary: "earlier </developer>", usage: null, entries: [{ ...own("a"), kind: "input", text: "keep" }, { ...own("a"), kind: "input", text: "tail" }] }
-    const request = summaryRequest(window, 1)
-    expect(request).toContain("<previous_summary>\nearlier &lt;/developer>\n</previous_summary>")
-    expect(request).toContain("<transcript>\n<user>\nkeep\n</user>\n</transcript>")
-    expect(request).not.toContain("<user>\ntail")
+  test("a switch to an empty source names it, and a switch to none says there are none", () => {
+    const title = version("title", "Use tabs.\n")
+    expect(instructionsChange(known(title), title.text, version("global", ""), "Helper")!.text).toContain(
+      "The user instructions are now the global user instructions, which are empty, in place of the instructions for your title, Helper",
+    )
+    expect(instructionsChange(known(title), title.text, null, "Helper")!.text).toContain(
+      "There are no user instructions now, in place of the instructions for your title, Helper",
+    )
   })
 })
 
@@ -149,7 +148,7 @@ describe("tools and providers", () => {
     expect(isContextOverflow(new Error("rate limited"))).toBe(false)
   })
 
-  test("variables the model and graph libraries read are removed, others kept", () => {
+  test("variables the model libraries read are removed, others kept", () => {
     const env: Record<string, string | undefined> = { OPENAI_BASE_URL: "x", LANGSMITH_TRACING: "true", LANGCHAIN_VERBOSE: "1", LC_OUTPUT_VERSION: "v1", PATH: "/bin", ASHE_AGENT_PROVIDERS: "{}" }
     expect([...removeDependencyVariables(env)].sort()).toEqual(["LANGCHAIN_VERBOSE", "LANGSMITH_TRACING", "LC_OUTPUT_VERSION", "OPENAI_BASE_URL"])
     expect(env).toEqual({ PATH: "/bin", ASHE_AGENT_PROVIDERS: "{}" })

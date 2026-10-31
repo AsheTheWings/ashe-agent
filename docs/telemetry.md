@@ -14,7 +14,7 @@ classes, under a version that changes with any of them.
 `schemas/signals.json` is generated from it with `bun run generate`.
 
 - A span covers each protocol request, authentication included, each turn,
-  each model call, compaction summary calls included, and each tool call.
+  each model call, and each tool call.
   A code mode program's tool calls are child spans of their `execute` call.
 - Histograms record turn, model call, and tool call durations in seconds.
 - Log records report protocol requests that failed with an internal

@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { SessionEvent } from "@ashe-agent/protocol"
-import { SUMMARY_MAX_TOKENS } from "../src/agent/compaction.ts"
 import { AgentRegistry } from "../src/agents/agents.ts"
 import { skillTool } from "../src/agents/skill-tool.ts"
 import { fileSetup } from "../src/agents/setup.ts"
@@ -114,7 +113,8 @@ describe("agents", () => {
         expect(h.model.calls.map((entry) => entry.call.temperature)).toEqual([0.25, 0.25])
         expect(firstText(h)).toContain("HELPER BODY")
         expect(firstText(h)).not.toContain("GLOBAL")
-        expect(firstText(h)).not.toContain("EDITED BODY")
+        // The edit before the first input reaches the model as a diff after the seed's version.
+        expect(firstText(h)).toContain("-HELPER BODY\n\\ No newline at end of file\n+EDITED BODY")
         expect(ofType(h.events(id), "TOOL_CALL_RESULT")[0]).toMatchObject({ outcome: "failed", content: expect.stringContaining("denied by configuration") })
         expect(() => h.create({ agent: "missing" })).toThrow("no agent missing")
       },
@@ -164,24 +164,72 @@ describe("agents", () => {
     )
   })
 
-  test("compaction's summary call sends the agent's temperature override", async () => {
+  test("a title file created, edited, and deleted mid-session gives the full title text, a diff, then the global text", async () => {
     await withConfig(
-      {},
-      async (h) => {
-        const id = h.create({ agent: "warm" })
-        h.model.next(say("r1", { inputTokens: 150_000 }))
-        h.input(id, `t1 ${"y".repeat(100_000)}`)
+      { "AGENTS.md": "GLOBAL RULE" },
+      async (h, config) => {
+        const file = join(config, "titles", "code-helper.md")
+        const lastInput = () => messageText(h.model.last().messages.at(-1)!)
+        const id = h.create({ agent: "code-helper" })
+        h.model.next(say("one"))
+        h.input(id, "t1")
         await h.turnsEnded(id, 1)
-        h.model.next(say("SUMMARY"), say("r2"))
+        expect(firstText(h)).toContain("# User Instructions\n\nThe user's standing instructions for this session.\n\nGLOBAL RULE")
+        expect(firstText(h)).toContain("- Your title: Code Helper")
+
+        mkdirSync(join(config, "titles"), { recursive: true })
+        writeFileSync(file, title("Helps with code", "Use tabs.\n"))
+        h.model.next(say("two"))
         h.input(id, "t2")
         await h.turnsEnded(id, 2)
-        const [summary, next] = h.model.calls.slice(1).map(({ call }) => call)
-        expect(h.model.calls).toHaveLength(3)
-        expect(summary!.maxOutputTokens).toBe(SUMMARY_MAX_TOKENS)
-        expect([summary!.temperature, next!.temperature]).toEqual([0.25, 0.25])
+        expect(lastInput()).toContain(
+          "# User Instructions Changed\n\nThe user instructions are now the instructions for your title, Code Helper, in place of the global user instructions. Follow these instead of the earlier ones:\n\nUse tabs.",
+        )
+
+        writeFileSync(file, title("Helps with code", "Use tabs.\nWrap at 100 columns.\n"))
+        h.model.next(say("three"))
+        h.input(id, "t3")
+        await h.turnsEnded(id, 3)
+        expect(lastInput()).toContain(`\`\`\`diff\n--- ${file}\n+++ ${file}\n`)
+        expect(lastInput()).toContain(" Use tabs.\n+Wrap at 100 columns.")
+
+        h.model.next(say("same"))
+        h.input(id, "t4")
+        await h.turnsEnded(id, 4)
+        expect(lastInput()).toBe("<user>\nt4\n</user>")
+
+        unlinkSync(file)
+        h.model.next(say("four"))
+        h.input(id, "t5")
+        await h.turnsEnded(id, 5)
+        expect(lastInput()).toContain(
+          "The user instructions are now the global user instructions, in place of the instructions for your title, Code Helper. Follow these instead of the earlier ones:\n\nGLOBAL RULE",
+        )
+
+        // A directory in the global file's place is a present source that cannot be read.
+        unlinkSync(join(config, "AGENTS.md"))
+        mkdirSync(join(config, "AGENTS.md"))
+        h.model.next(say("five"))
+        h.input(id, "t6")
+        await h.turnsEnded(id, 6)
+        const error = ofType(h.events(id), "SESSION_ERROR")[0]!
+        expect(error).toMatchObject({ code: "user_instructions_unreadable" })
+        expect(error.message).toContain(join(config, "AGENTS.md"))
+        expect(lastInput()).toBe("<user>\nt6\n</user>")
+        expect(ofType(h.events(id), "RUN_FINISHED")).toHaveLength(6)
+        rmSync(join(config, "AGENTS.md"), { recursive: true })
+        writeFileSync(join(config, "AGENTS.md"), "GLOBAL RULE, LONGER NOW")
+
+        const implicit = h.create()
+        expect(h.hub.summary(implicit).agent).toBeNull()
+        h.model.next(say("plain"))
+        h.input(implicit, "hi")
+        await h.turnsEnded(implicit, 1)
+        expect(firstText(h)).toContain("GLOBAL RULE, LONGER NOW")
+        expect(firstText(h)).not.toContain("Your title")
       },
       undefined,
-      { agents: { warm: { model: warm.id, models: { [warm.id]: { temperature: 0.25 } } } }, models: [warm] },
+      { agents: { "code-helper": {} } },
     )
   })
 })

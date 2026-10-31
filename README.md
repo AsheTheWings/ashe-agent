@@ -1,23 +1,24 @@
-# ashe-agent
+# AsheAgent
 
-ashe-agent is a single-owner agent server: one process that runs an
+AsheAgent is a single-owner agent server: one process that runs an
 agent for its owner and keeps its sessions alive for any number of
 clients, such as the web client this repository includes. Sessions are
 durable and shared by every client, with steering, queueing, fork, and
 rewind. The agent calls models through the OpenAI Responses API, switches
-models within a session, and compacts long sessions. It works through
+models within a session, and keeps each session's model context in
+checkpoint windows. It works through
 built-in tools for files, documents, images, shell commands, and the web,
 and through MCP servers, called directly or from code mode programs,
 under the owner's permission rules.
 
-ashe-agent is in development. Nothing about it is stable yet, and its
+AsheAgent is in development. Nothing about it is stable yet, and its
 configuration, protocol, and storage may change incompatibly at any
 revision.
 
 ## Repository
 
 The repository is a Bun workspace of four packages. `packages/server`
-holds the server's input layer, store, WebSocket server, agent loop, and
+holds the server's input layer, store, WebSocket server, turn loop, and
 the `ashe-agent` command; `packages/protocol` the protocol's message
 schemas; `packages/codemode` the interpreter that runs code mode
 programs; and `packages/web` the web client.
@@ -77,7 +78,7 @@ the default model; see [configuration](docs/configuration.md).
 - [Code mode](docs/code-mode.md): the `execute` tool, its catalog, and the
   permissions and limits of programs.
 - [Model context](docs/model-context.md): what each model call carries,
-  model switching, and compaction.
+  developer components, and model switching.
 - [Web client](docs/web-client.md): running and building the web client,
   signing in, and what it keeps in the browser.
 - [Telemetry](docs/telemetry.md): the traces, metrics, and logs the server

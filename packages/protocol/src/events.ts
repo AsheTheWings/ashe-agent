@@ -11,13 +11,17 @@ import { Count, Id, InputMode, PermissionAnswer, Sender, Seq, Timestamp } from "
 const event = <const T extends string, F extends Schema.Struct.Fields>(type: T, fields: F) =>
   Schema.Struct({ type: Schema.Literal(type), ...fields })
 
+/** What started a turn: an input holding a user message, a continuation, or another notification component. */
+export const TurnCause = Schema.Literals(["user", "continuation", "notification"])
+
 export const RunStarted = event("RUN_STARTED", {
   threadId: Id,
   runId: Id,
   /** The model the run uses for all of its model calls. */
   model: Id,
-  /** The input that started the run. */
-  inputId: Id,
+  cause: TurnCause,
+  /** The user messages the run's starting input holds, none or several, in order. */
+  userMessageIds: Schema.Array(Id),
 })
 
 export const RunFinished = event("RUN_FINISHED", {
@@ -124,8 +128,16 @@ export const SessionCreated = event("SESSION_CREATED", {
   ),
 })
 
+/** A user message stored to wait for a turn; its `INPUT_RECEIVED` follows when a turn takes it. */
+export const InputWaiting = event("INPUT_WAITING", {
+  inputId: Id,
+  text: Schema.String,
+  mode: InputMode,
+  sender: Sender,
+})
+
 /**
- * An input entering the conversation: starting a turn or joining the
+ * A user message entering the conversation: starting a turn or joining the
  * running one at a step boundary. Inputs of each mode enter in order of
  * arrival.
  */
@@ -152,11 +164,40 @@ export const SessionRewound = event("SESSION_REWOUND", {
   firstRemovedSeq: Seq,
 })
 
-export const Compacted = event("COMPACTED", {
+/**
+ * One developer component as the model receives it: how it was injected,
+ * its heading, and its text, the heading line included.
+ */
+export const DeveloperComponent = Schema.Struct({
+  type: Schema.Literals(["seed", "state", "notification"]),
+  heading: Schema.String,
+  text: Schema.String,
+})
+
+/** A developer message entering the conversation: adjoining components the run's model receives together. */
+export const DeveloperMessage = event("DEVELOPER_MESSAGE", {
   runId: Id,
-  tokensBefore: Count,
-  tokensAfter: Count,
-  promptRevision: Schema.String,
+  components: Schema.Array(DeveloperComponent),
+})
+
+/**
+ * The seed a checkpoint window construction rendered after its harness
+ * instructions; `runId` is null for the session's first checkpoint window.
+ */
+export const CheckpointWindowSeeded = event("CHECKPOINT_WINDOW_SEEDED", {
+  runId: Schema.NullOr(Id),
+  window: Count,
+  components: Schema.Array(DeveloperComponent),
+})
+
+/**
+ * A failure that leaves the session usable, such as an unreadable user
+ * instructions file; `runId` names the run it happened in, if any.
+ */
+export const SessionError = event("SESSION_ERROR", {
+  code: Schema.String,
+  message: Schema.String,
+  runId: Schema.optionalKey(Id),
 })
 
 export const PermissionRequested = event("PERMISSION_REQUESTED", {
@@ -203,10 +244,13 @@ export const SessionEventBody = Schema.Union([
   ToolCallResult,
   ProgramCallFinished,
   SessionCreated,
+  InputWaiting,
   InputReceived,
   ModelChanged,
   SessionRewound,
-  Compacted,
+  DeveloperMessage,
+  CheckpointWindowSeeded,
+  SessionError,
   PermissionRequested,
   PermissionResolved,
   PermissionWithdrawn,

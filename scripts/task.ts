@@ -53,7 +53,7 @@ const test = async (testClass: TestClass, inputs: Record<string, string> = {}) =
   process.stdout.write(`\n== ${testClass} tests (seed ${seed}) ==\n`)
   const home = mkdtempSync(join(tmpdir(), "ashe-agent-test-home-"))
   try {
-    const code = await run(
+    return await run(
       [
         process.execPath,
         "test",
@@ -65,9 +65,6 @@ const test = async (testClass: TestClass, inputs: Record<string, string> = {}) =
       ],
       { ...testEnvironment(home), ...inputs },
     )
-    if (code !== 0 || testClass !== "integration") return code
-    process.stdout.write("\n== integration tests under Vitest ==\n")
-    return await run([process.execPath, "--bun", "x", "vitest", "run", "--globals"], testEnvironment(home))
   } finally {
     rmSync(home, { recursive: true, force: true })
   }

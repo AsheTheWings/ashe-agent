@@ -18,15 +18,12 @@ A test's class is the suffix of its file name.
 | Class | File suffix | Command | Boundary |
 | --- | --- | --- | --- |
 | unit | `.unit.test.ts` | `bun run test:unit` | pure functions: no filesystem, sockets, processes, process configuration, or waits |
-| component | `.component.test.ts` | `bun run test:component` | the session hub and agent loop in the test's process, with a fake model port and fake tools, on a SQLite file in the test's own temporary directory; code mode programs in the interpreter, in the test's process; the web client's session client over a scripted fake server behind its socket port |
-| integration | `.integration.test.ts`, `.integration.vitest.ts` | `bun run test:integration` | real SQLite files, `ashe-agent` and bash processes, WebSocket connections, and fake upstream APIs on loopback ports that the test creates, with files in its own temporary directory |
+| component | `.component.test.ts` | `bun run test:component` | the session hub and turn loop in the test's process, with a fake model port and fake tools, on a SQLite file in the test's own temporary directory; code mode programs in the interpreter, in the test's process; the web client's session client over a scripted fake server behind its socket port |
+| integration | `.integration.test.ts` | `bun run test:integration` | real SQLite files, `ashe-agent` and bash processes, WebSocket connections, and fake upstream APIs on loopback ports that the test creates, with files in its own temporary directory |
 | conformance | `.conformance.test.ts` | `bun run test:conformance` | read-only checks that generated files, pins, and versions match their sources |
 | qualification | `.qualification.test.ts` | `bun run test:qualification [<bundle>]` | the binary and web build of a built bundle, extracted into the test's own directory; the binary runs as the server against a run-owned state directory and a fake Responses API on a loopback port |
 
-The `.integration.vitest.ts` files run LangGraph's checkpoint saver
-validation suite, which is written for Vitest; `bun run test:integration`
-runs them under Vitest on Bun after the `bun test` integration tests. CI
-runs the integration tests after the fast gate.
+CI runs the integration tests after the fast gate.
 
 `bun run test:test262` fetches tc39/test262 at the revision
 `packages/codemode/test/test262/manifest.json` pins, into a directory of
@@ -52,7 +49,8 @@ production build (see [web client](web-client.md)), both stamped with the
 commit, and packages them as `bin/ashe-agent` and `web/` into
 `dist/ashe-agent-linux-x64.tar`. `bun run test:qualification` qualifies
 that file, or the bundle it is given: it checks that `web/` holds
-`index.html` and a `revision.txt` equal to the binary's `--version`, then
+`index.html` and a `revision.txt` equal to the revision the binary's
+`--version` prints, then
 migrates, sets a password, signs in over WebSocket, and runs a turn with
 a shell command and a `file_read` of a docx.
 
