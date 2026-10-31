@@ -1,4 +1,5 @@
 import { Redacted, Result, Schema } from "effect"
+import { modelConfigIssues, type ModelConfig } from "../models/registry.ts"
 import {
   catalog,
   type Catalog,
@@ -189,6 +190,33 @@ export const resolveInputs = <P extends Process>(process: P, sources: Sources): 
     else values[key] = read.success
   }
 
+  // Inputs whose relations the shapes cannot check are checked together once each decodes.
+  const related: ReadonlyArray<keyof ModelConfig> = ["providers", "defaultModel", "agents", "defaultAgent", "auxiliaryModels"]
+  if (related.every((key) => Object.hasOwn(values, key))) {
+    for (const issue of modelConfigIssues(values as unknown as ModelConfig)) {
+      issues.push({ input: catalog[issue.key].env, problem: issue.problem })
+    }
+  }
+
   if (issues.length > 0 || profile === undefined) return { ok: false, issues }
   return { ok: true, profile, inputs: values as unknown as Inputs<P> }
+}
+
+/**
+ * Reads each provider's protected API key file: the keys by provider id,
+ * redacted, or one problem per refused file, naming the provider and the
+ * file, never a value.
+ */
+export const readProviderKeys = (
+  providers: Readonly<Record<string, { readonly apiKeyFile: string }>>,
+  readFile: Sources["readFile"],
+): Result.Result<ReadonlyMap<string, Redacted.Redacted<string>>, ReadonlyArray<InputIssue>> => {
+  const keys = new Map<string, Redacted.Redacted<string>>()
+  const issues: Array<InputIssue> = []
+  for (const [provider, { apiKeyFile }] of Object.entries(providers)) {
+    const read = readProtectedFile(apiKeyFile, readFile)
+    if (Result.isFailure(read)) issues.push({ input: catalog.providers.env, problem: `the provider ${provider}'s apiKeyFile ${apiKeyFile} ${read.failure}` })
+    else keys.set(provider, read.success)
+  }
+  return issues.length === 0 ? Result.succeed(keys) : Result.fail(issues)
 }

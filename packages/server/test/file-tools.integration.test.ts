@@ -40,6 +40,7 @@ const call = (tool: Tool, cwd: string, args: unknown, imageInput = false, author
     started: () => {},
     onCancel: () => {},
     programCall: () => {},
+    offered: () => true,
   }
   return tool.run(args, run)
 }
@@ -113,7 +114,7 @@ describe("file_read images", () => {
         { type: "input_image", image_url: `data:image/png;base64,${readFileSync(join(fixtures, "red.png")).toString("base64")}`, detail: "auto" },
       ])
 
-      h.hub.setModel(viewer, alpha, h.sender)
+      h.hub.setModel(viewer, alpha, undefined, h.sender)
       h.model.next(say("ok"))
       h.input(viewer, "describe")
       await h.turnsEnded(viewer, 2)
@@ -222,6 +223,7 @@ describe("file tools in a turn", () => {
         started: () => {},
         onCancel: () => {},
         programCall: () => {},
+        offered: () => true,
       }
       const update = "*** Begin Patch\n*** Update File: link/../victim.txt\n@@\n-real victim\n+patched\n*** Delete File: link/alias.txt\n*** End Patch"
       expect(await patch.run({ patch: update }, run)).toMatchObject({ outcome: "success" })

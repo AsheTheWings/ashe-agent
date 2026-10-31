@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto"
 import { HumanMessage } from "@langchain/core/messages"
 import { block, escapeTags, REQUEST_INSTRUCTIONS } from "./blocks.ts"
+import { HANDOFF_TOOL_OUTPUT_CLIP, RECENT_TRANSCRIPT_ALLOWANCE, SUMMARY_MAX_OUTPUT_TOKENS } from "../context/constants.ts"
+import type { CallSettings } from "../models/registry.ts"
 import type { ModelPort } from "./model.ts"
 import prompt from "./summary-prompt.md" with { type: "text" }
 import { estimateWindow, renderText, tailStart, type Window } from "./window.ts"
@@ -8,11 +10,11 @@ import { estimateWindow, renderText, tailStart, type Window } from "./window.ts"
 /** The tokens left in the usable window below which a model call compacts first. */
 export const COMPACT_WHEN_LEFT = 60_000
 /** The estimated tokens of recent entries a compacted window keeps verbatim. */
-export const RAW_TAIL_TOKENS = 20_000
+export const RAW_TAIL_TOKENS = RECENT_TRANSCRIPT_ALLOWANCE
 /** The most output tokens a summary may take. */
-export const SUMMARY_MAX_TOKENS = 8_000
+export const SUMMARY_MAX_TOKENS = SUMMARY_MAX_OUTPUT_TOKENS
 /** The characters a summarized tool result keeps from each end. */
-const RESULT_CLIP = 2_000
+const RESULT_CLIP = HANDOFF_TOOL_OUTPUT_CLIP
 
 /** The revision of the summary prompt: the start of its SHA-256. */
 export const SUMMARY_PROMPT_REVISION = createHash("sha256").update(prompt).digest("hex").slice(0, 12)
@@ -47,7 +49,7 @@ export const compact = async (
   first: string,
   model: string,
   signal: AbortSignal,
-  temperature: number | null = null,
+  settings: CallSettings = {},
 ): Promise<Compaction | null> => {
   const tokensBefore = estimateWindow(window, first, model)
   const end = tailStart(window.entries, RAW_TAIL_TOKENS)
@@ -59,7 +61,7 @@ export const compact = async (
     messages: [new HumanMessage(summaryRequest(window, end))],
     tools: [],
     maxOutputTokens: SUMMARY_MAX_TOKENS,
-    ...(temperature === null ? {} : { temperature }),
+    ...settings,
   }
   for await (const chunk of port.stream(call, signal)) {
     if (typeof chunk.content === "string") summary += chunk.content

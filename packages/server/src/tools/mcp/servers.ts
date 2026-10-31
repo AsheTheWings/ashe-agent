@@ -244,6 +244,7 @@ export class McpRegistry {
     return {
       namespace: listed.server,
       name: listed.tool,
+      permission: name,
       spec: { name, description: listed.description, parameters: listed.inputSchema },
       run: async (args, run): Promise<ToolResult> => {
         await run.authorize({ permission: name, subjects: ["*"], patterns: ["*"] })

@@ -14,13 +14,17 @@ import {
 } from "@ashe-agent/protocol"
 import { firstMessage } from "../agent/blocks.ts"
 import { catalogNote, forkNote, programCallsNote, rewindNote, unfinishedResult } from "../agent/notes.ts"
-import type { AgentSettings } from "../agents/agents.ts"
+import type { SessionAgent } from "../agents/agents.ts"
+import type { FileMetadata } from "../agents/titles.ts"
+import { withholdingName, type Tool } from "../agent/tools.ts"
 import type { Permission } from "../inputs/shapes.ts"
+import type { ConfiguredModel } from "../models/registry.ts"
 import {
   compileRules,
   decide,
   PermissionDenied,
   PermissionRejected,
+  whollyDenied,
   type PermissionCheck,
   type Rule,
 } from "../permissions/rules.ts"
@@ -28,6 +32,8 @@ import { ProtocolError } from "../server/websocket.ts"
 import { Store } from "../store/database.ts"
 import { endSpan, recordDuration, startSpan, withSpan, type ErrorClass } from "../telemetry/signals.ts"
 import { SessionStore, type Catalogs, type SessionRecord, type TurnRecord } from "./store.ts"
+
+export type { Catalogs } from "./store.ts"
 
 /** An input a client sent, waiting for a turn to take it. */
 export interface Input {
@@ -62,6 +68,8 @@ export interface TurnContext {
   readonly authorize: (toolCallId: string, check: PermissionCheck, signal: AbortSignal) => Promise<void>
   /** The trace context holding the turn's span, the parent of its model and tool call spans. */
   readonly trace: TraceContext
+  /** Whether the session's rules leave `tool` offered: false for a tool they wholly deny. */
+  readonly offered: (tool: Tool) => boolean
 }
 
 export type TurnOutcome = { readonly status: "finished" } | { readonly status: "failed"; readonly message: string; readonly code?: string }
@@ -69,29 +77,37 @@ export type TurnOutcome = { readonly status: "finished" } | { readonly status: "
 /** Runs one turn to its end; interrupting it cancels the turn. */
 export type TurnRunner = (context: TurnContext) => Effect.Effect<TurnOutcome>
 
-/** What a session takes from its agent, and the catalogs its developer message lists. */
+/** A version of a session's user instructions: where it was read and what it says. */
+export interface UserInstructions {
+  /** The agent's title file, or the global instructions file. */
+  readonly source: "title" | "global"
+  readonly path: string
+  readonly text: string
+  readonly sha256: string
+  readonly metadata: FileMetadata
+}
+
+/** What a session takes from its agent, and the catalogs and user instructions its developer message gives. */
 export interface SessionSetup {
+  /** The agent a new session runs as; it throws a `ProtocolError` for a key that is no agent. */
+  readonly resolve: (agent: string | null) => SessionAgent
   /**
-   * The session's agent, the instructions recorded at its creation, the
-   * model the agent names, if any, and the agent's settings; it throws a
-   * `ProtocolError` for an agent that cannot run a session.
+   * The agent's user instructions as they stand now, or null when there are
+   * none; it throws when the chosen source exists but cannot be used.
    */
-  readonly resolve: (agent: string | null) => {
-    readonly agent: string | null
-    readonly instructions: string | null
-    readonly model: string | null
-    readonly settings: AgentSettings
-  }
-  /** The catalogs as they stand now. */
-  readonly catalogs: () => Catalogs
-  /** The valid agents and the refused agent files as they stand now; none when absent. */
-  readonly agents?: () => { readonly agents: ReadonlyArray<Agent>; readonly refused: ReadonlyArray<{ readonly path: string; readonly reason: string }> }
+  readonly userInstructions: (agent: SessionAgent) => UserInstructions | null
+  /** The catalogs as they stand now, without what `rules` deny. */
+  readonly catalogs: (rules: ReadonlyArray<Rule>) => Catalogs
+  /** The configured agents and the default one. */
+  readonly agents: () => { readonly agents: ReadonlyArray<Agent>; readonly defaultAgent: string | null }
 }
 
 type ToolOutcome = Extract<SessionEventBody, { type: "TOOL_CALL_RESULT" }>["outcome"]
 
 export interface HubOptions {
-  readonly models: ReadonlyArray<Model>
+  readonly models: ReadonlyArray<ConfiguredModel>
+  /** The model sessions start with when neither the request nor the agent names one. */
+  readonly defaultModel: string
   readonly runner: TurnRunner
   readonly setup: SessionSetup
   /** The global permission rules. */
@@ -130,6 +146,12 @@ interface SessionState {
   live: Live | null
   /** Permission requests waiting for an answer, by request id, in arrival order. */
   readonly asks: Map<string, Ask>
+}
+
+/** A fork's first message: its source's, with the session section rendered for the fork's identity. */
+const forkedFirstMessage = (source: string, fresh: string) => {
+  const marker = "# Session\n\n"
+  return source.slice(0, source.lastIndexOf(marker)) + fresh.slice(fresh.lastIndexOf(marker))
 }
 
 const notFound = (what: string) => new ProtocolError({ code: ErrorCode.notFound, message: `no ${what}` })
@@ -232,13 +254,16 @@ export class SessionHub {
   }
 
   /** The rules deciding a session's calls: global, then its agent's, then its grants as allow rules. */
-  private rules(session: SessionRecord): ReadonlyArray<Rule> {
+  rules(session: SessionRecord): ReadonlyArray<Rule> {
+    return this.rulesOf(session.permission, this.store.grants(session.id))
+  }
+
+  private rulesOf(agent: Permission | null, grants: ReturnType<SessionStore["grants"]>): ReadonlyArray<Rule> {
     const home = this.options.home ?? "/"
-    const agent = session.agentSettings.permission
     return [
       ...compileRules(this.options.permission ?? {}, home),
       ...(agent === null ? [] : compileRules(agent, home)),
-      ...this.store.grants(session.id).map((grant) => ({ ...grant, action: "allow" as const })),
+      ...grants.map((grant) => ({ ...grant, action: "allow" as const })),
     ]
   }
 
@@ -357,8 +382,32 @@ export class SessionHub {
     return this.states.get(sessionId)?.live != null
   }
 
-  models(): ReadonlyArray<Model> {
-    return this.options.models
+  /** The configured models as clients list them, and the default one. */
+  models(): { readonly models: ReadonlyArray<Model>; readonly defaultModel: string } {
+    return {
+      models: this.options.models.map((model) => ({
+        id: model.id,
+        name: model.name,
+        contextLimit: model.contextLimit,
+        imageInput: model.imageInput,
+        reasoningEfforts: [...model.efforts],
+        reasoningEffort: model.settings.reasoningEffort ?? null,
+      })),
+      defaultModel: this.options.defaultModel,
+    }
+  }
+
+  private model(id: string): ConfiguredModel {
+    const model = this.options.models.find((candidate) => candidate.id === id)
+    if (model === undefined) throw invalid(`no configured model ${id}`)
+    return model
+  }
+
+  /** `effort` when `model` lists it; refused otherwise. */
+  private effort(model: ConfiguredModel, effort: string | undefined): string | null {
+    if (effort === undefined) return null
+    if (!model.efforts.includes(effort)) throw invalid(`the model ${model.id} lists no reasoning effort ${effort}`)
+    return effort
   }
 
   list(): ReadonlyArray<SessionSummary> {
@@ -369,7 +418,7 @@ export class SessionHub {
     return this.store.summary(this.session(sessionId), this.isRunning(sessionId))
   }
 
-  /** The first message of a session with this identity, recorded instructions, and catalogs. */
+  /** The first message of a session with this identity, user instructions, and catalogs. */
   private firstMessage(id: string, instructions: string | null, catalogs: Catalogs) {
     const sessionDir = this.store.sessionDir(id)
     return firstMessage({ instructions, skills: catalogs.skills, codeMode: catalogs.codeMode, sessionId: id, sessionDir })
@@ -392,28 +441,27 @@ export class SessionHub {
   }
 
   /**
-   * Creates a session in its own new directory. Its model is the one its
-   * agent names, else the one given, which must be configured, else the
-   * first configured model.
+   * Creates a session in its own new directory, running as `agent`, else
+   * the default agent, else the implicit agent. Its model is the one its
+   * agent names, else the one given, else the default model, and it starts
+   * with the given reasoning effort, which that model must list.
    */
-  create(params: { model?: string; agent?: string }): SessionSummary {
-    const { agent, instructions, model: agentModel, settings } = this.options.setup.resolve(params.agent ?? null)
-    const model = agentModel ?? params.model ?? this.options.models[0]!.id
-    if (!this.options.models.some((candidate) => candidate.id === model)) throw invalid(`no configured model ${model}`)
+  create(params: { model?: string; agent?: string; reasoningEffort?: string }): SessionSummary {
+    const agent = this.options.setup.resolve(params.agent ?? null)
+    const model = this.model(agent.model ?? params.model ?? this.options.defaultModel)
+    const reasoningEffort = this.effort(model, params.reasoningEffort)
+    let instructions: UserInstructions | null
+    try {
+      instructions = this.options.setup.userInstructions(agent)
+    } catch (error) {
+      throw invalid(error instanceof Error ? error.message : String(error))
+    }
     const id = crypto.randomUUID()
-    const catalogs = this.options.setup.catalogs()
+    const record = { id, agent: agent.key, model: model.id, reasoningEffort, modelOverrides: agent.overrides, permission: agent.permission }
+    const catalogs = this.options.setup.catalogs(this.rulesOf(agent.permission, []))
     this.withSessionDir(id, () =>
       this.store.createSession(
-        {
-          id,
-          agent,
-          model,
-          instructions,
-          agentSettings: settings,
-          createdAt: this.now(),
-          firstMessage: this.firstMessage(id, instructions, catalogs),
-          catalogs,
-        },
+        { ...record, createdAt: this.now(), firstMessage: this.firstMessage(id, instructions?.text ?? null, catalogs), catalogs },
         null,
       ),
     )
@@ -433,17 +481,23 @@ export class SessionHub {
     return () => listeners.delete(listener)
   }
 
-  /** The valid agents, with their names, descriptions, modes, and models, and the refused agent files with the reason. */
+  /** The configured agents, each with its title, title file state, and settings, and the default agent. */
   agents() {
-    return this.options.setup.agents?.() ?? { agents: [], refused: [] }
+    return this.options.setup.agents()
   }
 
-  setModel(sessionId: string, model: string, sender: Sender) {
+  /**
+   * Selects the session's model and reasoning effort, which the model must
+   * list; without an effort, the selection is cleared. A running turn keeps
+   * the model and effort it started with.
+   */
+  setModel(sessionId: string, model: string, reasoningEffort: string | undefined, sender: Sender) {
     this.session(sessionId)
-    if (!this.options.models.some((candidate) => candidate.id === model)) throw invalid(`no configured model ${model}`)
+    const configured = this.model(model)
+    const effort = this.effort(configured, reasoningEffort)
     this.commit(sessionId, (append) => {
-      this.store.setModel(sessionId, model)
-      append({ type: "MODEL_CHANGED", model, sender })
+      this.store.setModel(sessionId, configured.id, effort)
+      append({ type: "MODEL_CHANGED", model: configured.id, reasoningEffort: effort, sender })
     })
   }
 
@@ -480,14 +534,9 @@ export class SessionHub {
     const state = this.state(sessionId)
     const { session, turn, notes } = this.commit(sessionId, (append) => {
       before?.(append)
-      let session = this.session(sessionId)
-      if (session.firstMessage === "") {
-        const catalogs = this.options.setup.catalogs()
-        this.store.setFirstMessage(sessionId, this.firstMessage(session.id, session.instructions, catalogs), catalogs)
-        session = this.session(sessionId)
-      }
+      const session = this.session(sessionId)
       const known = this.store.turns(sessionId).at(-1)?.catalogs ?? session.catalogs
-      const catalogs = this.options.setup.catalogs()
+      const catalogs = this.options.setup.catalogs(this.rules(session))
       const changes = [
         ...(catalogs.skills === known.skills ? [] : [{ name: "Skills", catalog: catalogs.skills }]),
         ...(catalogs.codeMode === known.codeMode ? [] : [{ name: "Code mode", catalog: catalogs.codeMode }]),
@@ -500,7 +549,16 @@ export class SessionHub {
       const received = append({ type: "INPUT_RECEIVED", inputId: input.inputId, text: input.text, mode: input.mode, sender: input.sender })
       const turn = this.store.insertTurn(
         sessionId,
-        { runId, inputId: input.inputId, inputText: input.text, model: session.model, firstSeq: received.seq, notes: carried, catalogs },
+        {
+          runId,
+          inputId: input.inputId,
+          inputText: input.text,
+          model: session.model,
+          reasoningEffort: session.reasoningEffort,
+          firstSeq: received.seq,
+          notes: carried,
+          catalogs,
+        },
         this.now(),
       )
       append({ type: "RUN_STARTED", threadId: sessionId, runId, model: turn.model, inputId: input.inputId })
@@ -526,6 +584,7 @@ export class SessionHub {
       toolResult: (toolCallId) => this.store.toolResult(sessionId, toolCallId),
       authorize: (toolCallId, check, signal) => this.authorize(sessionId, turn.runId, toolCallId, check, signal),
       trace: withSpan(span),
+      offered: (tool) => !whollyDenied(this.rules(session), withholdingName(tool)),
     }
     const fiber = Effect.runFork(this.options.runner(context))
     live.fiber = fiber
@@ -591,8 +650,8 @@ export class SessionHub {
         {
           id,
           createdAt: this.now(),
-          // The source's catalogs, so the copied turns' catalog notes stay consistent with the first message.
-          firstMessage: this.firstMessage(id, source.instructions, source.catalogs),
+          // The source's first message with the new identity, so the copied turns' catalog notes stay consistent with it.
+          firstMessage: forkedFirstMessage(source.firstMessage, this.firstMessage(id, null, { skills: null, codeMode: null })),
           notes: [...source.pendingNotes, forkNote(source.id, id, this.store.sessionDir(id))],
         },
         runId ?? null,

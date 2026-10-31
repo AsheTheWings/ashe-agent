@@ -6,7 +6,6 @@ import {
   Model,
   PermissionAnswer,
   ProtocolVersion,
-  RefusedAgentFile,
   Sender,
   SessionSummary,
   Seq,
@@ -44,11 +43,10 @@ export const methods = {
     Schema.Struct({ token: Schema.String, protocolVersion: ProtocolVersion }),
     Schema.Struct({ principal: Sender }),
   ),
-  "models.list": method(Empty, Schema.Struct({ models: Schema.Array(Model) })),
-  "agents.list": method(
-    Empty,
-    Schema.Struct({ agents: Schema.Array(Agent), refused: Schema.Array(RefusedAgentFile) }),
-  ),
+  /** The configured models and the one sessions start with by default. */
+  "models.list": method(Empty, Schema.Struct({ models: Schema.Array(Model), defaultModel: Id })),
+  /** The configured agents and the one sessions run as by default, if any. */
+  "agents.list": method(Empty, Schema.Struct({ agents: Schema.Array(Agent), defaultAgent: Schema.NullOr(Id) })),
   "session.list": method(Empty, Schema.Struct({ sessions: Schema.Array(SessionSummary) })),
   "session.create": method(
     Schema.Struct({
@@ -56,6 +54,8 @@ export const methods = {
       cwd: Schema.optionalKey(Schema.Never),
       model: Schema.optionalKey(Id),
       agent: Schema.optionalKey(Schema.String),
+      /** A reasoning effort the starting model lists; without one, the model's default applies. */
+      reasoningEffort: Schema.optionalKey(Schema.String),
     }),
     Schema.Struct({ session: SessionSummary }),
   ),
@@ -74,7 +74,11 @@ export const methods = {
     Schema.Struct({ inputId: Id }),
   ),
   "session.cancel": method(Schema.Struct({ sessionId: Id }), Empty),
-  "session.setModel": method(Schema.Struct({ sessionId: Id, model: Id }), Empty),
+  /** Selects the model and, optionally, a reasoning effort it lists; without one, the selection is cleared. */
+  "session.setModel": method(
+    Schema.Struct({ sessionId: Id, model: Id, reasoningEffort: Schema.optionalKey(Schema.String) }),
+    Empty,
+  ),
   /** Copies the session through the user turn `runId`, or entirely, into a new session. */
   "session.fork": method(
     Schema.Struct({ sessionId: Id, runId: Schema.optionalKey(Id) }),

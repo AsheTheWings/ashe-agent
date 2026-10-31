@@ -4,12 +4,13 @@ import { join } from "node:path"
 import type { Database } from "bun:sqlite"
 import { AIMessageChunk, type AIMessageChunkFields, type BaseMessage } from "@langchain/core/messages"
 import { convertMessagesToResponsesInput } from "@langchain/openai"
-import type { Model, SessionEvent } from "@ashe-agent/protocol"
+import type { SessionEvent } from "@ashe-agent/protocol"
 import { Effect, Schema } from "effect"
 import type { ModelCall, ModelPort } from "../../src/agent/model.ts"
 import { agentRunner } from "../../src/agent/runner.ts"
 import { builtinTool, type Tool } from "../../src/agent/tools.ts"
-import type { Permission } from "../../src/inputs/shapes.ts"
+import type { ModelOverrides, Permission } from "../../src/inputs/shapes.ts"
+import type { ConfiguredModel } from "../../src/models/registry.ts"
 import { permissionPath } from "../../src/permissions/paths.ts"
 import { SessionHub, type SessionSetup } from "../../src/sessions/hub.ts"
 import { noAgents } from "../../src/sessions/setup.ts"
@@ -20,9 +21,31 @@ import { migrationFiles } from "../../src/store/migration-files.ts"
 import { applyMigrations, discoverMigrations } from "../../src/store/migrations.ts"
 import { waitFor } from "./cli.ts"
 
-export const agentModels: ReadonlyArray<Model> = [
-  { id: "test/alpha", contextWindow: 200_000, imageInput: false },
-  { id: "test/beta", contextWindow: 200_000, imageInput: true },
+/** A configured model of the provider its id names, taking text only and no settings unless given. */
+export const configuredModel = (
+  id: string,
+  options: {
+    readonly contextLimit?: number
+    readonly imageInput?: boolean
+    readonly temperatureCapable?: boolean
+    readonly efforts?: ReadonlyArray<string>
+    readonly settings?: ModelOverrides
+  } = {},
+): ConfiguredModel => ({
+  id,
+  provider: id.slice(0, id.indexOf("/")),
+  upstream: id.slice(id.indexOf("/") + 1),
+  name: id,
+  contextLimit: options.contextLimit ?? 400_000,
+  imageInput: options.imageInput ?? false,
+  temperatureCapable: options.temperatureCapable ?? false,
+  efforts: options.efforts ?? [],
+  settings: options.settings ?? {},
+})
+
+export const agentModels: ReadonlyArray<ConfiguredModel> = [
+  configuredModel("test/alpha", { contextLimit: 200_000 }),
+  configuredModel("test/beta", { contextLimit: 200_000, imageInput: true }),
 ]
 
 /** One scripted model reply: the chunks a call streams. */
@@ -132,12 +155,14 @@ export const responsesInput = (call: ModelCall) =>
 export const testTools = (): ReadonlyArray<Tool> => [
   builtinTool({
     name: "echo",
+    permission: null,
     description: "Returns its text.",
     args: Schema.Struct({ text: Schema.String }),
     run: async ({ text }) => ({ outcome: "success", content: `echoed ${text}` }),
   }),
   builtinTool({
     name: "wait",
+    permission: null,
     description: "Runs until the turn ends.",
     args: Schema.Struct({}),
     run: (_, run) =>
@@ -145,12 +170,14 @@ export const testTools = (): ReadonlyArray<Tool> => [
   }),
   builtinTool({
     name: "refuse",
+    permission: null,
     description: "Declines as a plain reject.",
     args: Schema.Struct({}),
     run: async () => ({ outcome: "declined", content: "The user declined this tool call.", endTurn: true }),
   }),
   builtinTool({
     name: "touch",
+    permission: "edit",
     description: "Asks the `edit` permission for its paths, resolved against the session directory.",
     args: Schema.Struct({ paths: Schema.Array(Schema.String) }),
     prepare: ({ paths }, run) => {
@@ -161,6 +188,7 @@ export const testTools = (): ReadonlyArray<Tool> => [
   }),
   builtinTool({
     name: "pair",
+    permission: "edit",
     description: "Asks the `edit` permission for two subjects at once, as a program's parallel calls would.",
     args: Schema.Struct({ a: Schema.String, b: Schema.String }),
     run: async ({ a, b }, run) => {
@@ -187,7 +215,7 @@ export class AgentHarness {
     readonly options: {
       readonly tools?: ReadonlyArray<Tool> | (() => ReadonlyArray<Tool>)
       readonly setup?: SessionSetup
-      readonly models?: ReadonlyArray<Model>
+      readonly models?: ReadonlyArray<ConfiguredModel>
     /** The model port; the fake model by default. */
     readonly port?: ModelPort
       /** The global permission rules; everything is allowed by default. */
@@ -212,6 +240,7 @@ export class AgentHarness {
     const afterLoop = this.options.afterLoop
     const hub: SessionHub = new SessionHub(new SessionStore(this.db, join(this.dir, "sessions")), {
       models,
+      defaultModel: models[0]!.id,
       setup: this.options.setup ?? noAgents,
       ...(this.options.permission === undefined ? {} : { permission: this.options.permission }),
       home: realpathSync(this.dir),
@@ -230,7 +259,7 @@ export class AgentHarness {
     this.hub = this.makeHub()
   }
 
-  create(params: { model?: string; agent?: string } = {}) {
+  create(params: { model?: string; agent?: string; reasoningEffort?: string } = {}) {
     return this.hub.create(params).id
   }
 

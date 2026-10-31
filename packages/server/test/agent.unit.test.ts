@@ -127,6 +127,7 @@ describe("tools and providers", () => {
     let ran = 0
     const tool = builtinTool({
       name: "t",
+      permission: null,
       description: "d",
       args: Schema.Struct({ path: Schema.String, limit: Schema.optionalKey(Schema.Int) }),
       run: async () => {
@@ -135,7 +136,7 @@ describe("tools and providers", () => {
       },
     })
     expect(tool.spec.parameters).toMatchObject({ type: "object", required: ["path"], properties: { path: { type: "string" } } })
-    const run = { sessionId: "s", runId: "r", toolCallId: "c", cwd: "/", signal: new AbortController().signal, authorize: async () => {}, started: () => {}, imageInput: false, onCancel: () => {}, programCall: () => {} }
+    const run = { sessionId: "s", runId: "r", toolCallId: "c", cwd: "/", signal: new AbortController().signal, authorize: async () => {}, started: () => {}, imageInput: false, onCancel: () => {}, programCall: () => {}, offered: () => true }
     expect((await tool.run({ path: 1 }, run)).outcome).toBe("failed")
     expect(ran).toBe(0)
     expect(await tool.run({ path: "p" }, run)).toEqual({ outcome: "success", content: "ok" })
@@ -149,8 +150,8 @@ describe("tools and providers", () => {
   })
 
   test("variables the model and graph libraries read are removed, others kept", () => {
-    const env: Record<string, string | undefined> = { OPENAI_BASE_URL: "x", LANGSMITH_TRACING: "true", LANGCHAIN_VERBOSE: "1", LC_OUTPUT_VERSION: "v1", PATH: "/bin", ASHE_AGENT_MODELS: "[]" }
+    const env: Record<string, string | undefined> = { OPENAI_BASE_URL: "x", LANGSMITH_TRACING: "true", LANGCHAIN_VERBOSE: "1", LC_OUTPUT_VERSION: "v1", PATH: "/bin", ASHE_AGENT_PROVIDERS: "{}" }
     expect([...removeDependencyVariables(env)].sort()).toEqual(["LANGCHAIN_VERBOSE", "LANGSMITH_TRACING", "LC_OUTPUT_VERSION", "OPENAI_BASE_URL"])
-    expect(env).toEqual({ PATH: "/bin", ASHE_AGENT_MODELS: "[]" })
+    expect(env).toEqual({ PATH: "/bin", ASHE_AGENT_PROVIDERS: "{}" })
   })
 })

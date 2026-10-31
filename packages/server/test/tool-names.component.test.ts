@@ -9,7 +9,7 @@ import { sessionHandlers } from "../src/sessions/handlers.ts"
 import { builtinTools } from "../src/tools/builtin.ts"
 import { executeTool } from "../src/tools/codemode/execute.ts"
 import { ShellProcesses } from "../src/tools/shell/index.ts"
-import { AgentHarness, agentModels, say, testTools } from "./support/agent.ts"
+import { AgentHarness, configuredModel, say, testTools } from "./support/agent.ts"
 
 const processes = () => new ShellProcesses({ shell: "/bin/sh", envFile: null, env: {}, maxProcesses: 4 })
 
@@ -36,6 +36,7 @@ const refusingRun = (checks: Array<PermissionCheck>): ToolRun => ({
   started: () => {},
   onCancel: () => {},
   programCall: () => {},
+  offered: () => true,
 })
 
 /** One valid call of each built-in tool, by the name models receive. */
@@ -119,11 +120,21 @@ describe("tool names", () => {
     }
   })
 
-  test("models.list returns the configured models", async () => {
-    const h = new AgentHarness()
+  test("models.list returns each model's capabilities and settings, and the default model", async () => {
+    const models = [
+      configuredModel("test/alpha", { contextLimit: 300_000, efforts: ["low", "high"], settings: { reasoningEffort: "low" } }),
+      { ...configuredModel("test/beta", { imageInput: true }), name: "Beta" },
+    ]
+    const h = new AgentHarness({ models })
     try {
       const { handlers } = sessionHandlers(h.hub)
-      expect(await handlers["models.list"]!({}, {} as RequestContext)).toEqual({ models: [...agentModels] })
+      expect(await handlers["models.list"]!({}, {} as RequestContext)).toEqual({
+        models: [
+          { id: "test/alpha", name: "test/alpha", contextLimit: 300_000, imageInput: false, reasoningEfforts: ["low", "high"], reasoningEffort: "low" },
+          { id: "test/beta", name: "Beta", contextLimit: 400_000, imageInput: true, reasoningEfforts: [], reasoningEffort: null },
+        ],
+        defaultModel: "test/alpha",
+      })
     } finally {
       await h.cleanup()
     }

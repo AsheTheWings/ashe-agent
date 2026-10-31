@@ -78,7 +78,7 @@ describe("the bundle", () => {
         return new Response(sse(reply), { headers: { "content-type": "text/event-stream" } })
       },
     })
-    const run = new CliRun({ ASHE_AGENT_MODEL_BASE_URL: `http://127.0.0.1:${api.port}/v1` }, [binary])
+    const run = new CliRun({}, [binary], `http://127.0.0.1:${api.port}/v1`)
     try {
       await run.prepare("qualification-password")
       const url = await run.serve()

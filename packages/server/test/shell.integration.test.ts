@@ -53,6 +53,7 @@ const call = (tool: Tool, cwd: string, sessionId: string, args: unknown) => {
     started: () => {},
     onCancel: () => {},
     programCall: () => {},
+    offered: () => true,
   }
   return tool.run(args, run).then((result) => result.content as string)
 }

@@ -17,6 +17,7 @@ import { AgentHarness, callTools, say, testTools } from "./support/agent.ts"
 const inventory: ReadonlyArray<Tool> = testTools().map((tool) => ({
   ...tool,
   namespace: "srv",
+  permission: `srv_${tool.name}`,
   spec: { ...tool.spec, name: `srv_${tool.name}` },
   run: async (args, run) => {
     await run.authorize({ permission: `srv_${tool.name}`, subjects: ["*"], patterns: ["*"] })
@@ -28,6 +29,7 @@ const inventory: ReadonlyArray<Tool> = testTools().map((tool) => ({
 const imageTool = (name: string, data: string, wait?: () => Promise<void>): Tool => ({
   ...builtinTool({
     name,
+    permission: null,
     description: `Returns the image ${name}.`,
     args: Schema.Struct({}),
     run: async () => {
@@ -153,8 +155,18 @@ describe("code mode programs", () => {
 })
 
 describe("permissions and limits inside programs", () => {
-  test("a denied call fails inside the program, which goes on", async () => {
+  test("a wholly denied tool is not among the program's tools", async () => {
     await withHarness({ permission: { srv_echo: "deny" } }, async (h) => {
+      const id = program(h, 'try { await tools.srv.echo({ text: "a" }); return "ran" } catch (error) { return `caught: ${error.message}` }')
+      await h.turnsEnded(id, 1)
+      expect(results(h, id)[0].content).toBe("caught: Unknown tool 'srv.echo'.")
+      expect(ofType(h.events(id), "PROGRAM_CALL_FINISHED")).toEqual([])
+    })
+  })
+
+  test("a denied call fails inside the program, which goes on", async () => {
+    // A narrower allow after the deny keeps the tool offered, and the call is still denied.
+    await withHarness({ permission: { srv_echo: { "*": "deny", never: "allow" } } }, async (h) => {
       const id = program(h, 'try { await tools.srv.echo({ text: "a" }); return "ran" } catch (error) { return `caught: ${error.message}` }')
       await h.turnsEnded(id, 1)
       const [result] = results(h, id)

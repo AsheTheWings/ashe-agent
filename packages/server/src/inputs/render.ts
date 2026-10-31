@@ -6,6 +6,7 @@ const symbolicDirs: Dirs = {
   home: "$HOME",
   configHome: "$XDG_CONFIG_HOME",
   stateHome: "$XDG_STATE_HOME",
+  cacheHome: "$XDG_CACHE_HOME",
 }
 
 const encodeForProcessInput = (input: ConfigurationInput<Schema.Top>, value: unknown) =>

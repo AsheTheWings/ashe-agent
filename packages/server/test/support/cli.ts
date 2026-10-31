@@ -19,7 +19,8 @@ export const waitFor = async <A>(what: string, check: () => A | undefined | Prom
 /**
  * A run-owned state directory, inputs, and the `ashe-agent` CLI run
  * against them, from inside the run's directory: from source by default,
- * or the given command, such as a built binary.
+ * or the given command, such as a built binary. Its one provider `test`
+ * serves the model `test/model` at `modelBaseUrl`, with a synthetic key.
  */
 export class CliRun {
   readonly dir = mkdtempSync(join(tmpdir(), "ashe-agent-cli-"))
@@ -30,9 +31,10 @@ export class CliRun {
   constructor(
     extraEnv: Record<string, string> = {},
     private readonly command: ReadonlyArray<string> = [process.execPath, main],
+    modelBaseUrl = "http://127.0.0.1:9/v1",
   ) {
     mkdirSync(this.stateDir)
-    const keyFile = join(this.dir, "model-api-key")
+    const keyFile = join(this.dir, "provider-api-key")
     writeFileSync(keyFile, "sk-synthetic-test-key")
     chmodSync(keyFile, 0o600)
     this.env = {
@@ -41,8 +43,10 @@ export class CliRun {
       ASHE_AGENT_PROFILE: "development",
       ASHE_AGENT_STATE_DIR: this.stateDir,
       ASHE_AGENT_CONFIG_FILE: join(this.dir, "config.json"),
-      ASHE_AGENT_MODEL_API_KEY_FILE: keyFile,
-      ASHE_AGENT_MODELS: JSON.stringify([{ id: "test/model", contextWindow: 400_000, imageInput: false }]),
+      ASHE_AGENT_PROVIDERS: JSON.stringify({
+        test: { baseURL: modelBaseUrl, apiKeyFile: keyFile, models: { model: { limit: { context: 400_000 }, capabilities: { input: ["text"] } } } },
+      }),
+      ASHE_AGENT_DEFAULT_MODEL: "test/model",
       ASHE_AGENT_LISTEN_PORT: "0",
       ASHE_AGENT_ORIGINS: JSON.stringify(["http://127.0.0.1:5173"]),
       OTEL_TRACES_EXPORTER: "none",

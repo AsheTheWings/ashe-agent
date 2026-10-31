@@ -14,6 +14,7 @@ const Args = Schema.Struct({
 export const skillTool = (roots: ReadonlyArray<string>): Tool =>
   builtinTool({
     name: "skill",
+    permission: "skill",
     description:
       "Loads a skill's instructions by name. Use it when a task matches a skill in the Skills section; files the instructions mention are relative to the skill's directory.",
     args: Args,

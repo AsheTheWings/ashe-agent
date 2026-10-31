@@ -4,10 +4,12 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { SessionEvent } from "@ashe-agent/protocol"
 import { SUMMARY_MAX_TOKENS } from "../src/agent/compaction.ts"
+import { AgentRegistry } from "../src/agents/agents.ts"
 import { skillTool } from "../src/agents/skill-tool.ts"
 import { fileSetup } from "../src/agents/setup.ts"
-import type { Permission } from "../src/inputs/shapes.ts"
-import { AgentHarness, agentModels, callTools, messageText, say, testTools } from "./support/agent.ts"
+import type { Agents, Permission } from "../src/inputs/shapes.ts"
+import type { ConfiguredModel } from "../src/models/registry.ts"
+import { AgentHarness, agentModels, callTools, configuredModel, messageText, say, testTools } from "./support/agent.ts"
 
 const skillText = (name: string, description: string) => `---\nname: ${name}\ndescription: ${description}\nallowed-tools: touch\n---\nHow to ${name}.\n`
 
@@ -16,6 +18,7 @@ const withConfig = async (
   files: Record<string, string>,
   body: (h: AgentHarness, config: string) => Promise<void>,
   permission?: Permission,
+  agents: { readonly agents?: Agents; readonly defaultAgent?: string; readonly models?: ReadonlyArray<ConfiguredModel> } = {},
 ) => {
   const config = mkdtempSync(join(tmpdir(), "ashe-agent-config-"))
   const write = (path: string, text: string) => {
@@ -27,11 +30,11 @@ const withConfig = async (
   const h = new AgentHarness({
     tools: [...testTools(), skillTool([skills])],
     setup: fileSetup({
-      agentsDir: join(config, "agents"),
+      agents: new AgentRegistry(agents.agents ?? {}, agents.defaultAgent ?? null, join(config, "titles")),
       instructionsFile: join(config, "AGENTS.md"),
       skillRoots: [skills],
-      modelIds: new Set(agentModels.map((model) => model.id)),
     }),
+    ...(agents.models === undefined ? {} : { models: agents.models }),
     ...(permission === undefined ? {} : { permission }),
   })
   try {
@@ -86,7 +89,8 @@ describe("instructions and skills", () => {
         expect(results[0]).toMatchObject({ outcome: "success", content: `Skill directory: ${join(config, "skills", "brew-tea")}\n\nHow to brew-tea.\n` })
         expect(results[1]).toMatchObject({ outcome: "failed", content: "There is no skill named nope." })
         expect(results[2]).toMatchObject({ outcome: "failed", content: expect.stringContaining("denied by configuration") })
-        expect(results[3]).toMatchObject({ outcome: "failed", content: expect.stringContaining("denied by configuration") })
+        // The rules wholly deny edit, so the skill's allowed-tools cannot bring touch back.
+        expect(results[3]).toMatchObject({ outcome: "failed", content: "There is no tool named touch." })
       },
       { skill: { "*": "allow", secret: "deny" }, edit: "deny" },
     )
@@ -94,14 +98,16 @@ describe("instructions and skills", () => {
 })
 
 describe("agents", () => {
-  const helper = (frontmatter: string, body: string) => `---\nmode: primary\n${frontmatter}\n---\n${body}`
+  const warm = configuredModel("test/warm", { contextLimit: 200_000, temperatureCapable: true, settings: { temperature: 1 } })
+  const title = (description: string, body: string) => `---\ndescription: ${description}\n---\n${body}`
 
-  test("an agent's body replaces the global instructions, and its temperature, permission, and body stay as created", async () => {
+  test("an agent's title file replaces the global instructions, and its overrides and permission stay as created", async () => {
     await withConfig(
-      { "AGENTS.md": "GLOBAL", "agents/helper.md": helper("temperature: 0.25\npermission:\n  edit: deny", "HELPER BODY") },
+      { "AGENTS.md": "GLOBAL", "titles/helper.md": title("Helps", "HELPER BODY") },
       async (h, config) => {
         const id = h.create({ agent: "helper" })
-        writeFileSync(join(config, "agents", "helper.md"), helper("temperature: 1.5\npermission:\n  edit: allow", "EDITED BODY"))
+        expect(h.hub.summary(id)).toMatchObject({ agent: "helper", model: warm.id })
+        writeFileSync(join(config, "titles", "helper.md"), title("Helps", "EDITED BODY"))
         h.model.next(callTools([{ name: "touch", args: { paths: ["x"] } }]), say("done"))
         h.input(id, "go")
         await h.turnsEnded(id, 1)
@@ -110,30 +116,72 @@ describe("agents", () => {
         expect(firstText(h)).not.toContain("GLOBAL")
         expect(firstText(h)).not.toContain("EDITED BODY")
         expect(ofType(h.events(id), "TOOL_CALL_RESULT")[0]).toMatchObject({ outcome: "failed", content: expect.stringContaining("denied by configuration") })
-        const plain = h.create()
-        h.model.next(say("plain"))
-        h.input(plain, "hi")
-        await h.turnsEnded(plain, 1)
-        expect(h.model.last().temperature).toBeUndefined()
-        expect(h.hub.agents().agents).toEqual([{ name: "helper", description: null, mode: "primary", model: null }])
-        expect(() => h.create({ agent: "missing" })).toThrow("no valid agent missing")
+        expect(() => h.create({ agent: "missing" })).toThrow("no agent missing")
       },
+      undefined,
+      { agents: { helper: { model: warm.id, models: { [warm.id]: { temperature: 0.25 } }, permission: { edit: { "*": "deny", kept: "allow" } } } }, models: [agentModels[0]!, warm] },
     )
   })
 
-  test("compaction's summary call sends the agent's temperature", async () => {
-    await withConfig({ "agents/warm.md": helper("temperature: 0.25", "WARM") }, async (h) => {
-      const id = h.create({ agent: "warm" })
-      h.model.next(say("r1", { inputTokens: 150_000 }))
-      h.input(id, `t1 ${"y".repeat(100_000)}`)
+  test("sessions without an agent run as the default agent, else as the implicit agent with the global instructions", async () => {
+    await withConfig(
+      { "AGENTS.md": "GLOBAL", "titles/writer.md": title("Writes", "WRITER BODY") },
+      async (h) => {
+        const id = h.create()
+        expect(h.hub.summary(id).agent).toBe("writer")
+        h.model.next(say("ok"))
+        h.input(id, "hi")
+        await h.turnsEnded(id, 1)
+        expect(firstText(h)).toContain("WRITER BODY")
+      },
+      undefined,
+      { agents: { writer: {} }, defaultAgent: "writer" },
+    )
+    await withConfig({ "AGENTS.md": "GLOBAL" }, async (h) => {
+      const id = h.create()
+      expect(h.hub.summary(id)).toMatchObject({ agent: null, model: agentModels[0]!.id })
+      h.model.next(say("ok"))
+      h.input(id, "hi")
       await h.turnsEnded(id, 1)
-      h.model.next(say("SUMMARY"), say("r2"))
-      h.input(id, "t2")
-      await h.turnsEnded(id, 2)
-      const [summary, next] = h.model.calls.slice(1).map(({ call }) => call)
-      expect(h.model.calls).toHaveLength(3)
-      expect(summary!.maxOutputTokens).toBe(SUMMARY_MAX_TOKENS)
-      expect([summary!.temperature, next!.temperature]).toEqual([0.25, 0.25])
-    })
+      expect(firstText(h)).toContain("GLOBAL")
+      expect(h.model.last().temperature).toBeUndefined()
+    }, undefined, { agents: { writer: {} } })
+  })
+
+  test("an agent without a title file has the global instructions, and a refused title file fails creation", async () => {
+    await withConfig(
+      { "AGENTS.md": "GLOBAL", "titles/broken.md": "---\nmode: primary\n---\nBROKEN" },
+      async (h) => {
+        const id = h.create({ agent: "plain" })
+        h.model.next(say("ok"))
+        h.input(id, "hi")
+        await h.turnsEnded(id, 1)
+        expect(firstText(h)).toContain("GLOBAL")
+        expect(() => h.create({ agent: "broken" })).toThrow('its frontmatter holds "mode", not only description')
+      },
+      undefined,
+      { agents: { plain: {}, broken: {} } },
+    )
+  })
+
+  test("compaction's summary call sends the agent's temperature override", async () => {
+    await withConfig(
+      {},
+      async (h) => {
+        const id = h.create({ agent: "warm" })
+        h.model.next(say("r1", { inputTokens: 150_000 }))
+        h.input(id, `t1 ${"y".repeat(100_000)}`)
+        await h.turnsEnded(id, 1)
+        h.model.next(say("SUMMARY"), say("r2"))
+        h.input(id, "t2")
+        await h.turnsEnded(id, 2)
+        const [summary, next] = h.model.calls.slice(1).map(({ call }) => call)
+        expect(h.model.calls).toHaveLength(3)
+        expect(summary!.maxOutputTokens).toBe(SUMMARY_MAX_TOKENS)
+        expect([summary!.temperature, next!.temperature]).toEqual([0.25, 0.25])
+      },
+      undefined,
+      { agents: { warm: { model: warm.id, models: { [warm.id]: { temperature: 0.25 } } } }, models: [warm] },
+    )
   })
 })

@@ -4,8 +4,9 @@ import { REQUEST_INSTRUCTIONS } from "../src/agent/blocks.ts"
 import { SUMMARY_MAX_TOKENS, SUMMARY_PROMPT_REVISION } from "../src/agent/compaction.ts"
 import { ModelCallError } from "../src/agent/model.ts"
 import type { Tool } from "../src/agent/tools.ts"
-import { noAgentSettings } from "../src/agents/agents.ts"
-import type { SessionSetup } from "../src/sessions/hub.ts"
+import { implicitAgent } from "../src/agents/agents.ts"
+import type { SessionSetup, UserInstructions } from "../src/sessions/hub.ts"
+import { noAgents } from "../src/sessions/setup.ts"
 import { latestCheckpointId } from "../src/store/checkpoint-threads.ts"
 import { waitFor } from "./support/cli.ts"
 import {
@@ -21,6 +22,15 @@ import {
   testTools,
   type Reply,
 } from "./support/agent.ts"
+
+/** Global user instructions holding `text`. */
+const instructions = (text: string): UserInstructions => ({
+  source: "global",
+  path: "/config/AGENTS.md",
+  text,
+  sha256: "",
+  metadata: { dev: 0, ino: 0, size: text.length, mtimeMs: 0, ctimeMs: 0 },
+})
 
 const withHarness = async (body: (harness: AgentHarness) => Promise<void>, options?: ConstructorParameters<typeof AgentHarness>[0]) => {
   const harness = new AgentHarness(options)
@@ -54,7 +64,8 @@ describe("the model's first message", () => {
   test("fixed instructions, system and developer blocks in order, client blocks, escaping, notes, and a fixed first message", async () => {
     const catalogs = { skills: "- `alpha-skill`: does alpha things", codeMode: "- `run(code)`: runs a program" as string | null }
     const setup: SessionSetup = {
-      resolve: () => ({ agent: null, instructions: "# Rules\n\nNever write </developer> or <user>.\n\n```\n# not a heading\n```", model: null, settings: noAgentSettings }),
+      ...noAgents,
+      userInstructions: () => instructions("# Rules\n\nNever write </developer> or <user>.\n\n```\n# not a heading\n```"),
       catalogs: () => catalogs,
     }
     await withHarness(
@@ -104,7 +115,7 @@ describe("the model's first message", () => {
 
   test("a rewind derives the catalog note from the catalogs, and catalog notes are escaped", async () => {
     const catalogs = { skills: null as string | null, codeMode: "catalog A" as string | null }
-    const setup: SessionSetup = { resolve: () => ({ agent: null, instructions: null, model: null, settings: noAgentSettings }), catalogs: () => catalogs }
+    const setup: SessionSetup = { ...noAgents, catalogs: () => catalogs }
     await withHarness(
       async (h) => {
         const id = h.create()
@@ -136,8 +147,8 @@ describe("the model's first message", () => {
 describe("the agent loop", () => {
   test("a session takes its agent's model, else the chosen one, else the first configured", async () => {
     const setup: SessionSetup = {
-      resolve: (agent) => ({ agent, instructions: null, model: agent === "pinned" ? beta : agent === "broken" ? "no/such" : null, settings: noAgentSettings }),
-      catalogs: () => ({ skills: null, codeMode: null }),
+      ...noAgents,
+      resolve: (agent) => ({ ...implicitAgent, key: agent, model: agent === "pinned" ? beta : agent === "broken" ? "no/such" : null }),
     }
     await withHarness(
       async (h) => {
@@ -187,7 +198,7 @@ describe("the agent loop", () => {
 
   test("built-in arguments are decoded, and other tools get the model's arguments unchanged", async () => {
     const received: Array<unknown> = []
-    const raw: Tool = { namespace: null, name: "raw",
+    const raw: Tool = { namespace: null, name: "raw", permission: null,
       spec: { name: "raw", description: "Takes anything.", parameters: { type: "object" } },
       run: async (args) => {
         received.push(args)
@@ -432,7 +443,7 @@ describe("model switching", () => {
       h.input(id, "t1")
       await h.turnsEnded(id, 1)
 
-      h.hub.setModel(id, beta, h.sender)
+      h.hub.setModel(id, beta, undefined, h.sender)
       h.model.next(say("b1"))
       h.input(id, "t2")
       await h.turnsEnded(id, 2)
@@ -447,7 +458,7 @@ describe("model switching", () => {
       expect(record).not.toContain("alpha thinks")
       expect(responsesInput(byBeta).some((item) => item.type === "reasoning" || item.type === "function_call")).toBe(false)
 
-      h.hub.setModel(id, alpha, h.sender)
+      h.hub.setModel(id, alpha, undefined, h.sender)
       h.model.next(say("a2"))
       h.input(id, "t3")
       await h.turnsEnded(id, 3)
@@ -473,7 +484,7 @@ describe("model switching", () => {
       )
       h.input(id, "x".repeat(100_000))
       await h.calls(h.model.calls.length + 1)
-      h.hub.setModel(id, beta, h.sender)
+      h.hub.setModel(id, beta, undefined, h.sender)
       open.open()
       await h.turnsEnded(id, 4)
       expect(h.model.calls.slice(-3).map(({ call }) => call.model)).toEqual([alpha, alpha, alpha])
@@ -482,7 +493,7 @@ describe("model switching", () => {
   })
 
   test("a turn's image decisions follow the model it started with", async () => {
-    const picture: Tool = { namespace: null, name: "picture",
+    const picture: Tool = { namespace: null, name: "picture", permission: null,
       spec: { name: "picture", description: "Returns an image.", parameters: { type: "object" } },
       run: async () => ({
         outcome: "success",
@@ -499,7 +510,7 @@ describe("model switching", () => {
         h.model.next(hold(open.promise, callTools([{ name: "picture", args: {} }])), say("seen"))
         h.input(id, "look")
         await h.calls(1)
-        h.hub.setModel(id, alpha, h.sender)
+        h.hub.setModel(id, alpha, undefined, h.sender)
         open.open()
         await h.turnsEnded(id, 1)
         const output = responsesInput(h.model.last()).find((item) => item.type === "function_call_output")!

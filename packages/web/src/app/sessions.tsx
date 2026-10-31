@@ -22,7 +22,6 @@ const NewSessionDialog = ({ open, onOpenChange }: { open: boolean; onOpenChange:
   const client = useClient()
   const models = useClientState((state) => state.models)
   const agents = useClientState((state) => state.agents)
-  const choices = agents.filter((agent) => agent.mode !== "subagent")
   const [model, setModel] = useState<string | null>(null)
   const [agent, setAgent] = useState<string>(NO_AGENT)
   const [busy, setBusy] = useState(false)
@@ -58,7 +57,7 @@ const NewSessionDialog = ({ open, onOpenChange }: { open: boolean; onOpenChange:
               <SelectContent>
                 {models.map((choice) => (
                   <SelectItem key={choice.id} value={choice.id}>
-                    {choice.id}
+                    {choice.name}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -72,9 +71,9 @@ const NewSessionDialog = ({ open, onOpenChange }: { open: boolean; onOpenChange:
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={NO_AGENT}>{NO_AGENT}</SelectItem>
-                {choices.map((choice) => (
-                  <SelectItem key={choice.name} value={choice.name}>
-                    {choice.name}
+                {agents.map((choice) => (
+                  <SelectItem key={choice.key} value={choice.key}>
+                    {choice.title}
                   </SelectItem>
                 ))}
               </SelectContent>

@@ -26,6 +26,7 @@ export const platformDirs = (env: Readonly<Record<string, string | undefined>>):
     home,
     configHome: absoluteOr(env.XDG_CONFIG_HOME, `${home}/.config`),
     stateHome: absoluteOr(env.XDG_STATE_HOME, `${home}/.local/state`),
+    cacheHome: absoluteOr(env.XDG_CACHE_HOME, `${home}/.cache`),
   }
 }
 

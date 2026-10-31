@@ -50,10 +50,10 @@ describe("entry point and database", () => {
   test("a command exits naming each invalid or missing input before any work", async () => {
     await withRun(
       async (run) => {
-        const result = await run.run(["serve"], { env: { ASHE_AGENT_LISTEN_PORT: "http", ASHE_AGENT_MODELS: "[]" } })
+        const result = await run.run(["serve"], { env: { ASHE_AGENT_LISTEN_PORT: "http", ASHE_AGENT_DEFAULT_MODEL: "test/other" } })
         expect(result.code).toBe(2)
         expect(result.stderr).toContain("ASHE_AGENT_LISTEN_PORT")
-        expect(result.stderr).toContain("ASHE_AGENT_MODELS")
+        expect(result.stderr).toContain("ASHE_AGENT_DEFAULT_MODEL")
         expect(result.stdout).toBe("")
       },
       { fresh: true, serve: false },
@@ -408,18 +408,33 @@ describe("API token lifecycle", () => {
 })
 
 describe("agents over a real WebSocket", () => {
-  test("an authenticated client lists the valid agents and the refused agent files", async () => {
-    await withRun(async (run, url) => {
-      const dir = join(run.dir, ".config", "ashe-agent", "agents")
-      mkdirSync(dir, { recursive: true })
-      writeFileSync(join(dir, "helper.md"), "---\ndescription: Helps\nmode: primary\nmodel: test/model\n---\nBody")
-      writeFileSync(join(dir, "broken.md"), "---\nmode: sometimes\n---\n")
-      const { client } = await login(url)
-      expect((await client.request("agents.list")).result).toEqual({
-        agents: [{ name: "helper", description: "Helps", mode: "primary", model: "test/model" }],
-        refused: [{ path: join(dir, "broken.md"), reason: "mode is not primary, subagent, or all" }],
-      })
-      client.close()
-    })
+  test("an authenticated client lists the configured agents with their title file states and the default agent", async () => {
+    await withRun(
+      async (run, url) => {
+        const dir = join(run.dir, ".config", "ashe-agent", "titles")
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(join(dir, "helper.md"), "---\ndescription: Helps\n---\nBody")
+        writeFileSync(join(dir, "broken.md"), "---\nmode: sometimes\n---\n")
+        const { client } = await login(url)
+        expect((await client.request("agents.list")).result).toEqual({
+          agents: [
+            { key: "helper", title: "Helper", description: "Helps", model: "test/model", reasoningEfforts: {}, titleFile: { state: "present" } },
+            {
+              key: "broken",
+              title: "Broken",
+              description: null,
+              model: null,
+              reasoningEfforts: {},
+              titleFile: { state: "refused", reason: 'its frontmatter holds "mode", not only description' },
+            },
+          ],
+          defaultAgent: "helper",
+        })
+        const created = await client.request("session.create", {})
+        expect(created.result.session).toMatchObject({ agent: "helper", model: "test/model" })
+        client.close()
+      },
+      { env: { ASHE_AGENT_AGENTS: JSON.stringify({ helper: { model: "test/model" }, broken: {} }), ASHE_AGENT_DEFAULT_AGENT: "helper" } },
+    )
   })
 })

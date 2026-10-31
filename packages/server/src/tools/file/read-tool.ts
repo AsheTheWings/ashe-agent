@@ -210,6 +210,7 @@ export const fileReadTool = (): Tool =>
   builtinTool<typeof Args, Awaited<ReturnType<typeof expand>>>({
     namespace: "file",
     name: "read",
+    permission: "read",
     description,
     args: Args,
     prepare: async ({ path }, run) => {

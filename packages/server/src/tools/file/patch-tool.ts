@@ -32,6 +32,7 @@ export const filePatchTool = (files?: PatchFiles): Tool =>
   builtinTool<typeof Args, ReadonlyArray<Located>>({
     namespace: "file",
     name: "patch",
+    permission: "edit",
     description,
     args: Args,
     prepare: ({ patch }, run) => {

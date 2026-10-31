@@ -1,10 +1,10 @@
 import { AIMessage, type AIMessageChunk } from "@langchain/core/messages"
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
-import type { Model, SessionEventBody } from "@ashe-agent/protocol"
+import type { SessionEventBody } from "@ashe-agent/protocol"
 import { context as otelContext } from "@opentelemetry/api"
 import { Effect } from "effect"
-import { MAX_USABLE_CONTEXT_WINDOW } from "../inputs/shapes.ts"
+import { callSettings, checkpointWindowSize, type ConfiguredModel } from "../models/registry.ts"
 import { endSpan, recordDuration, startSpan, withSpan, type ErrorClass } from "../telemetry/signals.ts"
 import type { TurnContext, TurnOutcome, TurnRunner } from "../sessions/hub.ts"
 import { REQUEST_INSTRUCTIONS } from "./blocks.ts"
@@ -19,7 +19,7 @@ export interface AgentOptions {
   /** The tools, or a function giving the tools available now, read at every model call. */
   readonly tools: ReadonlyArray<Tool> | (() => ReadonlyArray<Tool>)
   readonly saver: BaseCheckpointSaver
-  readonly models: ReadonlyArray<Model>
+  readonly models: ReadonlyArray<ConfiguredModel>
 }
 
 /** A turn that cannot go on; its message becomes the turn's error event. */
@@ -225,9 +225,12 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
   const own = { runId: turn.runId, model: turn.model }
   const model = options.models.find((candidate) => candidate.id === turn.model)
   if (model === undefined) throw new TurnFailure(`the model ${turn.model} is not configured`, "model_unavailable")
-  const usable = Math.min(model.contextWindow, MAX_USABLE_CONTEXT_WINDOW)
+  const overrides = session.modelOverrides[model.id]
+  const usable = checkpointWindowSize(model, overrides)
+  const settings = callSettings(model, overrides, turn.reasoningEffort)
   const first = session.firstMessage
-  const available = () => (typeof options.tools === "function" ? options.tools() : options.tools)
+  // A tool the session's rules wholly deny is not offered.
+  const available = () => (typeof options.tools === "function" ? options.tools() : options.tools).filter(context.offered)
   // The tools of the latest model call, which its tool calls run against.
   let tools = new Map(available().map((tool) => [tool.spec.name, tool]))
 
@@ -267,12 +270,11 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
     },
   }
 
-  const { temperature } = session.agentSettings
   const compactStep = async (state: StateValue) => {
     if (!state.overflowed && !needsCompaction(state.window, first, turn.model, usable)) return {}
     let compaction
     try {
-      compaction = await compact(port, state.window, first, turn.model, signal, temperature)
+      compaction = await compact(port, state.window, first, turn.model, signal, settings)
     } catch (error) {
       if (signal.aborted) throw error
       throw new TurnFailure(`compaction failed: ${error instanceof Error ? error.message : String(error)}`, "compaction_failed")
@@ -301,7 +303,7 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
         instructions: REQUEST_INSTRUCTIONS,
         messages: renderWindow(window, first, turn.model, model.imageInput),
         tools: [...tools.values()].map((tool) => tool.spec),
-        ...(temperature === null ? {} : { temperature }),
+        ...settings,
       }
       for await (const chunk of port.stream(call, signal)) {
         chunks.push(chunk)
@@ -373,6 +375,7 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
             started: () => events.started(callId),
             onCancel: (note) => events.cancelNote(callId, note),
             programCall: (tool, outcome) => events.emit({ type: "PROGRAM_CALL_FINISHED", toolCallId: callId, tool, outcome }),
+            offered: context.offered,
           }))
         } catch (error) {
           if (signal.aborted) {

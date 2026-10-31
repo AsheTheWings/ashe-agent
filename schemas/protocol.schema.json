@@ -328,6 +328,9 @@
                 },
                 "agent": {
                   "type": "string"
+                },
+                "reasoningEffort": {
+                  "type": "string"
                 }
               },
               "additionalProperties": true
@@ -590,6 +593,9 @@
                 "model": {
                   "type": "string",
                   "minLength": 1
+                },
+                "reasoningEffort": {
+                  "type": "string"
                 }
               },
               "required": [
@@ -1455,6 +1461,16 @@
                           "type": "string",
                           "minLength": 1
                         },
+                        "reasoningEffort": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "forkedFrom": {
                           "anyOf": [
                             {
@@ -1493,6 +1509,7 @@
                         "sessionDir",
                         "agent",
                         "model",
+                        "reasoningEffort",
                         "forkedFrom"
                       ],
                       "additionalProperties": true
@@ -1591,6 +1608,16 @@
                           "type": "string",
                           "minLength": 1
                         },
+                        "reasoningEffort": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "sender": {
                           "anyOf": [
                             {
@@ -1643,6 +1670,7 @@
                       "required": [
                         "type",
                         "model",
+                        "reasoningEffort",
                         "sender"
                       ],
                       "additionalProperties": true
@@ -2420,6 +2448,16 @@
               "type": "string",
               "minLength": 1
             },
+            "reasoningEffort": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "forkedFrom": {
               "anyOf": [
                 {
@@ -2458,6 +2496,7 @@
             "sessionDir",
             "agent",
             "model",
+            "reasoningEffort",
             "forkedFrom"
           ],
           "additionalProperties": true
@@ -2556,6 +2595,16 @@
               "type": "string",
               "minLength": 1
             },
+            "reasoningEffort": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "sender": {
               "anyOf": [
                 {
@@ -2608,6 +2657,7 @@
           "required": [
             "type",
             "model",
+            "reasoningEffort",
             "sender"
           ],
           "additionalProperties": true
@@ -3112,26 +3162,53 @@
                 "type": "string",
                 "minLength": 1
               },
-              "contextWindow": {
+              "name": {
+                "type": "string"
+              },
+              "contextLimit": {
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 9007199254740991
               },
               "imageInput": {
                 "type": "boolean"
+              },
+              "reasoningEfforts": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "reasoningEffort": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
               "id",
-              "contextWindow",
-              "imageInput"
+              "name",
+              "contextLimit",
+              "imageInput",
+              "reasoningEfforts",
+              "reasoningEffort"
             ],
             "additionalProperties": true
           }
+        },
+        "defaultModel": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "required": [
-        "models"
+        "models",
+        "defaultModel"
       ],
       "additionalProperties": true
     },
@@ -3146,9 +3223,12 @@
           "items": {
             "type": "object",
             "properties": {
-              "name": {
+              "key": {
                 "type": "string",
                 "minLength": 1
+              },
+              "title": {
+                "type": "string"
               },
               "description": {
                 "anyOf": [
@@ -3158,14 +3238,6 @@
                   {
                     "type": "null"
                   }
-                ]
-              },
-              "mode": {
-                "type": "string",
-                "enum": [
-                  "primary",
-                  "subagent",
-                  "all"
                 ]
               },
               "model": {
@@ -3178,40 +3250,93 @@
                     "type": "null"
                   }
                 ]
+              },
+              "reasoningEfforts": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "titleFile": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "enum": [
+                          "present"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "state"
+                    ],
+                    "additionalProperties": true
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "enum": [
+                          "absent"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "state"
+                    ],
+                    "additionalProperties": true
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "enum": [
+                          "refused"
+                        ]
+                      },
+                      "reason": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "state",
+                      "reason"
+                    ],
+                    "additionalProperties": true
+                  }
+                ]
               }
             },
             "required": [
-              "name",
+              "key",
+              "title",
               "description",
-              "mode",
-              "model"
+              "model",
+              "reasoningEfforts",
+              "titleFile"
             ],
             "additionalProperties": true
           }
         },
-        "refused": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "path": {
-                "type": "string"
-              },
-              "reason": {
-                "type": "string"
-              }
+        "defaultAgent": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
             },
-            "required": [
-              "path",
-              "reason"
-            ],
-            "additionalProperties": true
-          }
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "agents",
-        "refused"
+        "defaultAgent"
       ],
       "additionalProperties": true
     },
@@ -3247,6 +3372,16 @@
                 "type": "string",
                 "minLength": 1
               },
+              "reasoningEffort": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "createdAt": {
                 "type": "integer",
                 "minimum": 0,
@@ -3266,6 +3401,7 @@
               "sessionDir",
               "agent",
               "model",
+              "reasoningEffort",
               "createdAt",
               "running",
               "lastSeq"
@@ -3290,6 +3426,9 @@
           "minLength": 1
         },
         "agent": {
+          "type": "string"
+        },
+        "reasoningEffort": {
           "type": "string"
         }
       },
@@ -3322,6 +3461,16 @@
               "type": "string",
               "minLength": 1
             },
+            "reasoningEffort": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "createdAt": {
               "type": "integer",
               "minimum": 0,
@@ -3341,6 +3490,7 @@
             "sessionDir",
             "agent",
             "model",
+            "reasoningEffort",
             "createdAt",
             "running",
             "lastSeq"
@@ -3398,6 +3548,16 @@
               "type": "string",
               "minLength": 1
             },
+            "reasoningEffort": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "createdAt": {
               "type": "integer",
               "minimum": 0,
@@ -3417,6 +3577,7 @@
             "sessionDir",
             "agent",
             "model",
+            "reasoningEffort",
             "createdAt",
             "running",
             "lastSeq"
@@ -3508,6 +3669,9 @@
         "model": {
           "type": "string",
           "minLength": 1
+        },
+        "reasoningEffort": {
+          "type": "string"
         }
       },
       "required": [
@@ -3563,6 +3727,16 @@
               "type": "string",
               "minLength": 1
             },
+            "reasoningEffort": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "createdAt": {
               "type": "integer",
               "minimum": 0,
@@ -3582,6 +3756,7 @@
             "sessionDir",
             "agent",
             "model",
+            "reasoningEffort",
             "createdAt",
             "running",
             "lastSeq"

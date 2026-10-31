@@ -19,41 +19,134 @@
       "maximum": 65535,
       "description": "Port the WebSocket server listens on; 0 picks a free port."
     },
-    "modelBaseUrl": {
-      "type": "string",
-      "description": "Base URL of the OpenAI Responses API the model calls go to."
-    },
-    "modelApiKeyFile": {
-      "type": "string",
-      "pattern": "^\\/",
-      "description": "Path of the protected file holding the model API key."
-    },
-    "models": {
-      "type": "array",
-      "items": {
+    "providers": {
+      "type": "object",
+      "additionalProperties": {
         "type": "object",
         "properties": {
-          "id": {
+          "baseURL": {
+            "type": "string"
+          },
+          "apiKeyFile": {
             "type": "string",
-            "minLength": 1
+            "pattern": "^\\/"
           },
-          "contextWindow": {
-            "type": "integer",
-            "minimum": 200000,
-            "maximum": 9007199254740991
-          },
-          "imageInput": {
-            "type": "boolean"
+          "models": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "minLength": 1
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "limit": {
+                  "type": "object",
+                  "properties": {
+                    "context": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "context"
+                  ],
+                  "additionalProperties": false
+                },
+                "capabilities": {
+                  "type": "object",
+                  "properties": {
+                    "input": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "text",
+                          "image"
+                        ]
+                      }
+                    },
+                    "temperature": {
+                      "type": "boolean"
+                    },
+                    "reasoning": {
+                      "type": "object",
+                      "properties": {
+                        "efforts": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        }
+                      },
+                      "required": [
+                        "efforts"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "input"
+                  ],
+                  "additionalProperties": false
+                },
+                "checkpointWindowSize": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "temperature": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 2
+                },
+                "reasoningEffort": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "limit",
+                "capabilities"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
-          "id",
-          "contextWindow",
-          "imageInput"
+          "baseURL",
+          "apiKeyFile",
+          "models"
         ],
         "additionalProperties": false
       },
-      "description": "Models sessions may use, the first being the default, each with its id, context window, and image input."
+      "description": "OpenAI Responses endpoints by provider id, each with its base URL, the protected file of its API key, and its models by upstream model id."
+    },
+    "defaultModel": {
+      "type": "string",
+      "description": "The <provider>/<model> id sessions start with when neither the request nor the agent names a model."
+    },
+    "auxiliaryModels": {
+      "type": "object",
+      "properties": {
+        "handoff": {
+          "type": "string"
+        },
+        "compaction": {
+          "type": "string"
+        },
+        "research": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Optional <provider>/<model> ids for the handoff, compaction, and research tasks."
     },
     "origins": {
       "type": "array",
@@ -134,12 +227,111 @@
     "instructionsFile": {
       "type": "string",
       "pattern": "^\\/",
-      "description": "Global instructions file recorded into sessions without an agent."
+      "description": "Global instructions file, the user instructions of sessions whose agent has no title file."
     },
-    "agentsDir": {
+    "agents": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "models": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "checkpointWindowSize": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "temperature": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 2
+                },
+                "reasoningEffort": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "permission": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "allow",
+                  "ask",
+                  "deny"
+                ]
+              },
+              {
+                "type": "object",
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "allow",
+                        "ask",
+                        "deny"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string",
+                        "enum": [
+                          "allow",
+                          "ask",
+                          "deny"
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "description": "Agents by title, each with an optional starting model, per-model setting overrides, and permission rules."
+    },
+    "defaultAgent": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional title of the agent sessions created without one run as."
+    },
+    "titlesDir": {
       "type": "string",
       "pattern": "^\\/",
-      "description": "Directory of agent files."
+      "description": "Directory of title files, <title>.md, holding each agent's description and user instructions."
+    },
+    "scratchRoot": {
+      "type": "string",
+      "pattern": "^\\/",
+      "description": "Directory holding each session's scratch directory, for reproducible and disposable files."
+    },
+    "userTimeZone": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The user's IANA time zone, in which session facts give the user's date."
     },
     "skillRoots": {
       "type": "array",

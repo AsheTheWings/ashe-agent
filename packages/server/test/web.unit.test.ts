@@ -13,6 +13,7 @@ const run: ToolRun = {
   started: () => {},
   onCancel: () => {},
   programCall: () => {},
+  offered: () => true,
 }
 
 describe("web tools", () => {

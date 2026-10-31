@@ -10,6 +10,7 @@ export interface ToolSpec {
 
 /** One model call: the Responses `instructions`, the input messages, and the offered tools. */
 export interface ModelCall {
+  /** The `<provider>/<model>` id of the configured model the call goes to. */
   readonly model: string
   readonly instructions: string
   readonly messages: ReadonlyArray<BaseMessage>
@@ -17,6 +18,8 @@ export interface ModelCall {
   readonly maxOutputTokens?: number
   /** The sampling temperature, sent only when set. */
   readonly temperature?: number
+  /** The Responses `reasoning` field, sent only when set. */
+  readonly reasoning?: { readonly effort?: string; readonly summary: "auto" }
 }
 
 /** A failed model call; `overflow` marks a request larger than the model's context window. */
@@ -52,25 +55,36 @@ export const isContextOverflow = (error: unknown): boolean => {
 
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
+/** Where a model's calls go: its provider's base URL and API key, and the provider's id of the model. */
+export interface Endpoint {
+  readonly baseURL: string
+  readonly apiKey: string
+  readonly upstream: string
+}
+
 /**
- * The model port over the OpenAI Responses API at `baseUrl`, through
- * LangChain's `ChatOpenAI`. Calls are not stored by the provider, so each
- * replays its whole input; reasoning is requested with its encrypted
- * content so later calls of the same model can send it back.
+ * The model port over each provider's OpenAI Responses API, through
+ * LangChain's `ChatOpenAI`; `endpoint` gives a model id's provider
+ * endpoint. Calls are not stored by the provider, so each replays its whole
+ * input; reasoning is requested with its encrypted content so later calls
+ * of the same model can send it back. The `reasoning` field goes in the
+ * request body as given, whatever LangChain guesses of the model's name.
  */
-export const responsesModelPort = (options: { readonly baseUrl: string; readonly apiKey: string }): ModelPort => ({
+export const responsesModelPort = (endpoint: (model: string) => Endpoint | undefined): ModelPort => ({
   async *stream(call, signal) {
+    const target = endpoint(call.model)
+    if (target === undefined) throw new ModelCallError(`no provider serves ${call.model}`, false)
     const chat = new ChatOpenAI({
-      model: call.model,
-      apiKey: options.apiKey,
-      configuration: { baseURL: options.baseUrl },
+      model: target.upstream,
+      apiKey: target.apiKey,
+      configuration: { baseURL: target.baseURL },
       useResponsesApi: true,
       streaming: true,
       zdrEnabled: true,
       maxRetries: 2,
       ...(call.maxOutputTokens === undefined ? {} : { maxTokens: call.maxOutputTokens }),
       ...(call.temperature === undefined ? {} : { temperature: call.temperature }),
-      modelKwargs: { instructions: call.instructions },
+      modelKwargs: { instructions: call.instructions, ...(call.reasoning === undefined ? {} : { reasoning: call.reasoning }) },
     })
     const runnable =
       call.tools.length === 0

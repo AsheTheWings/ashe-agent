@@ -2,7 +2,6 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Deferred, Effect, Exit, Layer, ManagedRuntime } from "effect"
-import type { Model } from "@ashe-agent/protocol"
 import { createApiToken } from "../../src/auth/credentials.ts"
 import type { Permission } from "../../src/inputs/shapes.ts"
 import { ProtocolServer } from "../../src/server/serve.ts"
@@ -11,11 +10,12 @@ import { noAgents } from "../../src/sessions/setup.ts"
 import { openDatabase, Store } from "../../src/store/database.ts"
 import { migrationFiles } from "../../src/store/migration-files.ts"
 import { applyMigrations, discoverMigrations } from "../../src/store/migrations.ts"
+import { configuredModel } from "./agent.ts"
 import { Client, waitFor } from "./cli.ts"
 
-export const models: ReadonlyArray<Model> = [
-  { id: "test/first", contextWindow: 400_000, imageInput: false },
-  { id: "test/second", contextWindow: 200_000, imageInput: true },
+export const models = [
+  configuredModel("test/first", { contextLimit: 400_000, efforts: ["low", "high"], settings: { reasoningEffort: "low" } }),
+  configuredModel("test/second", { contextLimit: 300_000, imageInput: true }),
 ]
 
 /**
@@ -119,6 +119,7 @@ export class TestServer {
       Layer.provideMerge(
         Sessions.layer({
           models,
+          defaultModel: models[0]!.id,
           runner: () => this.script.runner,
           setup: noAgents,
           permission: this.permission,

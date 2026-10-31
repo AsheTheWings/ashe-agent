@@ -1,52 +1,72 @@
+import { createHash } from "node:crypto"
 import { ErrorCode } from "@ashe-agent/protocol"
+import { evaluate, type Rule } from "../permissions/rules.ts"
 import { ProtocolError } from "../server/websocket.ts"
-import type { SessionSetup } from "../sessions/hub.ts"
-import { loadAgents, noAgentSettings } from "./agents.ts"
+import type { Catalogs, SessionSetup, UserInstructions } from "../sessions/hub.ts"
+import type { AgentRegistry, SessionAgent } from "./agents.ts"
 import { diskFiles, type ConfigFiles } from "./files.ts"
 import { discoverSkills, skillCatalog } from "./skills.ts"
+import { readFileText } from "./titles.ts"
 
 export interface FileSetupOptions {
-  readonly agentsDir: string
+  readonly agents: AgentRegistry
   readonly instructionsFile: string
   readonly skillRoots: ReadonlyArray<string>
-  readonly modelIds: ReadonlySet<string>
-  /** The code mode catalog, or null without code mode. */
-  readonly codeMode?: () => string | null
+  /** The code mode catalog of the tools the rules leave offered, or null without one. */
+  readonly codeMode?: (rules: ReadonlyArray<Rule>) => string | null
   readonly files?: ConfigFiles
 }
 
 const invalid = (message: string) => new ProtocolError({ code: ErrorCode.invalidInput, message })
 
-/** The global instructions file's content; null when it is absent, and an error when it is present but unreadable. */
-const globalInstructions = (path: string, files: ConfigFiles): string | null => {
-  const read = files.read(path)
-  if (read.kind === "text") return read.text
-  if (read.kind === "absent") return null
-  throw new ProtocolError({ code: ErrorCode.internalError, message: `the global instructions file ${path} is unreadable: ${read.message}` })
+export const sha256 = (text: string) => createHash("sha256").update(text).digest("hex")
+
+/** Why the user instructions cannot be read: the file and the reason. */
+export class InstructionsUnreadable extends Error {
+  constructor(
+    readonly path: string,
+    readonly reason: string,
+  ) {
+    super(`the user instructions file ${path} is refused: ${reason}`)
+  }
 }
 
 /**
- * Session setup from the agents directory, the global instructions file,
- * and the skill roots, all read when a session is created or agents are
- * listed. Nothing is read from a session's directory.
+ * The user instructions of a session of `agent`, read now: its agent's
+ * title file while that file exists, else the global instructions file;
+ * null when neither exists. A title file that exists but is refused, or a
+ * chosen file that cannot be read, throws `InstructionsUnreadable`.
+ */
+export const readUserInstructions = (agent: SessionAgent, registry: AgentRegistry, globalFile: string): UserInstructions | null => {
+  if (agent.key !== null) {
+    const title = registry.titleFile(agent.key)
+    if (title.state === "refused") throw new InstructionsUnreadable(title.path, title.reason)
+    if (title.state === "present") return { source: "title", path: title.path, text: title.body, sha256: sha256(title.body), metadata: title.metadata }
+  }
+  const global = readFileText(globalFile)
+  if (global.kind === "absent") return null
+  if (global.kind === "error") throw new InstructionsUnreadable(globalFile, global.reason)
+  return { source: "global", path: globalFile, text: global.text, sha256: sha256(global.text), metadata: global.metadata }
+}
+
+/**
+ * Session setup from the configured agents, their title files, the global
+ * instructions file, and the skill roots, all read when they are needed.
+ * Nothing is read from a session's directory.
  */
 export const fileSetup = (options: FileSetupOptions): SessionSetup => {
   const files = options.files ?? diskFiles
   return {
-    resolve: (name) => {
-      if (name === null) return { agent: null, instructions: globalInstructions(options.instructionsFile, files), model: null, settings: noAgentSettings }
-      const agent = loadAgents(options.agentsDir, options.modelIds, files).agents.find((candidate) => candidate.name === name)
-      if (agent === undefined) throw invalid(`no valid agent ${name}`)
-      if (agent.mode === "subagent") throw invalid(`the agent ${name} is a subagent and cannot run a session`)
-      return { agent: agent.name, instructions: agent.body, model: agent.model, settings: agent.settings }
+    resolve: (key) => {
+      const agent = options.agents.resolve(key)
+      if (agent === null) throw invalid(`no agent ${key}`)
+      return agent
     },
-    catalogs: () => ({ skills: skillCatalog(discoverSkills(options.skillRoots, files)), codeMode: options.codeMode?.() ?? null }),
-    agents: () => {
-      const { agents, refused } = loadAgents(options.agentsDir, options.modelIds, files)
-      return {
-        agents: agents.map((agent) => ({ name: agent.name, description: agent.description, mode: agent.mode, model: agent.model })),
-        refused,
-      }
-    },
+    userInstructions: (agent) => readUserInstructions(agent, options.agents, options.instructionsFile),
+    catalogs: (rules) => ({
+      skills: skillCatalog(discoverSkills(options.skillRoots, files).filter((skill) => evaluate(rules, "skill", skill.name) !== "deny")),
+      codeMode: options.codeMode?.(rules) ?? null,
+    }),
+    agents: () => ({ agents: options.agents.list(), defaultAgent: options.agents.defaultAgent }),
   }
 }

@@ -56,6 +56,7 @@ const run: ToolRun = {
   started: () => {},
   onCancel: () => {},
   programCall: () => {},
+  offered: () => true,
 }
 
 /** Whether the process `pid` is still alive. */
@@ -196,7 +197,8 @@ describe("MCP servers", () => {
     const remote = httpServer("remote", ["search"])
     try {
       await withRegistry({ remote: { type: "http", url: remote.url, codemode: false } }, async (registry) => {
-        const h = new AgentHarness({ tools: () => registry.tools(true), permission: { remote_search: "deny" } })
+        // The allow after the deny keeps the tool offered, so the model can call it and the call is denied.
+        const h = new AgentHarness({ tools: () => registry.tools(true), permission: { remote_search: { "*": "deny", never: "allow" } } })
         try {
           const id = h.create()
           const before = remote.authorizations.length
