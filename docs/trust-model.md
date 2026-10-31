@@ -1,0 +1,20 @@
+# Trust model
+
+The agent acts with its owner's reach on the server's machine. This doc
+states how far that reach goes and what limits it.
+
+- Shell commands run as the server's own OS user, with that user's full
+  rights and without a sandbox. MCP servers over stdio run the same way.
+- [Permission rules](permissions.md) are the only limit on what a tool call
+  does. A call that no rule matches runs.
+- Input that `shell_write_stdin` sends to a running process is not checked
+  again; the check of the command that started the process covers it.
+- `web_search` sends its queries, and `web_fetch` the URLs it fetches, to
+  Exa.
+- Rewind and fork change a session's history only. Files the removed
+  turns wrote, commands they ran, and every other effect stay as they are.
+- Any valid token grants all of this reach: every session, every tool,
+  and every permission answer. That covers access tokens and API tokens,
+  and refresh tokens too, since `auth.refresh` exchanges a valid one for a
+  new access token; the web client keeps its refresh token in the
+  browser's `localStorage`.

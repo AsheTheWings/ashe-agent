@@ -1,18 +1,18 @@
 # ashe-agent
 
-ashe-agent is a single-owner agent server in development. It currently
-consists of its input layer, which declares, merges, and validates every
-configuration and protected input, its client protocol's message
-definitions, its SQLite store with migrations, a LangGraph checkpoint
-saver, and consistent dumps, and a WebSocket server that authenticates the
-owner's logins and API tokens and keeps durable sessions that several
-clients share, with steering, queueing, fork, and rewind. Its agent loop
-calls a model through the OpenAI Responses API, switches models within a
-session, and compacts long sessions. Its built-in tools read files,
-documents, and images, and edit files by patch. A web client in the
-browser signs in as the owner and works with sessions live.
-Nothing about it is stable yet, and its configuration,
-protocol, and storage may change incompatibly at any revision.
+ashe-agent is a single-owner agent server: one process that runs an
+agent for its owner and keeps its sessions alive for any number of
+clients, such as the web client this repository includes. Sessions are
+durable and shared by every client, with steering, queueing, fork, and
+rewind. The agent calls models through the OpenAI Responses API, switches
+models within a session, and compacts long sessions. It works through
+built-in tools for files, documents, images, shell commands, and the web,
+and through MCP servers, called directly or from code mode programs,
+under the owner's permission rules.
+
+ashe-agent is in development. Nothing about it is stable yet, and its
+configuration, protocol, and storage may change incompatibly at any
+revision.
 
 ## Repository
 
@@ -32,10 +32,19 @@ bun install --frozen-lockfile
 bun run gate
 ```
 
+## Build
+
+`bun run bundle` builds, from a commit with no uncommitted changes,
+`dist/ashe-agent-linux-x64.tar`: the server and its commands as one
+executable, `bin/ashe-agent`, and the web client's static files under
+`web/`. `bun run release-gate` also tests and qualifies it; see
+[testing](docs/testing.md). CI builds the same bundle on every push and
+publishes it to the host's artifact registry.
+
 ## Use
 
-Run the command from the repository with `bun packages/server/src/main.ts`.
-A first start in development:
+Run the command from the repository with `bun packages/server/src/main.ts`,
+or as `bin/ashe-agent` from a bundle. A first start in development:
 
 ```sh
 export ASHE_AGENT_PROFILE=development
@@ -49,6 +58,7 @@ bun packages/server/src/main.ts serve
 
 ## Documentation
 
+- [Glossary](docs/glossary.md): the terms these docs use.
 - [Commands](docs/commands.md): what each `ashe-agent` command does.
 - [Configuration](docs/configuration.md): how inputs reach the server, the
   config file, profiles, and protected files.
@@ -72,6 +82,8 @@ bun packages/server/src/main.ts serve
   signing in, and what it keeps in the browser.
 - [Telemetry](docs/telemetry.md): the traces, metrics, and logs the server
   emits, and where it exports them.
+- [Trust model](docs/trust-model.md): what the agent can reach and what
+  limits it.
 - [Storage](docs/storage.md): the database, its migrations, and dumps.
 - [Testing](docs/testing.md): the fast gate and the command for each test
   class.
