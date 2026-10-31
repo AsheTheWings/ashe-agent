@@ -89,6 +89,19 @@ describe("dotenv", () => {
   })
 })
 
+describe("tasks", () => {
+  test("every package script runs through the version-checking task runner", async () => {
+    const direct: Array<string> = []
+    for (const path of await manifests()) {
+      const scripts = ((await readJson(path)).scripts ?? {}) as Record<string, string>
+      for (const [name, command] of Object.entries(scripts)) {
+        if (command !== `bun scripts/task.ts ${name}` || path !== "package.json") direct.push(`${path} ${name}`)
+      }
+    }
+    expect(direct).toEqual([])
+  })
+})
+
 describe("dependencies", () => {
   test("every dependency names an exact version", async () => {
     const loose: Array<string> = []

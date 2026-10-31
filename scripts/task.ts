@@ -17,9 +17,9 @@ if (Bun.version !== pinned) {
 const testClasses = ["unit", "component", "integration", "conformance", "qualification"] as const
 type TestClass = (typeof testClasses)[number]
 
-const run = async (command: ReadonlyArray<string>, env?: Record<string, string>) => {
+const run = async (command: ReadonlyArray<string>, env?: Record<string, string>, cwd = root) => {
   const child = Bun.spawn([...command], {
-    cwd: root,
+    cwd,
     stdio: ["inherit", "inherit", "inherit"],
     ...(env === undefined ? {} : { env }),
   })
@@ -148,6 +148,9 @@ const buildWeb = async () => {
   return await run([process.execPath, join(root, "packages/web/scripts/build.ts"), revision])
 }
 
+/** Serves the web client for development on 127.0.0.1, on Vite's port. */
+const devWeb = () => run([process.execPath, "--bun", "x", "vite", "--host", "127.0.0.1"], undefined, join(root, "packages/web"))
+
 /** Compiles the server and its commands into one linux-x64 executable at `dist/bin/ashe-agent`. */
 const buildBinary = async () => {
   process.stdout.write("\n== binary build ==\n")
@@ -212,6 +215,7 @@ const tasks: Record<string, () => Promise<number>> = {
   "test:integration": () => test("integration"),
   "test:conformance": () => test("conformance"),
   "test:test262": test262,
+  "dev:web": devWeb,
   "build:web": buildWeb,
   "build:binary": buildBinary,
   bundle,
