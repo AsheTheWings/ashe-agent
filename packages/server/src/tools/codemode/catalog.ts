@@ -27,7 +27,8 @@
  */
 
 import { searchSignature } from "@ashe-agent/codemode"
-import { CHARACTERS_PER_TOKEN, CODE_MODE_CATALOG_ALLOWANCE } from "../../context/constants.ts"
+import { codeModeCatalogSeed } from "../../context/components.ts"
+import { CHARACTERS_PER_TOKEN, CODE_MODE_CATALOG_ALLOWANCE, estimateTokens } from "../../context/constants.ts"
 
 /** A callable tool of the code mode inventory: its path under `tools`, description, and signature. */
 export interface CatalogTool {
@@ -54,8 +55,6 @@ export interface CatalogSummary {
   readonly namespaces: ReadonlyArray<NamespaceSummary>
 }
 
-/** The catalog's budget, in estimated tokens: the seed's code mode catalog allowance. */
-export const CATALOG_BUDGET = CODE_MODE_CATALOG_ALLOWANCE
 const DESCRIPTION_LIMIT = 120
 
 const byCodePoint = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0)
@@ -120,7 +119,7 @@ export const namespaceLine = (namespace: NamespaceSummary) => {
   return `- ${namespace.name} (${label})`
 }
 
-// The developer message's "Code mode" section supplies the top heading.
+// The code mode catalog component supplies the top heading.
 const prompt = (partial: boolean) => `The tools listed below${partial ? ", and \`search\`," : ""} cannot be called directly: they only work as JavaScript inside the \`execute\` tool. Every other tool you have is a normal tool call: call it directly, never inside \`execute\`.
 
 ${
@@ -133,7 +132,14 @@ ${
 
 ## Code Mode tools (call only inside \`execute\`)`
 
-/** The code mode catalog of the developer message, within the budget; null for an empty inventory. */
+/**
+ * The listing's budget, in estimated tokens: what the code mode catalog
+ * component's allowance leaves after its heading, its introduction, and the
+ * catalog's instructions.
+ */
+export const CATALOG_BUDGET = CODE_MODE_CATALOG_ALLOWANCE - estimateTokens(codeModeCatalogSeed("-")!.text) - estimateTokens(prompt(true)) - 1
+
+/** The code mode catalog of the code mode catalog component, within the budget; null for an empty inventory. */
 export const renderCatalog = (tools: ReadonlyArray<CatalogTool>, budget = CATALOG_BUDGET): string | null => {
   if (tools.length === 0) return null
   const summary = summarize(tools, budget)

@@ -1,24 +1,62 @@
 # Model context
 
-This page explains what each model call of a turn carries and how the
-server keeps a session's context within the model's window.
+This page explains what each model call of a turn carries, how a
+session's conversation reaches the model, and when the turn loop records
+it.
 
-## The agent loop
+## Checkpoint windows
 
-A turn runs on the server's own LangGraph `StateGraph`, checkpointed after
-every step in the session's thread. Its steps are compaction, the model
-call, the tool calls the model made, and steering, which takes inputs
-steered into the turn. The turn ends after a model call that made no tool
-call when no steered input waits, or after a plain reject. Tool calls of
-one model call run one after another, in the order the model made them.
+A session's model context is its current checkpoint window: the harness
+instructions and a list of items. An item is a developer component, a
+user message, an assistant message, or a tool result. A session's first
+checkpoint window is built when the session is created: its harness
+instructions, from `packages/server/src/context/harness.md`, and its
+seed, the developer components that open it. Every model call of a turn
+sends the whole window, rendered for the turn's model.
 
-The graph runs in the turn's Effect fiber and receives its `AbortSignal`.
-A cancel interrupts the fiber, which aborts the running model call and
-tool call, ends the open text, reasoning, and tool call streams, and gives
-every tool call of the turn without a result a canceled result saying
-whether it had started. A turn that fails gives each of its tool calls
-without a result a failed result the same way, including calls a failed
-model call had streamed.
+Creation fails, naming what is too large, its estimated tokens, and its
+allowance, when the harness instructions, a seed component, or the tool
+definitions the session is offered exceed their allowance. Tokens are
+estimated at one per four characters. The allowances live in
+`packages/server/src/context/constants.ts`. Creation also fails, naming
+the file and the reason, when the session's chosen user instructions
+file exists but cannot be read.
+
+## The turn loop
+
+A turn runs as a loop in its own Effect fiber, with no step limit. Each
+step is a model call, then the tool calls it made, one after another in
+the order the model made them. A step boundary comes after the results
+of a step's tool calls and after a reply without tool calls. At a step
+boundary, steered user messages and notification components that are
+waiting join the turn. After a reply without tool calls, the turn ends
+when nothing joins; a plain reject also ends it.
+
+The loop records the conversation as it goes. An assistant message is
+committed as an item in one transaction with the events that end its
+model call's streams, each tool result with its `TOOL_CALL_RESULT` event,
+and each user message with its `INPUT_RECEIVED` event. A model call that
+fails as exceeding the context window ends the turn with an error event
+of code `context_overflow`; the session keeps its checkpoint window and
+accepts new input.
+
+Before each model call, the loop checks the definitions of the tools
+offered now against their allowance; over it, such as after an MCP
+server's tools arrive, the call is not sent, and the turn fails with an
+error event naming the tool definitions, their estimated tokens, and the
+allowance.
+
+The loop receives the fiber's `AbortSignal`. A cancel interrupts the
+fiber, which aborts the running model call and tool call, ends the open
+text, reasoning, and tool call streams, and gives every tool call of the
+turn without a result a canceled result saying whether it had started.
+A turn that fails gives each of its tool calls without a result a failed
+result the same way. At server start, each tool call of a turn left
+running without a result gets an interrupted result, in one transaction
+with the turn's `RUN_INTERRUPTED` event. A result is recorded as an item
+for each call a committed assistant message holds; a call that a model
+call streamed before it failed or was canceled gets its result event
+only, since the model never receives that call.
 
 ## Model calls
 
@@ -35,98 +73,94 @@ session's selection when the turn started, else the agent's override for
 the model, else the model entry's setting, each only if the model lists
 it. A call to a model without reasoning efforts sends no `reasoning`
 field. A call sends a temperature only to a model that accepts one: the
-agent's override, else the model entry's setting. Compaction's summary
-call sends the same settings as the turn's other calls.
+agent's override, else the model entry's setting.
 [Configuration](configuration.md) explains the model entries.
 
-The server reads no `OPENAI_*`, `LANGCHAIN_*`, `LANGSMITH_*`,
-`LANGGRAPH_*`, or `LC_*` process variable: `serve` removes them before the
-agent loop starts, so the libraries cannot take configuration or tracing
+The server reads no `OPENAI_*`, `LANGCHAIN_*`, `LANGSMITH_*`, or `LC_*`
+process variable: `serve` removes them before the turn loop starts, so the libraries cannot take configuration or tracing
 settings from them.
 
 ## Blocks
 
-The conversation reaches the model in tagged blocks inside user messages:
+The conversation reaches the model in tagged blocks inside user inputs,
+each standing for an identity:
 
-- `<system>` holds the harness instructions,
-  `packages/server/src/agent/harness.md`, which nothing in a session
-  changes.
-- `<developer>` holds the session's developer message, harness notes,
-  summaries, and records of other models' turns.
-- `<user>` holds one user input.
+- `<system>` holds the checkpoint window's harness instructions, which
+  nothing in a session changes.
+- `<developer>` holds a developer message: one or more adjoining
+  developer components, each under its own `#` heading.
+- `<user>` holds one user message.
 
-The first message of every call opens with the `<system>` block, then the
-`<developer>` block of the developer message, then the session's first
-input as a `<user>` block when it is in the window. Every later input is
-a `<user>` block in its own user message, and each harness note, such as
-a fork or a rewind, a `<developer>` block in its own user message. Tool
-calls and their results use the Responses API's function call and
-function call output items, never blocks.
+The first user input of every call opens with the `<system>` block. Each
+run of consecutive items that are developer components or user messages
+forms one user input, in which adjoining components form one
+`<developer>` block. Assistant messages, tool calls, and their results use
+the Responses API's message, function call, and function call output
+items, never blocks.
 
 The server escapes each literal `<system>`, `</system>`, `<developer>`,
 `</developer>`, `<user>`, and `</user>` in the text it places in a
-block as `&lt;…>`, so only the server opens and closes blocks.
-
-## The developer message
-
-The developer message holds these sections, each under a fixed top-level
-heading followed by a one-line introduction, in this order, leaving out
-the ones a session has no content for: the instructions recorded at the
-session's creation, the skill catalog, the code mode catalog, and the
-session's id and its session directory. Headings inside the
-instructions are lowered one level, so they sit below the section's
-heading; nothing else in them changes.
-
-The server renders the first message once, when it creates the session,
-so its text stays the same for every call of the session. A fork renders
-its own first message, with its own session id and its source's catalogs.
-When a turn starts with a skill or code mode catalog that differs from the
-one the model last knew, from the first message or an earlier note, the
-turn delivers a harness note giving each changed catalog as it now stands.
+`<developer>` or `<user>` block as `&lt;…>`, so only the server opens and closes blocks. Headings
+inside user instructions and catalogs are lowered one level, so they sit
+below their component's heading.
 
 A tool result's images reach the model as images only when the turn's
 model takes image input; otherwise each becomes `[image: <path>]`.
 
+## Developer components
+
+A developer component is typed by how it is injected:
+
+- A seed component is rendered when a checkpoint window is built: the
+  user instructions, the skill catalog, the code mode catalog, and the
+  session facts, in that order, each left out when it has no content.
+  The session facts give the session id, the agent's display title, the
+  server's date in its own time zone and the user's date in the
+  configured user time zone, UTC by default, and no path.
+- A state component rides on a delivery of user messages or notification
+  components, and never starts a turn.
+- A notification component, such as the one a rewind queues, joins the
+  running turn at its next step boundary, or starts a turn in an idle
+  session.
+
+Each delivery reconciles the sources the components describe: for each
+of the user instructions, the skill catalog, the code mode catalog, the
+session identity, and the dates whose current state differs from the
+state the checkpoint window knows, it yields one state component. The
+known state is the one the window's latest kept component of that source
+established. A delivery keeps its notification components and user
+messages in arrival order and places its state components before its
+first user message. [Sessions](sessions.md) explains how deliveries
+reach a turn.
+
+- User instructions are compared by file metadata first and by SHA-256
+  only when the metadata differs. A change within the same file arrives
+  as one unified diff; a switch between the title file and the global
+  file, either way, arrives as the new source's full text. A chosen file
+  that exists but cannot be read yields a `SESSION_ERROR` event naming
+  it, and the known instructions stay.
+- A changed catalog arrives as it stands now. A catalog over its
+  allowance yields a `SESSION_ERROR` event instead, and the known catalog
+  stays.
+- Changed dates arrive as the server's and the user's dates with their
+  time zones.
+- A different session id, as in a fork, arrives as the fork component,
+  which names the source and the new session.
+
+The server keeps each version of the user instructions a component
+establishes in its content store, by SHA-256, so the next diff has the
+text it starts from.
+
 ## Other models' turns
 
 Each turn runs every model call with the model selected when it started.
-A call sends the turns that model ran as ordinary messages and items. Each
-run of consecutive turns other models ran becomes one user message
-holding a developer record: a `<developer>` block that holds each input as
-a `<user>` block, each reply as an `<agent model="…">` block, each tool
+A call sends the items that model's turns made, and those of no turn,
+such as the seed, as ordinary messages and items. Each run of
+consecutive items other models' turns made becomes one transcript
+component in the surrounding developer block: it holds each user message
+as a `<user>` block, each reply as an `<agent model="…">` block, each tool
 call and result as `<tool_call>` and `<tool_result>` blocks, and each
-harness note as a nested `<developer>` block. A record leaves out the
-other model's reasoning and shows each image a tool result carried as
-`[image: <path>]`. Switching back to a model sends its turns as ordinary
-messages again.
-
-## Compaction
-
-Before each model call, the server estimates the call's input tokens: the
-last call's reported input tokens plus about one token per four
-characters of what was added since. When fewer than 60,000 tokens of the
-model's usable window would be left, it compacts first. The usable window
-is the model's checkpoint window size for the session's agent, as
-[configuration](configuration.md) explains.
-
-Compaction keeps the most recent entries, up to 20,000 estimated tokens
-and never starting with a tool result, and summarizes everything before
-them in one call to the turn's model with at most 8,000 output tokens.
-That call uses the prompt in `packages/server/src/agent/summary-prompt.md`
-with the previous summary, if any, and a transcript in the developer
-record's form, each tool result clipped to 2,000 characters from each
-end. The compacted window is the first message, the summary as a
-`<developer>` block, and the kept entries; the turn then continues.
-
-A model call that fails as exceeding the context window compacts and
-retries once. A failed summary call, a second overflow, or an overflow
-whose entries all fit in the kept tail, so compaction cannot shrink the
-window, ends the turn with an error event, and the session accepts new
-input. Before a call, a window with nothing to summarize is sent as it
-is. Each compaction emits a `COMPACTED` event
-with the estimated tokens before and after and the summary prompt's
-revision, the start of its SHA-256; the session's events stay unchanged.
-
-A rewind or fork continues from the window as it stood at the end of the
-last turn it keeps, so a rewind to before a compaction restores the
-uncompacted window.
+developer component as a nested `<developer>` block. A transcript leaves
+out the other model's reasoning and shows each image a tool result
+carried as `[image: <path>]`. Switching back to a model sends its items
+as ordinary messages again.

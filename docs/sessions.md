@@ -24,28 +24,46 @@ event, with no gap or repeat, so a client that reconnects resumes from the
 last number it saw. All subscribers receive the same events in the same
 order.
 
-The history is a sequence of turns. A turn starts with one user input and
-runs until it finishes, fails, is cancelled, or is interrupted by a
-server stop. A turn keeps running when its client, or every client,
-disconnects.
+The history is a sequence of turns. A turn starts from waiting input:
+user messages, notification components, or both. Its `RUN_STARTED` event
+gives its cause, `user` when its starting input holds a user message, else
+`notification`, and the ids of those user messages. A turn runs until it
+finishes, fails, is cancelled, or is interrupted by a server stop, and it
+keeps running when its client, or every client, disconnects.
 
 ## Input
 
-`session.input` on an idle session starts a turn with the input. While a
-turn runs, input steers it by default: it waits for the turn's next step
-boundary, never interrupting a running model call or tool call, and joins
-the turn there. Input sent with mode `queue` waits for the turn to end and
-then starts the next turn; queued inputs start turns in order of arrival.
-Steered input that arrives after the turn's last step boundary starts the
-next turn instead.
+`session.input` stores the user message as waiting input, with an
+`INPUT_WAITING` event naming its id, text, mode, and sender, before it
+returns the message's id, so a client can show it as pending. On an idle
+session, the message then starts a turn. While a turn runs, a message
+steers it by default: it waits for the turn's next step boundary, never
+interrupting a running model call or tool call, and joins the turn there.
+A message sent with mode `queue` waits for the turn to end and then starts
+the next turn; queued messages start turns in order of arrival. A steered
+message that arrives after the turn's last step boundary starts the next
+turn instead, and so does input left waiting when a turn could not start,
+together with the next input.
 
-Each input's `INPUT_RECEIVED` event, naming its sender, is emitted when it
-enters the conversation: when it starts a turn or joins one at a step
-boundary. Inputs of each mode enter in order of arrival, so a steered input
-enters before an earlier queued one, which waits for the turn to end.
-`session.input` returns the input's id at once, so a client can show it as
-pending until then. An input's event, its turn, and the turn's
-`RUN_STARTED` event commit together.
+A message's `INPUT_RECEIVED` event follows its `INPUT_WAITING` event when
+it enters the conversation: when it starts a turn or joins one at a step
+boundary. Messages of each mode enter in order of arrival, so a steered
+message enters before an earlier queued one, which waits for the turn to
+end. A turn's input, its events, and its `RUN_STARTED` event commit with
+the removal of that input from the waiting input.
+
+The harness delivers developer messages too. A notification component,
+such as the one a rewind queues, waits like a steered message: it joins
+the running turn at its next step boundary, or starts a turn in an idle
+session. State components never start a turn: each delivery of user
+messages or notification components carries a state component for each
+source, such as the user instructions or a catalog, that changed since the
+model last saw it. A delivery keeps its notification components and user
+messages in arrival order, places a component a rewind or fork caused
+directly after that rewind's or fork's component, and places its state
+components before its first user message. Each delivered developer
+message has a `DEVELOPER_MESSAGE` event; [model context](model-context.md)
+explains the components.
 
 `session.cancel` ends the running turn with a `RUN_FINISHED` event whose
 outcome is `cancelled`. It aborts the running model call and tool call,
@@ -61,31 +79,34 @@ interrupted, or failed with its turn, and whether it had started.
 
 ## Fork and rewind
 
-Both change only the conversation, never files, processes, or other
-effects of earlier turns, and both are refused while a turn runs. The
-session's next model call tells the model so in a harness note.
+Only a turn whose starting input holds a user message is a rewind point
+and a fork point; a message steered into a running turn makes none. Both
+change only the conversation, never files, processes, or other effects of
+earlier turns, and both are refused while a turn runs.
 
-`session.fork` creates a new session from a source session's turns
-through one of its user turns, or all of them, keeping their events'
-numbers, and leaves the source unchanged. The new session gets its own
-new session directory. Its `SESSION_CREATED` event gives the source's
-agent, selected model, and reasoning effort, which it starts with. It
-also keeps the agent settings and user instructions the source recorded,
-and the source's [session grants](permissions.md#session-grants); the source's own
-`SESSION_REWOUND` and `MODEL_CHANGED` events are not copied. Its model
-context is the source's as it stood after the last copied turn, and its
-first model call is told the source and new session ids and its own
-session directory. Files in the source's directory stay there.
+`session.fork` creates a new session with a new id from a source
+session's turns through one of its fork points, or all of them, keeping
+their events' numbers, and leaves the source unchanged. The new session
+gets its own new session directory. Its `SESSION_CREATED` event gives the
+source's agent, selected model, and reasoning effort, which it starts
+with. It also keeps the agent settings the source recorded, the
+conversation state that no turn owns or a copied turn owns, and the
+source's [session grants](permissions.md#session-grants); the source's
+own `SESSION_REWOUND` and `MODEL_CHANGED` events, and input still
+waiting, are not copied. Its first delivery carries the fork component,
+which tells the model the source and new session ids. Files in the
+source's directory stay there.
 
-`session.rewind` removes a user turn and every later turn with their
-events, so no client can read them again, then starts a turn with the
-removed turn's input, or with the given text instead, before any other
-input. Its `SESSION_REWOUND` event names the first removed number, and a
-client drops its events from that number on. The removal, the rewound
-event, and the new turn's start commit in one transaction, so a failure
-leaves the history as it was. The new turn's model context is the one at
-the end of the last turn kept; [model context](model-context.md)
-explains both. A rewind keeps every session grant.
+`session.rewind` removes a rewind point's turn and every later turn with
+their events, the conversation state they own, and the `INPUT_WAITING`
+events of the messages they took, so no client can read them again. In
+the same transaction, it stores the rewind component and the removed
+turn's user messages, or the given text instead, as waiting steered input
+with new ids, emitting their `INPUT_WAITING` events after its
+`SESSION_REWOUND` event, which names the first removed number. A client
+drops its events from that number on. A failure leaves the history as it
+was; once the rewind commits, its input starts the rerun turn, after a
+restart too. A rewind keeps every session grant.
 
 ## Restart
 
@@ -94,5 +115,6 @@ restart. On start, the server
 ends each turn a stopped server left running: it withdraws the turn's
 unanswered permission requests with `PERMISSION_WITHDRAWN` events, gives
 each of its tool calls without a result an `interrupted` result saying
-whether it had started, then emits `RUN_INTERRUPTED`, and the session
-accepts new input.
+whether it had started, then emits `RUN_INTERRUPTED`. Once every such
+turn has ended, input left waiting starts turns in order of arrival, and
+the session accepts new input.

@@ -173,7 +173,7 @@ const sender = principal
 const firstTurn: Array<[number, SessionEventBody]> = [
   [1, created],
   [2, { type: "INPUT_RECEIVED", inputId: "i1", text: "greet me", mode: "steer", sender }],
-  [3, { type: "RUN_STARTED", threadId: SESSION, runId: "r1", model: "alpha", inputId: "i1" }],
+  [3, { type: "RUN_STARTED", threadId: SESSION, runId: "r1", model: "alpha", cause: "user", userMessageIds: ["i1"] }],
   [4, { type: "TEXT_MESSAGE_START", messageId: "m1", role: "assistant" }],
   [5, { type: "TEXT_MESSAGE_CONTENT", messageId: "m1", delta: "Hel" }],
   [6, { type: "TEXT_MESSAGE_CONTENT", messageId: "m1", delta: "lo" }],
@@ -262,7 +262,7 @@ describe("session client", () => {
     expect(view(client).runId).toBeNull()
     expect(view(client).lastSeq).toBe(8)
     socket.push(9, { type: "INPUT_RECEIVED", inputId: "i2", text: "greet me again", mode: "steer", sender })
-    socket.push(10, { type: "RUN_STARTED", threadId: SESSION, runId: "r2", model: "alpha", inputId: "i2" })
+    socket.push(10, { type: "RUN_STARTED", threadId: SESSION, runId: "r2", model: "alpha", cause: "user", userMessageIds: ["i2"] })
     expect(texts(view(client))).toEqual(["user:greet me again"])
     expect(view(client).items[0]).toMatchObject({ kind: "user", runId: "r2" })
   })

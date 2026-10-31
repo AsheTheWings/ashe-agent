@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { SessionStore } from "../src/sessions/store.ts"
 import { openDatabase, openDatabaseReadonly } from "../src/store/database.ts"
 import { dumpDatabase } from "../src/store/dump.ts"
 import { migrationFiles } from "../src/store/migration-files.ts"
@@ -44,6 +45,89 @@ describe("migrations on a real SQLite file", () => {
       expect(applyMigrations(db, migrations)).toEqual([])
       expect(readLedger(db)).toHaveLength(migrations.length)
       expect(db.query("SELECT sql FROM sqlite_master ORDER BY name").all()).toEqual(schemaBefore)
+    } finally {
+      db.close()
+    }
+  })
+
+  test("the context migrations remove windowless sessions, record causes and agent settings, and drop the checkpoint tables", () => {
+    const path = freshPath("context.db")
+    const db = openDatabase(path)
+    try {
+      const earlier = migrations.filter((migration) => migration.position <= 10)
+      applyMigrations(db, earlier)
+      db.run("INSERT INTO sessions (id, model, created_at, next_seq) VALUES ('old', 'test/alpha', 1, 3)")
+      db.run(
+        `INSERT INTO turns (session_id, run_id, position, input_id, input_text, model, status, first_seq, started_at, checkpoint_id)
+          VALUES ('old', 'r0', 1, 'i0', 'hello', 'test/alpha', 'finished', 1, 1, 'c1')`,
+      )
+      const beforeCleanup = migrations.filter((migration) => migration.position <= 15)
+      applyMigrations(db, beforeCleanup)
+      // Rows of every table referencing a session: the windowless session's go, the windowed one's stay.
+      for (const id of ["old", "kept"]) {
+        if (id === "kept") db.run("INSERT INTO sessions (id, model, created_at, next_seq) VALUES ('kept', 'test/alpha', 1, 3)")
+        db.run(`INSERT INTO events (session_id, seq, timestamp, body) VALUES ('${id}', 1, 1, '{}')`)
+        db.run(`INSERT INTO session_grants (session_id, position, permission, pattern) VALUES ('${id}', 1, 'edit', '*')`)
+        db.run(`INSERT INTO waiting_input (session_id, position, kind, body, created_at) VALUES ('${id}', 1, 'user', '{}', 1)`)
+      }
+      db.run(
+        `INSERT INTO turns (session_id, run_id, position, model, status, first_seq, started_at)
+          VALUES ('kept', 'k1', 1, 'test/alpha', 'finished', 1, 1)`,
+      )
+      db.run("INSERT INTO checkpoint_windows (session_id, position, run_id, harness_instructions, created_at) VALUES ('kept', 1, NULL, 'H', 1)")
+      expect(applyMigrations(db, migrations).map((migration) => migration.name)).toEqual(
+        migrations.slice(beforeCleanup.length).map((migration) => migration.name),
+      )
+      for (const table of ["events", "turns", "session_grants", "waiting_input", "checkpoint_windows"]) {
+        const ids = db.query<{ session_id: string }, []>(`SELECT DISTINCT session_id FROM ${table}`).all().map((row) => row.session_id)
+        expect([table, ids]).toEqual([table, ["kept"]])
+      }
+      expect(db.query<{ id: string }, []>("SELECT id FROM sessions").all().map((row) => row.id)).toEqual(["kept"])
+      expect(readLedger(db).map((entry) => entry.name)).toEqual(migrations.map((migration) => migration.name))
+
+      const tables = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name)
+      expect(tables).not.toContain("checkpoints")
+      expect(tables).not.toContain("checkpoint_blobs")
+      expect(tables).not.toContain("checkpoint_writes")
+      expect(tables).toEqual(expect.arrayContaining(["checkpoint_windows", "window_items", "developer_components", "contents", "waiting_input"]))
+      const turnColumns = db.query<{ name: string }, []>("PRAGMA table_info(turns)").all().map((row) => row.name)
+      expect(turnColumns).not.toContain("checkpoint_id")
+      expect(turnColumns).not.toContain("input_id")
+
+      const store = new SessionStore(db, join(runDir, "sessions"))
+      store.createSession(
+        {
+          id: "fresh",
+          agent: "helper",
+          model: "test/alpha",
+          reasoningEffort: null,
+          modelOverrides: { "test/alpha": { temperature: 0.5 } },
+          permission: { edit: "deny" },
+          createdAt: 1,
+        },
+        null,
+      )
+      store.conversation.insertWindow("fresh", null, "HARNESS", 1)
+      expect(store.getSession("fresh")).toMatchObject({
+        agent: "helper",
+        modelOverrides: { "test/alpha": { temperature: 0.5 } },
+        permission: { edit: "deny" },
+      })
+      const turn = { model: "test/alpha", reasoningEffort: null }
+      expect(store.turns("kept")[0]).toMatchObject({ runId: "k1", cause: "user", userMessageIds: [] })
+      store.insertTurn("fresh", { ...turn, runId: "r1", cause: "notification", userMessageIds: [], firstSeq: 2 }, 2)
+      store.insertTurn("fresh", { ...turn, runId: "r2", cause: "user", userMessageIds: ["i1", "i2"], firstSeq: 3 }, 3)
+      expect(store.turns("fresh")).toMatchObject([
+        { runId: "r1", position: 1, cause: "notification", userMessageIds: [] },
+        { runId: "r2", position: 2, cause: "user", userMessageIds: ["i1", "i2"] },
+      ])
+      expect(() => db.run("UPDATE turns SET cause = 'other' WHERE run_id = 'r1'")).toThrow()
+
+      const schemaBefore = db.query("SELECT sql FROM sqlite_master ORDER BY name").all()
+      expect(applyMigrations(db, migrations)).toEqual([])
+      expect(db.query("SELECT sql FROM sqlite_master ORDER BY name").all()).toEqual(schemaBefore)
+      expect(store.getSession("fresh")).not.toBeNull()
+      expect(store.getSession("kept")).not.toBeNull()
     } finally {
       db.close()
     }

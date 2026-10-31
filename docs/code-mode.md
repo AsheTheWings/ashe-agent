@@ -22,16 +22,17 @@ no `fetch`, filesystem, process, timer, or module access, and the global
 
 ## The catalog
 
-The developer message's code mode section carries the catalog: each
+The code mode catalog component carries the catalog: each
 server's namespace with its tool count, then one line per listed tool
-giving its signature and the first line of its description. The catalog
-is rendered within 4,000 tokens, estimated at 4 characters per token
+giving its signature and the first line of its description. The
+component, its heading, introduction, and the catalog's instructions
+included, is rendered within 4,000 tokens, estimated at 4 characters per token
 with each line, its newline included, rounded up.
 Every namespace is always listed; tools are then added one per namespace
 in turn, shortest listing first, while the budget lasts. When some tools
 are left out, the catalog says it is partial and tells the model to find
 unlisted tools with `search` instead of guessing names. A later change to
-the catalog reaches the model as a harness note, as
+the catalog reaches the model as a state component, as
 [model context](model-context.md) describes.
 
 ## Calls inside a program

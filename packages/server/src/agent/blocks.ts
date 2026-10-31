@@ -1,5 +1,3 @@
-import harness from "./harness.md" with { type: "text" }
-
 /** The tags only the server opens and closes in the model's context. */
 const reservedTag = /<(\/?)(system|developer|user)>/g
 
@@ -57,57 +55,8 @@ export const lowerHeadings = (markdown: string): string => {
   return out.join("\n")
 }
 
-/** What the developer message of a session holds; absent sections are left out. */
-export interface DeveloperSections {
-  readonly instructions: string | null
-  readonly skills: string | null
-  readonly codeMode: string | null
-  readonly sessionId: string
-  readonly sessionDir: string
-}
-
-const section = (heading: string, introduction: string, body: string) => `# ${heading}\n\n${introduction}\n\n${body}`
-
-/** The developer message: its sections under fixed headings, each with a one-line introduction. */
-export const developerMessage = (sections: DeveloperSections): string => {
-  const parts: Array<string> = []
-  if (sections.instructions !== null) {
-    parts.push(
-      section(
-        "Instructions",
-        "The owner's standing instructions for this session.",
-        lowerHeadings(escapeTags(sections.instructions.trim())),
-      ),
-    )
-  }
-  if (sections.skills !== null) {
-    parts.push(section("Skills", "Skills you can load by name when a task matches one.", escapeTags(sections.skills.trim())))
-  }
-  if (sections.codeMode !== null) {
-    parts.push(section("Code mode", "Tools a code mode program can call.", escapeTags(sections.codeMode.trim())))
-  }
-  parts.push(
-    section(
-      "Session",
-      "This session's identity and its own directory, where shell commands start and relative paths resolve.",
-      `- Session id: \`${sections.sessionId}\`\n- Session directory: \`${escapeTags(sections.sessionDir)}\``,
-    ),
-  )
-  return parts.join("\n\n")
-}
-
-/** The harness instructions of the `<system>` block. */
-export const harnessInstructions: string = harness.trim()
-
-/** The text of a session's first message: its `<system>` and `<developer>` blocks. */
-export const firstMessage = (sections: DeveloperSections) =>
-  `${block("system", harnessInstructions)}\n${block("developer", developerMessage(sections))}`
-
-/** A user input as a `<user>` block. */
+/** A user message as a `<user>` block. */
 export const userBlock = (text: string) => block("user", escapeTags(text))
-
-/** A harness note, or any other harness text, as a `<developer>` block. */
-export const developerBlock = (text: string) => block("developer", text)
 
 /** The fixed `instructions` of every model call, so no provider substitutes its own. */
 export const REQUEST_INSTRUCTIONS = "You're a helpful assistant."

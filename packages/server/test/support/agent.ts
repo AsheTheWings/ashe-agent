@@ -15,7 +15,6 @@ import { permissionPath } from "../../src/permissions/paths.ts"
 import { SessionHub, type SessionSetup } from "../../src/sessions/hub.ts"
 import { noAgents } from "../../src/sessions/setup.ts"
 import { SessionStore } from "../../src/sessions/store.ts"
-import { SqliteCheckpointSaver } from "../../src/store/checkpointer.ts"
 import { openDatabase } from "../../src/store/database.ts"
 import { migrationFiles } from "../../src/store/migration-files.ts"
 import { applyMigrations, discoverMigrations } from "../../src/store/migrations.ts"
@@ -222,6 +221,10 @@ export class AgentHarness {
       readonly permission?: Permission
       /** Runs after each turn's agent loop returns and before the turn ends. */
       readonly afterLoop?: (hub: SessionHub, sessionId: string) => void
+      /** The user's time zone; UTC by default. */
+      readonly userTimeZone?: string
+      /** The clock; the system's by default. */
+      readonly now?: () => number
     } = {},
   ) {
     this.db = openDatabase(join(this.dir, "ashe-agent.db"))
@@ -231,18 +234,18 @@ export class AgentHarness {
 
   private makeHub() {
     const models = this.options.models ?? agentModels
-    const runner = agentRunner({
-      port: this.options.port ?? this.model,
-      tools: this.options.tools ?? testTools(),
-      saver: new SqliteCheckpointSaver(this.db),
-      models,
-    })
+    const runner = agentRunner({ port: this.options.port ?? this.model, models })
+    const tools = this.options.tools ?? testTools()
     const afterLoop = this.options.afterLoop
     const hub: SessionHub = new SessionHub(new SessionStore(this.db, join(this.dir, "sessions")), {
       models,
       defaultModel: models[0]!.id,
       setup: this.options.setup ?? noAgents,
+      tools: typeof tools === "function" ? tools : () => tools,
       ...(this.options.permission === undefined ? {} : { permission: this.options.permission }),
+      ...(this.options.userTimeZone === undefined ? {} : { userTimeZone: this.options.userTimeZone }),
+      ...(this.options.now === undefined ? {} : { now: this.options.now }),
+      serverTimeZone: "UTC",
       home: realpathSync(this.dir),
       runner:
         afterLoop === undefined
@@ -250,6 +253,7 @@ export class AgentHarness {
           : (context) => Effect.tap(runner(context), () => Effect.sync(() => afterLoop(hub, context.session.id))),
     })
     hub.recover()
+    hub.resumeWaiting()
     return hub
   }
 

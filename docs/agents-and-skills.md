@@ -73,15 +73,17 @@ title file exists, in every session of that agent. Otherwise they are
 the content of the global instructions file,
 `ASHE_AGENT_INSTRUCTIONS_FILE`, and when that file is absent the session
 has none. A refused title file or an unreadable global instructions file
-fails the session's creation, naming the file and the reason. A session
-records its user instructions at creation, as the Instructions section
-of its developer message that [model context](model-context.md)
-describes.
+fails the session's creation, naming the file and the reason. The
+session's checkpoint window opens with its user instructions as they
+stood at creation, and each later delivery brings the model their
+changes, the title file's creation or deletion included, as
+[model context](model-context.md) describes. A file that cannot be read
+then leaves the known instructions in place.
 
 ## Skills
 
 Skills follow the [Agent Skills specification](https://agentskills.io/specification).
-When a session is created, and at each turn, the server looks for
+When a session is created, and at each delivery into a turn, the server looks for
 `<root>/<name>/SKILL.md` under each skill root,
 `ASHE_AGENT_SKILL_ROOTS`, in order. A skill is skipped when its `name` is
 not 1 to 64 characters of `a-z`, `0-9`, and single inner `-`, or differs
@@ -89,7 +91,7 @@ from its directory's name, or when its `description` is empty or longer
 than 1,024 characters. When two roots hold a skill of the same name, the
 earlier root's is used.
 
-The developer message's Skills section lists each skill's name,
+The skill catalog component lists each skill's name,
 description, and directory, never its body, leaving out each skill the
 session's rules deny under the `skill` permission. The `skill` tool returns a
 skill's body and directory by name, decided under the `skill`

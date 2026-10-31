@@ -1,6 +1,6 @@
 # Authentication
 
-ashe-agent has one owner. Clients act as the owner either through a
+AsheAgent has one owner. Clients act as the owner either through a
 login with the owner password or through a named API token.
 
 ## Owner password and logins

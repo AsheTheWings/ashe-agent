@@ -1,14 +1,4 @@
-/** Texts the harness gives the model and clients: notes, and the results of tool calls that did not finish. */
-
-const effects = "Files, processes, and other effects of turns outside this history may persist on the system."
-
-/** The note of a fork's first model call. */
-export const forkNote = (source: string, target: string, sessionDir: string) =>
-  `This session was forked: session \`${target}\` is a copy of session \`${source}\` through the turns above. Its session directory is \`${sessionDir}\`, where its shell commands now start; the paths above may name the source session's directory. ${effects}`
-
-/** The note of the first model call after a rewind. */
-export const rewindNote = () =>
-  `The owner rewound this session: later turns were removed from the conversation, and the next input starts again from here. ${effects}`
+/** Texts the harness gives the model and clients for tool calls that did not finish. */
 
 /** The text of a failed result for a call that ended without its own result. */
 export const unfinishedResult = (outcome: "canceled" | "interrupted" | "failed", started: boolean) => {
@@ -24,13 +14,3 @@ export const programCallsNote = (finished: ReadonlyArray<{ readonly tool: string
   finished.length === 0
     ? "Its program had finished no tool calls."
     : `Its program had finished these tool calls, in order: ${finished.map(({ tool, outcome }) => `${tool} (${outcome})`).join(", ")}.`
-
-/**
- * The note of a turn whose catalogs differ from those of the session's
- * first message, naming each changed catalog as it now stands.
- */
-export const catalogNote = (changes: ReadonlyArray<{ readonly name: string; readonly catalog: string | null }>) =>
-  [
-    "These catalogs changed since the start of this session; use them as they stand now.",
-    ...changes.map(({ name, catalog }) => (catalog === null ? `# ${name}\n\nNone.` : `# ${name}\n\n${catalog.trim()}`)),
-  ].join("\n\n")

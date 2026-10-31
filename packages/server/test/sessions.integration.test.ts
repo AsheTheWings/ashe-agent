@@ -46,6 +46,8 @@ const snapshot = (server: TestServer, id: string) => {
       db.query("SELECT * FROM events WHERE session_id = ? ORDER BY seq").all(id),
       db.query("SELECT * FROM turns WHERE session_id = ? ORDER BY position").all(id),
       db.query("SELECT next_seq FROM sessions WHERE id = ?").get(id),
+      db.query("SELECT position, run_id, kind, body FROM window_items WHERE session_id = ? ORDER BY position").all(id),
+      db.query("SELECT position, kind, body FROM waiting_input WHERE session_id = ? ORDER BY position").all(id),
     ])
   } finally {
     db.close()
@@ -74,7 +76,7 @@ describe("sessions", () => {
       expect(statSync(sessionDir).mode & 0o777).toBe(0o700)
       const listed = (await client.request("session.list")).result.sessions
       expect(listed.map((session: any) => session.id)).toEqual([id])
-      expect(listed[0]).toMatchObject({ sessionDir, model: models[0]!.id, agent: null, running: false, lastSeq: 1 })
+      expect(listed[0]).toMatchObject({ sessionDir, model: models[0]!.id, agent: null, running: false, lastSeq: 2 })
       const view = await SessionView.open(server.url, token, id)
       await view.waitFor("the created event", (v) => v.types().includes("SESSION_CREATED"))
       expect(view.events[0].event.sessionDir).toBe(sessionDir)
@@ -176,20 +178,24 @@ describe("input during turns", () => {
     })
   })
 
-  test("an input whose turn cannot start leaves no event and no turn", async () => {
+  test("an input whose turn cannot start stays waiting and starts the next turn with later input", async () => {
     await withServer(async (server, token) => {
       const control = await connect(server.url, token)
       const id = await createSession(control)
-      const before = snapshot(server, id)
       execute(server, "CREATE TRIGGER fail_turn BEFORE INSERT ON turns BEGIN SELECT RAISE(ABORT, 'injected'); END")
-      expect((await control.request("session.input", { sessionId: id, text: "never" })).error.code).toBe(-32603)
-      expect(snapshot(server, id)).toBe(before)
+      expect((await control.request("session.input", { sessionId: id, text: "never" })).result.inputId).toBeString()
       execute(server, "DROP TRIGGER fail_turn")
       const view = await SessionView.open(server.url, token, id)
+      await view.waitFor("the error", (v) => v.types().includes("SESSION_ERROR"))
+      expect(view.events.find((event) => event.event.type === "SESSION_ERROR")!.event).toMatchObject({ code: "turn_start_failed" })
       await control.request("session.input", { sessionId: id, text: "after" })
-      server.script.release("after")
+      server.script.release("never")
       await view.waitFor("the turn", (v) => finishedRuns(v) === 1)
-      expect(view.types().slice(0, 3)).toEqual(["SESSION_CREATED", "INPUT_RECEIVED", "RUN_STARTED"])
+      expect(view.types().slice(0, 4)).toEqual(["SESSION_CREATED", "CHECKPOINT_WINDOW_SEEDED", "INPUT_WAITING", "SESSION_ERROR"])
+      expect(view.texts()).toEqual(["echo: never"])
+      const started = view.events.find((event) => event.event.type === "RUN_STARTED")!.event
+      expect(started).toMatchObject({ cause: "user" })
+      expect(started.type === "RUN_STARTED" && started.userMessageIds).toHaveLength(2)
     })
   })
 
@@ -411,8 +417,8 @@ describe("fork and rewind", () => {
         "CREATE TRIGGER fail_rewind BEFORE UPDATE OF next_seq ON sessions BEGIN SELECT RAISE(ABORT, 'injected'); END",
         // After the counter update: inserting the rewound event fails.
         "CREATE TRIGGER fail_rewind BEFORE INSERT ON events WHEN NEW.body LIKE '%SESSION_REWOUND%' BEGIN SELECT RAISE(ABORT, 'injected'); END",
-        // After the rewound event: starting the replacement turn fails.
-        "CREATE TRIGGER fail_rewind BEFORE INSERT ON turns BEGIN SELECT RAISE(ABORT, 'injected'); END",
+        // After the rewound event: storing the rerun input fails.
+        "CREATE TRIGGER fail_rewind BEFORE INSERT ON waiting_input BEGIN SELECT RAISE(ABORT, 'injected'); END",
       ]
       for (const fault of faults) {
         execute(server, fault)
@@ -426,6 +432,15 @@ describe("fork and rewind", () => {
         expect(replay.texts()).toEqual(["echo: t1", "echo: t2", "echo: t3"])
         control = await connect(server.url, token)
       }
+      // A rewind whose rerun turn cannot start keeps its input waiting, and a restart starts it.
+      execute(server, "CREATE TRIGGER fail_turn BEFORE INSERT ON turns BEGIN SELECT RAISE(ABORT, 'injected'); END")
+      expect((await control.request("session.rewind", { sessionId: id, runId: second })).result).toEqual({})
+      await server.restart()
+      execute(server, "DROP TRIGGER fail_turn")
+      await server.restart()
+      const rerun = await SessionView.open(server.url, token, id)
+      await rerun.waitFor("the rerun turn", (v) => v.texts().includes("echo: t2") && v.types().filter((type) => type === "RUN_STARTED").length === 2)
+      expect(rerun.texts()).toEqual(["echo: t1", "echo: t2"])
     } finally {
       await server.cleanup()
     }

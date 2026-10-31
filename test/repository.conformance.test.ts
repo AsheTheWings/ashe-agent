@@ -79,12 +79,12 @@ describe("dotenv", () => {
     expect(topLevel).toContain("env = false")
   })
 
-  test("every Vite and Vitest configuration turns off .env loading", async () => {
+  test("every Vite configuration turns off .env loading", async () => {
     const configs: Array<string> = []
     for (const pattern of ["vite*.config.ts", "packages/*/vite*.config.ts"]) {
       for await (const path of new Glob(pattern).scan(root)) configs.push(path)
     }
-    expect(configs.sort()).toEqual(["packages/web/vite.config.ts", "vitest.config.ts"])
+    expect(configs.sort()).toEqual(["packages/web/vite.config.ts"])
     for (const path of configs) expect(await read(path)).toMatch(/^\s*envDir: false,$/m)
   })
 })

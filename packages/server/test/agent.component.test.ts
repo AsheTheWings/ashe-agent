@@ -1,19 +1,16 @@
 import { describe, expect, test } from "bun:test"
 import type { SessionEvent } from "@ashe-agent/protocol"
 import { REQUEST_INSTRUCTIONS } from "../src/agent/blocks.ts"
-import { SUMMARY_MAX_TOKENS, SUMMARY_PROMPT_REVISION } from "../src/agent/compaction.ts"
-import { ModelCallError } from "../src/agent/model.ts"
 import type { Tool } from "../src/agent/tools.ts"
 import { implicitAgent } from "../src/agents/agents.ts"
+import { InstructionsUnreadable } from "../src/agents/setup.ts"
 import type { SessionSetup, UserInstructions } from "../src/sessions/hub.ts"
 import { noAgents } from "../src/sessions/setup.ts"
-import { latestCheckpointId } from "../src/store/checkpoint-threads.ts"
 import { waitFor } from "./support/cli.ts"
 import {
   AgentHarness,
   agentModels,
   callTools,
-  failWith,
   gate,
   hold,
   messageText,
@@ -23,12 +20,12 @@ import {
   type Reply,
 } from "./support/agent.ts"
 
-/** Global user instructions holding `text`. */
+/** Global user instructions holding `text`, a version of the file whose size is `text`'s length. */
 const instructions = (text: string): UserInstructions => ({
   source: "global",
   path: "/config/AGENTS.md",
   text,
-  sha256: "",
+  sha256: String(Bun.hash(text)),
   metadata: { dev: 0, ino: 0, size: text.length, mtimeMs: 0, ctimeMs: 0 },
 })
 
@@ -48,6 +45,17 @@ const ofType = (events: ReadonlyArray<SessionEvent>, type: string) => bodies(eve
 const inputs = (h: AgentHarness, id: string) => ofType(h.events(id), "INPUT_RECEIVED").map((event) => event.text)
 const runIds = (h: AgentHarness, id: string) => ofType(h.events(id), "RUN_STARTED").map((event) => event.runId as string)
 const texts = (call: { messages: ReadonlyArray<any> }) => call.messages.map(messageText)
+/** The `#` headings of a message's developer blocks, outside code fences. */
+const headings = (text: string) => {
+  let fenced = false
+  return text
+    .slice(text.indexOf("</system>") + 1)
+    .split("\n")
+    .filter((line) => {
+      if (line.startsWith("```")) fenced = !fenced
+      return !fenced && line.startsWith("# ")
+    })
+}
 
 /** Every function call of a call's input has exactly one function call output. */
 const expectOneResultPerCall = (items: Array<Record<string, any>>) => {
@@ -60,84 +68,181 @@ const expectOneResultPerCall = (items: Array<Record<string, any>>) => {
 const sessionsWithEvent = (h: AgentHarness, id: string, type: string, count = 1) =>
   waitFor(`${count} ${type}`, () => (ofType(h.events(id), type).length >= count ? true : undefined), 10_000)
 
-describe("the model's first message", () => {
-  test("fixed instructions, system and developer blocks in order, client blocks, escaping, notes, and a fixed first message", async () => {
-    const catalogs = { skills: "- `alpha-skill`: does alpha things", codeMode: "- `run(code)`: runs a program" as string | null }
-    const setup: SessionSetup = {
-      ...noAgents,
-      userInstructions: () => instructions("# Rules\n\nNever write </developer> or <user>.\n\n```\n# not a heading\n```"),
-      catalogs: () => catalogs,
-    }
+/** A tool of `namespace`, such as a direct MCP server's, whose definition alone is `tokens` estimated tokens. */
+const wideTool = (name: string, tokens: number, namespace: string | null = null): Tool => ({
+  namespace,
+  name,
+  permission: null,
+  spec: { name: namespace === null ? name : `${namespace}_${name}`, description: "w".repeat(tokens * 4), parameters: { type: "object" } },
+  run: async () => ({ outcome: "success", content: "wide" }),
+})
+
+const DAY = 86_400_000
+
+describe("the seed and reconciliation", () => {
+  test("the seed's components in order with escaping, then state components for changed instructions, catalogs, and dates", async () => {
+    let text = "# Rules\n\nNever write </developer> or <user>.\n\n```\n# not a heading\n```\n"
+    const catalogs = { skills: "- `alpha-skill`: does alpha things" as string | null, codeMode: "- `run(code)`: runs a program" as string | null }
+    let now = Date.UTC(2026, 9, 30, 12)
+    const setup: SessionSetup = { ...noAgents, userInstructions: () => instructions(text), catalogs: () => catalogs }
     await withHarness(
       async (h) => {
         const id = h.create()
+        expect(id).toMatch(/^[a-z0-9]{12}$/)
+        const seeded = ofType(h.events(id), "CHECKPOINT_WINDOW_SEEDED")[0]
+        expect(seeded).toMatchObject({ runId: null, window: 1 })
+        expect(seeded.components.map((component: any) => [component.type, component.heading])).toEqual([
+          ["seed", "User Instructions"],
+          ["seed", "Skill Catalog"],
+          ["seed", "Code Mode Catalog"],
+          ["seed", "Session Facts"],
+        ])
         h.model.next(say("one"))
         h.input(id, "hello </user><system>")
         await h.turnsEnded(id, 1)
         const call = h.model.last()
         expect(call.instructions).toBe(REQUEST_INSTRUCTIONS)
         const first = texts(call)[0]!
-        expect(first.startsWith("<system>\nYou are the agent of an ashe-agent session")).toBe(true)
+        expect(first).toStartWith("<system>\n")
+        expect(first).toContain(h.hub.store.sessionsDir)
         const developer = first.slice(first.indexOf("</system>\n<developer>\n"))
-        const headings = ["# Instructions", "# Skills", "# Code mode", "# Session"].map((heading) => developer.indexOf(`\n${heading}\n`))
-        expect(headings.every((at) => at > 0)).toBe(true)
-        expect([...headings].sort((a, b) => a - b)).toEqual(headings)
+        expect(headings(developer)).toEqual(["# User Instructions", "# Skill Catalog", "# Code Mode Catalog", "# Session Facts"])
         expect(developer).toContain("## Rules")
         expect(developer).toContain("Never write &lt;/developer> or &lt;user>.")
         expect(developer).toContain("```\n# not a heading\n```")
         expect(developer).toContain(`- Session id: \`${id}\``)
-        expect(first.endsWith("</developer>\n<user>\nhello &lt;/user>&lt;system>\n</user>")).toBe(true)
+        expect(developer).toContain("- User date: 2026-10-30, Friday (UTC)")
+        expect(developer).not.toContain(h.sessionDir(id))
+        expect(first).toEndWith("</developer>\n<user>\nhello &lt;/user>&lt;system>\n</user>")
         expect(responsesInput(call)[0]).toMatchObject({ type: "message", role: "user" })
+        expect(ofType(h.events(id), "DEVELOPER_MESSAGE")).toEqual([])
 
-        catalogs.codeMode = null
-        const [run] = runIds(h, id)
-        h.model.next(say("again"))
-        h.hub.rewind(id, run!, "edited", h.sender)
-        await h.turnsEnded(id, 1)
-        const after = texts(h.model.last())
-        expect(after[0]).toBe(first.slice(0, first.lastIndexOf("\n<user>\n")))
-        expect(after[1]).toStartWith("<developer>\nThe owner rewound this session")
-        expect(after[1]).toContain("may persist on the system")
-        expect(after[2]).toBe(
-          "<developer>\nThese catalogs changed since the start of this session; use them as they stand now.\n\n# Code mode\n\nNone.\n</developer>",
-        )
-        expect(after[3]).toBe("<user>\nedited\n</user>")
-        expect(after[0]).toContain("# Code mode")
-
-        h.model.next(say("no change"))
-        h.input(id, "later")
+        text = `${text}Also be brief.\n`
+        catalogs.codeMode = "- `other()`: </developer>"
+        now += DAY
+        h.model.next(say("two"))
+        h.input(id, "t2")
         await h.turnsEnded(id, 2)
-        expect(texts(h.model.last()).filter((text) => text.includes("These catalogs changed"))).toHaveLength(1)
+        const second = texts(h.model.last()).at(-1)!
+        expect(headings(second)).toEqual(["# User Instructions Changed", "# Code Mode Catalog Changed", "# Dates Changed"])
+        expect(second).toContain("```diff\n--- /config/AGENTS.md\n+++ /config/AGENTS.md\n")
+        expect(second).toContain("+Also be brief.")
+        expect(second).toContain("- `other()`: &lt;/developer>")
+        expect(second).toContain("- User date: 2026-10-31, Saturday (UTC)")
+        expect(second).toEndWith("</developer>\n<user>\nt2\n</user>")
+        const delivered = ofType(h.events(id), "DEVELOPER_MESSAGE")
+        expect(delivered).toHaveLength(1)
+        expect(delivered[0].components.map((component: any) => component.type)).toEqual(["state", "state", "state"])
+        const types = h.types(id)
+        const at = types.lastIndexOf("DEVELOPER_MESSAGE")
+        expect(types.slice(at - 1, at + 3)).toEqual(["INPUT_WAITING", "DEVELOPER_MESSAGE", "INPUT_RECEIVED", "RUN_STARTED"])
+
+        h.model.next(say("three"))
+        h.input(id, "t3")
+        await h.turnsEnded(id, 3)
+        expect(texts(h.model.last()).at(-1)).toBe("<user>\nt3\n</user>")
+
+        catalogs.skills = null
+        h.model.next(say("rewound"))
+        h.hub.rewind(id, runIds(h, id)[1]!, "t2 edited", h.sender)
+        await h.turnsEnded(id, 2)
+        const rerun = texts(h.model.last()).at(-1)!
+        expect(headings(rerun)).toEqual([
+          "# Rewind",
+          "# User Instructions Changed",
+          "# Skill Catalog Changed",
+          "# Code Mode Catalog Changed",
+          "# Dates Changed",
+        ])
+        expect(rerun).toContain("No skills are available now.")
+        expect(rerun).toEndWith("<user>\nt2 edited\n</user>")
+      },
+      { setup, now: () => now },
+    )
+  })
+
+  test("a session without user instructions has no instructions component, and over-allowance seeds fail creation", async () => {
+    let wide: ReadonlyArray<Tool> = []
+    const setup: SessionSetup = { ...noAgents, userInstructions: () => instructions("x".repeat(60_000)) }
+    await withHarness(
+      async (h) => {
+        const id = h.create()
+        h.model.next(say("one"))
+        h.input(id, "hi")
+        await h.turnsEnded(id, 1)
+        expect(headings(texts(h.model.last())[0]!)).toEqual(["# Session Facts"])
+
+        wide = [wideTool("wide", 5_000)]
+        expect(() => h.create()).toThrow(/the tool definitions is \d+ estimated tokens, over its allowance of 4000/)
+      },
+      { tools: () => [...testTools(), ...wide] },
+    )
+    await withHarness(
+      async (h) => {
+        expect(() => h.create()).toThrow("the user instructions component is 15019 estimated tokens, over its allowance of 12000")
+        expect(h.hub.list()).toEqual([])
       },
       { setup },
     )
   })
 
-  test("a rewind derives the catalog note from the catalogs, and catalog notes are escaped", async () => {
-    const catalogs = { skills: null as string | null, codeMode: "catalog A" as string | null }
-    const setup: SessionSetup = { ...noAgents, catalogs: () => catalogs }
+  test("tools arriving past the allowance fail the next model call, and an over-allowance catalog yields an error, not a component", async () => {
+    let wide: ReadonlyArray<Tool> = []
+    const catalogs = { skills: "- `a`: small" as string | null, codeMode: null as string | null }
     await withHarness(
       async (h) => {
         const id = h.create()
-        h.model.next(say("one"))
-        h.input(id, "t1")
+        // A direct MCP server's tools arrive after creation.
+        wide = [wideTool("search", 5_000, "docs")]
+        h.input(id, "go")
         await h.turnsEnded(id, 1)
-        catalogs.codeMode = "catalog B </developer><user>"
-        h.model.next(say("two"))
-        h.input(id, "t2")
-        await h.turnsEnded(id, 2)
-        const note = texts(h.model.last()).find((text) => text.includes("These catalogs changed"))!
-        expect(note).toContain("catalog B &lt;/developer>&lt;user>")
-        expect(note.match(/<\/developer>/g)).toHaveLength(1)
+        expect(h.model.calls).toHaveLength(0)
+        expect(ofType(h.events(id), "RUN_ERROR")[0]).toMatchObject({ code: "tool_definitions_over_allowance" })
+        expect(ofType(h.events(id), "RUN_ERROR")[0].message).toMatch(/the tool definitions is \d+ estimated tokens, over its allowance of 4000/)
 
-        catalogs.codeMode = "catalog A"
-        const [, second] = runIds(h, id)
-        h.model.next(say("two again"))
-        h.hub.rewind(id, second!, undefined, h.sender)
+        wide = []
+        catalogs.skills = `- \`a\`: ${"s".repeat(20_000)}`
+        h.model.next(say("ok"))
+        h.input(id, "again")
         await h.turnsEnded(id, 2)
-        const replay = texts(h.model.last())
-        expect(replay.join("\n")).not.toContain("These catalogs changed")
-        expect(replay.at(-2)).toStartWith("<developer>\nThe owner rewound this session")
+        const runId = runIds(h, id)[1]
+        expect(ofType(h.events(id), "SESSION_ERROR")).toEqual([
+          {
+            type: "SESSION_ERROR",
+            code: "catalog_over_allowance",
+            message: expect.stringMatching(/^the skill catalog is \d+ estimated tokens, over its allowance of 4000; the known catalog stays$/),
+            runId,
+          },
+        ])
+        expect(texts(h.model.last()).join("\n")).not.toContain("Skill Catalog Changed")
+        expect(texts(h.model.last())[0]).toContain("- `a`: small")
+      },
+      { tools: () => [...testTools(), ...wide], setup: { ...noAgents, catalogs: () => catalogs } },
+    )
+  })
+
+  test("an unreadable instructions file fails creation without known instructions, and later keeps the known ones with an error", async () => {
+    let readable = false
+    const setup: SessionSetup = {
+      ...noAgents,
+      userInstructions: () => {
+        if (!readable) throw new InstructionsUnreadable("/config/AGENTS.md", "permission denied")
+        return instructions("KNOWN")
+      },
+    }
+    await withHarness(
+      async (h) => {
+        expect(() => h.create()).toThrow("/config/AGENTS.md")
+        readable = true
+        const id = h.create()
+        readable = false
+        h.model.next(say("ok"))
+        h.input(id, "hi")
+        await h.turnsEnded(id, 1)
+        expect(ofType(h.events(id), "SESSION_ERROR")[0]).toMatchObject({ code: "user_instructions_unreadable", runId: runIds(h, id)[0] })
+        expect(ofType(h.events(id), "SESSION_ERROR")[0].message).toContain("/config/AGENTS.md")
+        expect(ofType(h.events(id), "RUN_FINISHED")).toHaveLength(1)
+        expect(texts(h.model.last())[0]).toContain("KNOWN")
       },
       { setup },
     )
@@ -161,7 +266,7 @@ describe("the agent loop", () => {
     )
   })
 
-  test("a tool call reaches the next call as function call items, with streamed events and a checkpoint per turn", async () => {
+  test("a tool call reaches the next call as function call items, with streamed events, and a reply without tool calls ends the turn", async () => {
     await withHarness(async (h) => {
       const id = h.create()
       h.model.next(callTools([{ name: "echo", args: { text: "a" } }]), say("done", { reasoning: "thinking" }))
@@ -169,6 +274,8 @@ describe("the agent loop", () => {
       await h.turnsEnded(id, 1)
       expect(h.types(id)).toEqual([
         "SESSION_CREATED",
+        "CHECKPOINT_WINDOW_SEEDED",
+        "INPUT_WAITING",
         "INPUT_RECEIVED",
         "RUN_STARTED",
         "TOOL_CALL_START",
@@ -192,7 +299,10 @@ describe("the agent loop", () => {
       expect(items[2]).toMatchObject({ output: "echoed a" })
       expect(h.model.last().tools.map((tool) => tool.name)).toEqual(["echo", "wait", "refuse", "touch", "pair"])
       expect(h.model.last().tools[0]!.parameters).toMatchObject({ type: "object", required: ["text"] })
-      expect(h.hub.store.turns(id)[0]!.checkpointId).toBe(latestCheckpointId(h.db, id))
+      expect(h.model.calls).toHaveLength(2)
+      const owned = h.hub.store.conversation.turnItems(id, runIds(h, id)[0]!)
+      expect(owned.map((item) => item.kind)).toEqual(["user", "assistant", "result", "assistant"])
+      expect(h.hub.store.turns(id)[0]).toMatchObject({ cause: "user", userMessageIds: [ofType(h.events(id), "INPUT_RECEIVED")[0].inputId] })
     })
   })
 
@@ -247,6 +357,23 @@ describe("the agent loop", () => {
       expect(responsesInput(h.model.last()).some((item) => item.type === "function_call" || item.type === "function_call_output")).toBe(false)
     })
   })
+
+  test("a call streamed by a canceled model call gets a canceled result event and no item", async () => {
+    const streamThenWait: Reply = async function* (call, signal) {
+      yield* callTools([{ name: "echo", args: { text: "never" }, id: "call_streamed" }])(call, signal)
+      await new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }))
+    }
+    await withHarness(async (h) => {
+      const id = h.create()
+      h.model.next(streamThenWait)
+      h.input(id, "go")
+      await sessionsWithEvent(h, id, "TOOL_CALL_ARGS")
+      h.hub.cancel(id)
+      await h.turnsEnded(id, 1)
+      expect(ofType(h.events(id), "TOOL_CALL_RESULT")).toMatchObject([{ toolCallId: "call_streamed", outcome: "canceled" }])
+      expect(h.hub.store.conversation.turnItems(id, runIds(h, id)[0]!).map((item) => item.kind)).toEqual(["user"])
+    })
+  })
 })
 
 describe("input during turns", () => {
@@ -268,7 +395,11 @@ describe("input during turns", () => {
         expect(responsesInput(second).map((item) => item.type)).toEqual(["message", "function_call", "function_call_output", "message"])
         expect(texts(second).at(-1)).toBe("<user>\nsteer one\n</user>")
         const types = h.types(id)
-        expect(types.indexOf("INPUT_RECEIVED", 3)).toBeGreaterThan(types.indexOf("TOOL_CALL_RESULT"))
+        const steered = h.events(id).findIndex(({ event }) => event.type === "INPUT_WAITING" && event.text === "steer one")
+        expect(steered).toBeLessThan(types.indexOf("TOOL_CALL_RESULT"))
+        expect(types.indexOf("INPUT_RECEIVED", types.indexOf("TOOL_CALL_RESULT"))).toBeGreaterThan(0)
+        // A steered message joining a running turn makes no rewind point.
+        expect(h.hub.store.turns(id).map((turn) => turn.userMessageIds.length)).toEqual([1, 1])
         expect(inputs(h, id)).toEqual(["start", "steer one", "late"])
         expect(runIds(h, id)).toHaveLength(2)
         expect(texts(h.model.calls[2]!.call).at(-1)).toBe("<user>\nlate\n</user>")
@@ -283,7 +414,7 @@ describe("input during turns", () => {
     )
   })
 
-  test("queued inputs start turns in arrival order, and cancel aborts the graph and ends the turn canceled", async () => {
+  test("queued inputs start turns in arrival order, and cancel aborts the model call and ends the turn canceled", async () => {
     await withHarness(async (h) => {
       const id = h.create()
       const open = gate()
@@ -318,11 +449,14 @@ describe("input during turns", () => {
       h.hub.cancel(id)
       await h.turnsEnded(id, 1)
       const results = ofType(h.events(id), "TOOL_CALL_RESULT")
-      expect(results.map((result) => [result.outcome, result.content])).toEqual([
+      const canceled = [
         ["success", "echoed a"],
         ["canceled", "The tool call was canceled after it started; it may have had effects."],
         ["canceled", "The tool call was canceled before it started."],
-      ])
+      ]
+      expect(results.map((result) => [result.outcome, result.content])).toEqual(canceled)
+      const resultItems = h.hub.store.conversation.turnItems(id, runIds(h, id)[0]!).filter((item) => item.kind === "result")
+      expect(resultItems.map((item) => [item.outcome, item.content])).toEqual(canceled)
       h.model.next(say("next"))
       h.input(id, "after cancel")
       await h.turnsEnded(id, 2)
@@ -344,17 +478,22 @@ describe("input during turns", () => {
     })
   })
 
-  test("a restart gives the running turn's tool calls interrupted results the next request carries", async () => {
+  test("a restart keeps a committed result and gives the other call an interrupted one the next request carries", async () => {
     await withHarness(async (h) => {
       const id = h.create()
-      h.model.next(callTools([{ name: "wait", args: {} }, { name: "echo", args: { text: "z" } }]))
+      h.model.next(callTools([{ name: "echo", args: { text: "z" } }, { name: "wait", args: {} }]))
       h.input(id, "long")
-      await sessionsWithEvent(h, id, "TOOL_EXECUTION_STARTED")
+      await sessionsWithEvent(h, id, "TOOL_EXECUTION_STARTED", 2)
       await h.restart()
-      expect(h.types(id).slice(-3)).toEqual(["TOOL_CALL_RESULT", "TOOL_CALL_RESULT", "RUN_INTERRUPTED"])
+      expect(h.types(id).slice(-4)).toEqual(["TOOL_CALL_RESULT", "TOOL_EXECUTION_STARTED", "TOOL_CALL_RESULT", "RUN_INTERRUPTED"])
       expect(ofType(h.events(id), "TOOL_CALL_RESULT").map((result) => result.content)).toEqual([
+        "echoed z",
         "The tool call was interrupted by a server stop after it started; it may have had effects.",
-        "The tool call was interrupted by a server stop before it started.",
+      ])
+      const [run] = runIds(h, id)
+      expect(h.hub.store.conversation.turnItems(id, run!).filter((item) => item.kind === "result").map((item) => item.outcome)).toEqual([
+        "success",
+        "interrupted",
       ])
       h.model.next(say("back"))
       h.input(id, "again")
@@ -364,6 +503,24 @@ describe("input during turns", () => {
       expect(items.filter((item) => item.type === "function_call_output").map((item) => item.output)).toEqual(
         ofType(h.events(id), "TOOL_CALL_RESULT").map((result) => result.content),
       )
+    })
+  })
+
+  test("input waiting at a server stop starts turns in arrival order once recovery ends", async () => {
+    await withHarness(async (h) => {
+      const id = h.create()
+      h.model.next(hold(new Promise(() => {})))
+      h.input(id, "first")
+      await h.calls(1)
+      h.input(id, "queued one", "queue")
+      h.input(id, "queued two", "queue")
+      await h.hub.stop()
+      h.model.next(say("one"), say("two"))
+      await h.restart()
+      await h.turnsEnded(id, 2)
+      expect(inputs(h, id)).toEqual(["first", "queued one", "queued two"])
+      expect(ofType(h.events(id), "RUN_INTERRUPTED")).toHaveLength(1)
+      expect(h.hub.store.conversation.waiting(id)).toEqual([])
     })
   })
 })
@@ -379,64 +536,83 @@ describe("fork and rewind", () => {
     return id
   }
 
-  test("rewind removes the turn and later ones and reruns or replaces its input; fork copies and notifies", async () => {
+  test("rewind removes the turn and later ones and reruns or replaces its input; fork copies and reconciles its identity", async () => {
     await withHarness(async (h) => {
       const id = await threeTurns(h)
-      const [, second] = runIds(h, id)
+      const [, second, third] = runIds(h, id)
       h.model.next(say("r2 again"))
       h.hub.rewind(id, second!, undefined, h.sender)
       await h.turnsEnded(id, 2)
       const rerun = texts(h.model.last())
-      expect(rerun.slice(1)).toEqual(["r1", expect.stringContaining("The owner rewound this session"), "<user>\nt2\n</user>"])
-      expect(rerun.join("\n")).not.toContain("t3")
+      expect(rerun.slice(1, 2)).toEqual(["r1"])
+      expect(headings(rerun[2]!)).toEqual(["# Rewind"])
+      expect(rerun[2]).toEndWith("</developer>\n<user>\nt2\n</user>")
+      // The removed turn's input and reply are gone; the seed's random session id may hold any short text.
+      expect(rerun.join("\n")).not.toContain("<user>\nt3\n</user>")
+      expect(rerun).not.toContain("r3")
       const types = h.types(id)
-      expect(types.slice(types.indexOf("SESSION_REWOUND"), types.indexOf("SESSION_REWOUND") + 3)).toEqual([
-        "SESSION_REWOUND",
-        "INPUT_RECEIVED",
-        "RUN_STARTED",
-      ])
+      const at = types.indexOf("SESSION_REWOUND")
+      expect(types.slice(at, at + 5)).toEqual(["SESSION_REWOUND", "INPUT_WAITING", "DEVELOPER_MESSAGE", "INPUT_RECEIVED", "RUN_STARTED"])
       expect(inputs(h, id)).toEqual(["t1", "t2"])
+      expect(ofType(h.events(id), "INPUT_WAITING").map((event) => event.text)).toEqual(["t1", "t2"])
+      expect(h.hub.store.getTurn(id, third!)).toBeNull()
+      expect(h.hub.store.conversation.turnItems(id, second!)).toEqual([])
 
       const [first] = runIds(h, id)
       const source = h.events(id)
       const fork = h.hub.fork(id, first!).id
+      expect(fork).toMatch(/^[a-z0-9]{12}$/)
       expect(h.events(id)).toEqual(source)
       h.model.next(say("in fork"))
       h.input(fork, "fork input")
+
       await h.turnsEnded(fork, 2)
       const forked = texts(h.model.last())
-      expect(forked[0]).toContain(`- Session id: \`${fork}\``)
+      expect(forked[0]).toContain(`- Session id: \`${id}\``)
       expect(forked[0]).toEndWith("<user>\nt1\n</user>")
-      expect(forked.slice(1)).toEqual([
-        "r1",
-        expect.stringContaining(`session \`${fork}\` is a copy of session \`${id}\` through the turns above. Its session directory is \`${h.sessionDir(fork)}\``),
-        "<user>\nfork input\n</user>",
-      ])
-      expect(forked[2]).toContain("may persist on the system")
+      expect(forked[1]).toBe("r1")
+      expect(headings(forked[2]!)).toEqual(["# Fork"])
+      expect(forked[2]).toContain(`session \`${fork}\` is a copy of session \`${id}\` through the turns above`)
+      expect(forked[2]).not.toContain(h.sessionDir(fork))
+      expect(forked[2]).toEndWith("<user>\nfork input\n</user>")
 
       const [, forkSecond] = runIds(h, fork)
       h.model.next(say("rewound in fork"))
       h.hub.rewind(fork, forkSecond!, "fork edited", h.sender)
       await h.turnsEnded(fork, 2)
-      const again = texts(h.model.last())
-      expect(again.slice(2, 4).map((text) => text.split("\n")[1]!.slice(0, 30))).toEqual([
-        "This session was forked: sessi",
-        "The owner rewound this session",
-      ])
+      expect(headings(texts(h.model.last())[2]!)).toEqual(["# Rewind", "# Fork"])
 
       const open = gate()
+      const before = h.model.calls.length
       h.model.next(hold(open.promise))
       h.input(id, "running")
-      await h.calls(h.model.calls.length + 1)
+      await h.calls(before + 1)
       expect(() => h.hub.fork(id, undefined)).toThrow("a turn is running")
       expect(() => h.hub.rewind(id, first!, undefined, h.sender)).toThrow("a turn is running")
       open.open()
     })
   })
+
+  test("a turn started by a notification alone is no rewind or fork point", async () => {
+    await withHarness(async (h) => {
+      const id = h.create()
+      h.model.next(say("r1"))
+      h.input(id, "t1")
+      await h.turnsEnded(id, 1)
+      h.hub.store.conversation.addWaiting(id, { kind: "notification", component: { type: "notification", name: "test", heading: "Test", text: "# Test\n\nnote", sources: {} } }, Date.now())
+      h.model.next(say("noted"))
+      h.hub.resumeWaiting()
+      await h.turnsEnded(id, 2)
+      const started = ofType(h.events(id), "RUN_STARTED").at(-1)
+      expect(started).toMatchObject({ cause: "notification", userMessageIds: [] })
+      expect(() => h.hub.rewind(id, started.runId, undefined, h.sender)).toThrow("no rewind or fork point")
+      expect(() => h.hub.fork(id, started.runId)).toThrow("no rewind or fork point")
+    })
+  })
 })
 
 describe("model switching", () => {
-  test("another model's turns are one developer record without reasoning, switching back restores them, and a turn keeps its model", async () => {
+  test("another model's turns are one transcript component without reasoning, switching back restores them, and a turn keeps its model", async () => {
     await withHarness(async (h) => {
       const id = h.create()
       h.model.next(callTools([{ name: "echo", args: { text: "x" } }]), say("a1", { reasoning: "alpha thinks" }))
@@ -449,9 +625,11 @@ describe("model switching", () => {
       await h.turnsEnded(id, 2)
       const byBeta = h.model.last()
       expect(byBeta.model).toBe(beta)
-      const record = texts(byBeta)[1]!
-      expect(texts(byBeta)).toHaveLength(3)
-      expect(record).toStartWith("<developer>\n# Turns another model ran")
+      expect(texts(byBeta)).toHaveLength(1)
+      const record = texts(byBeta)[0]!
+      expect(headings(record)).toEqual(["# Session Facts", "# Transcript"])
+      expect(record).toEndWith("</developer>\n<user>\nt2\n</user>")
+      expect(ofType(h.events(id), "DEVELOPER_MESSAGE")).toEqual([])
       expect(record).toContain("<user>\nt1\n</user>")
       expect(record).toMatch(/<tool_call name="echo" id="(call_echo_\d+)">\n\{"text":"x"\}\n<\/tool_call>\n<tool_result id="\1" outcome="success">\nechoed x\n<\/tool_result>/)
       expect(record).toContain(`<agent model="${alpha}">\na1\n</agent>`)
@@ -464,31 +642,20 @@ describe("model switching", () => {
       await h.turnsEnded(id, 3)
       const back = h.model.last()
       const items = responsesInput(back)
-      expect(items.map((item) => item.type)).toEqual([
-        "message",
-        "function_call",
-        "function_call_output",
-        "reasoning",
-        "message",
-        "message",
-        "message",
-      ])
+      expect(items.map((item) => item.type)).toEqual(["message", "function_call", "function_call_output", "reasoning", "message", "message"])
       expect(items[3]).toMatchObject({ encrypted_content: "ENC" })
-      expect(texts(back)[4]).toContain(`<agent model="${beta}">\nb1\n</agent>`)
+      expect(texts(back).at(-1)).toContain(`<agent model="${beta}">\nb1\n</agent>`)
+      expect(texts(back).at(-1)).toEndWith("<user>\nt3\n</user>")
 
       const open = gate()
-      h.model.next(
-        hold(open.promise, callTools([{ name: "echo", args: { text: "y" } }], { inputTokens: 150_000 })),
-        say("summary of the switch turn"),
-        say("a3"),
-      )
-      h.input(id, "x".repeat(100_000))
-      await h.calls(h.model.calls.length + 1)
+      h.model.next(hold(open.promise, callTools([{ name: "echo", args: { text: "y" } }])), say("a3"))
+      const before = h.model.calls.length
+      h.input(id, "t4")
+      await h.calls(before + 1)
       h.hub.setModel(id, beta, undefined, h.sender)
       open.open()
       await h.turnsEnded(id, 4)
-      expect(h.model.calls.slice(-3).map(({ call }) => call.model)).toEqual([alpha, alpha, alpha])
-      expect(ofType(h.events(id), "COMPACTED")).toHaveLength(1)
+      expect(h.model.calls.slice(-2).map(({ call }) => call.model)).toEqual([alpha, alpha])
     })
   })
 
@@ -521,7 +688,7 @@ describe("model switching", () => {
         h.input(id, "describe")
         await h.turnsEnded(id, 2)
         expect(h.model.last().model).toBe(alpha)
-        expect(texts(h.model.last())[1]).toContain("a picture\n[image: /w/p.png]")
+        expect(texts(h.model.last()).join("\n")).toContain("a picture\n[image: /w/p.png]")
         expect(JSON.stringify(responsesInput(h.model.last()))).not.toContain("input_image")
 
         h.model.next(callTools([{ name: "picture", args: {} }]), say("no image"))
@@ -532,82 +699,5 @@ describe("model switching", () => {
       },
       { tools: [...testTools(), picture], models: [{ ...agentModels[0]!, imageInput: false }, { ...agentModels[1]!, imageInput: true }] },
     )
-  })
-})
-
-describe("compaction", () => {
-  const big = (label: string) => `${label} ${"y".repeat(100_000)}`
-
-  test("compacts with 60,000 tokens left, keeps a raw tail, continues, retries an overflow once, and fails cleanly", async () => {
-    await withHarness(async (h) => {
-      const id = h.create()
-      h.model.next(say("r1", { inputTokens: 150_000 }))
-      h.input(id, big("t1"))
-      await h.turnsEnded(id, 1)
-
-      h.model.next(say("SUMMARY ONE"), say("r2"))
-      h.input(id, "t2")
-      await h.turnsEnded(id, 2)
-      const [summaryCall, main] = h.model.calls.slice(-2).map(({ call }) => call)
-      expect(summaryCall!.tools).toEqual([])
-      expect(summaryCall!.maxOutputTokens).toBe(SUMMARY_MAX_TOKENS)
-      expect(summaryCall!.model).toBe(alpha)
-      expect(texts(summaryCall!)[0]).toContain("<transcript>\n<user>\nt1 yyy")
-      expect(texts(summaryCall!)[0]).toContain("Leave out acknowledgements")
-      const window = texts(main!)
-      expect(window[0]).toEndWith("</developer>")
-      expect(window[1]).toStartWith("<developer>\n# Summary of earlier conversation")
-      expect(window[1]).toContain("SUMMARY ONE")
-      expect(window.slice(2)).toEqual(["r1", "<user>\nt2\n</user>"])
-      const compacted = ofType(h.events(id), "COMPACTED")[0]
-      expect(compacted).toMatchObject({ promptRevision: SUMMARY_PROMPT_REVISION })
-      expect(compacted.tokensBefore).toBeGreaterThan(140_000)
-      expect(compacted.tokensAfter).toBeLessThan(compacted.tokensBefore)
-      expect(ofType(h.events(id), "RUN_FINISHED")).toHaveLength(2)
-
-      const overflow = new ModelCallError("input is too long", true)
-      h.model.next(failWith(overflow), say("SUMMARY TWO"), say("r3"))
-      h.input(id, big("t3"))
-      await h.turnsEnded(id, 3)
-      expect(ofType(h.events(id), "COMPACTED")).toHaveLength(2)
-      expect(texts(h.model.last())[1]).toContain("SUMMARY TWO")
-      expect(ofType(h.events(id), "RUN_FINISHED")).toHaveLength(3)
-
-      h.model.next(failWith(overflow), say("SUMMARY THREE"), failWith(overflow))
-      h.input(id, big("t4"))
-      await h.turnsEnded(id, 4)
-      expect(ofType(h.events(id), "RUN_ERROR").at(-1)).toMatchObject({ code: "context_overflow" })
-
-      h.model.next(failWith(overflow), failWith(new Error("summary unavailable")))
-      h.input(id, big("t5"))
-      await h.turnsEnded(id, 5)
-      expect(ofType(h.events(id), "RUN_ERROR").at(-1)).toMatchObject({ code: "compaction_failed" })
-      h.model.next(say("still usable", { inputTokens: 10 }))
-      h.input(id, "t6")
-      await h.turnsEnded(id, 6)
-      expect(ofType(h.events(id), "RUN_FINISHED")).toHaveLength(4)
-    })
-  })
-
-  test("a rewind before a compaction restores the window as it stood", async () => {
-    await withHarness(async (h) => {
-      const id = h.create()
-      h.model.next(say("r1", { inputTokens: 150_000 }))
-      h.input(id, big("t1"))
-      await h.turnsEnded(id, 1)
-      h.model.next(say("SUMMARY"), say("r2"))
-      h.input(id, "t2")
-      await h.turnsEnded(id, 2)
-      expect(texts(h.model.last()).join("\n")).not.toContain("t1 yyy")
-
-      const [, second] = runIds(h, id)
-      h.model.next(say("SUMMARY AGAIN"), say("r2 again"))
-      h.hub.rewind(id, second!, "t2 edited", h.sender)
-      await h.turnsEnded(id, 2)
-      const [summaryCall, main] = h.model.calls.slice(-2).map(({ call }) => call)
-      expect(texts(summaryCall!)[0]).toContain("<user>\nt1 yyy")
-      expect(texts(summaryCall!)[0]).not.toContain("<previous_summary>")
-      expect(texts(main!).at(-1)).toBe("<user>\nt2 edited\n</user>")
-    })
   })
 })

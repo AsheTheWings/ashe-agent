@@ -1,24 +1,19 @@
 import { AIMessage, type AIMessageChunk } from "@langchain/core/messages"
-import { Annotation, END, START, StateGraph } from "@langchain/langgraph"
-import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
 import type { SessionEventBody } from "@ashe-agent/protocol"
 import { context as otelContext } from "@opentelemetry/api"
 import { Effect } from "effect"
-import { callSettings, checkpointWindowSize, type ConfiguredModel } from "../models/registry.ts"
-import { endSpan, recordDuration, startSpan, withSpan, type ErrorClass } from "../telemetry/signals.ts"
+import { allowanceMessage, toolDefinitionsIssue } from "../context/seed.ts"
+import { callSettings, type ConfiguredModel } from "../models/registry.ts"
 import type { TurnContext, TurnOutcome, TurnRunner } from "../sessions/hub.ts"
+import { endSpan, recordDuration, startSpan, withSpan, type ErrorClass } from "../telemetry/signals.ts"
 import { REQUEST_INSTRUCTIONS } from "./blocks.ts"
-import { compact, needsCompaction, SUMMARY_PROMPT_REVISION } from "./compaction.ts"
 import { ModelCallError, type ModelPort } from "./model.ts"
 import { unfinishedResult } from "./notes.ts"
 import { failedResult, type Tool, type ToolResult } from "./tools.ts"
-import { emptyWindow, renderWindow, unansweredCalls, type Entry, type ToolContent, type ToolOutcome, type Window } from "./window.ts"
+import { renderWindow, toolContentText, type ToolContent, type ToolOutcome } from "./window.ts"
 
 export interface AgentOptions {
   readonly port: ModelPort
-  /** The tools, or a function giving the tools available now, read at every model call. */
-  readonly tools: ReadonlyArray<Tool> | (() => ReadonlyArray<Tool>)
-  readonly saver: BaseCheckpointSaver
   readonly models: ReadonlyArray<ConfiguredModel>
 }
 
@@ -32,32 +27,26 @@ class TurnFailure extends Error {
   }
 }
 
-const State = Annotation.Root({
-  window: Annotation<Window>({ reducer: (_, next) => next, default: () => emptyWindow }),
-  /** Set by a model call that overflowed, so the next step compacts. */
-  overflowed: Annotation<boolean>({ reducer: (_, next) => next, default: () => false }),
-  /** Set once the step's overflow was compacted, so a second overflow fails the turn. */
-  retried: Annotation<boolean>({ reducer: (_, next) => next, default: () => false }),
-  /** Set by a plain reject, which ends the turn. */
-  stopped: Annotation<boolean>({ reducer: (_, next) => next, default: () => false }),
-})
-
-type StateValue = typeof State.State
-
-const contentText = (content: ToolContent) =>
-  typeof content === "string" ? content : content.map((part) => (part.type === "text" ? part.text : `[image: ${part.path}]`)).join("\n")
+interface Call {
+  readonly name: string
+  started: boolean
+  answered: boolean
+  /** Whether a committed assistant item holds the call, so its result is an item too. */
+  committed: boolean
+  cancelNote?: string
+}
 
 /**
  * Streams a model call's events as they arrive and tracks what a cancel
  * must close: open text and reasoning messages, and tool calls without a
- * result. After `close`, nothing more is emitted.
+ * result. After `close`, nothing more is emitted or committed.
  */
 class TurnEvents {
   private text: string | null = null
   private reasoning: string | null = null
   private readonly streaming = new Map<number, string>()
-  /** Tool calls of the turn the model made, by id, with whether they started and got a result. */
-  readonly calls = new Map<string, { started: boolean; answered: boolean; cancelNote?: string }>()
+  /** The turn's tool calls, by id. */
+  readonly calls = new Map<string, Call>()
   private closed = false
 
   constructor(private readonly context: TurnContext) {}
@@ -66,23 +55,29 @@ class TurnEvents {
     if (!this.closed) this.context.emit(body)
   }
 
-  private endText() {
-    if (this.text !== null) this.emit({ type: "TEXT_MESSAGE_END", messageId: this.text })
+  private endText(into: Array<SessionEventBody>) {
+    if (this.text !== null) into.push({ type: "TEXT_MESSAGE_END", messageId: this.text })
     this.text = null
   }
 
-  private endReasoning() {
+  private endReasoning(into: Array<SessionEventBody>) {
     if (this.reasoning === null) return
-    this.emit({ type: "REASONING_MESSAGE_END", messageId: this.reasoning })
-    this.emit({ type: "REASONING_END", messageId: this.reasoning })
+    into.push({ type: "REASONING_MESSAGE_END", messageId: this.reasoning })
+    into.push({ type: "REASONING_END", messageId: this.reasoning })
     this.reasoning = null
+  }
+
+  private emitAll(bodies: ReadonlyArray<SessionEventBody>) {
+    for (const body of bodies) this.emit(body)
   }
 
   chunk(chunk: AIMessageChunk) {
     const parts = typeof chunk.content === "string" ? [{ type: "text", text: chunk.content }] : chunk.content
     for (const part of parts) {
       if (part.type === "reasoning" && typeof part.reasoning === "string" && part.reasoning !== "") {
-        this.endText()
+        const ended: Array<SessionEventBody> = []
+        this.endText(ended)
+        this.emitAll(ended)
         if (this.reasoning === null) {
           this.reasoning = crypto.randomUUID()
           this.emit({ type: "REASONING_START", messageId: this.reasoning })
@@ -90,7 +85,9 @@ class TurnEvents {
         }
         this.emit({ type: "REASONING_MESSAGE_CONTENT", messageId: this.reasoning, delta: part.reasoning })
       } else if (part.type === "text" && typeof part.text === "string" && part.text !== "") {
-        this.endReasoning()
+        const ended: Array<SessionEventBody> = []
+        this.endReasoning(ended)
+        this.emitAll(ended)
         if (this.text === null) {
           this.text = crypto.randomUUID()
           this.emit({ type: "TEXT_MESSAGE_START", messageId: this.text, role: "assistant" })
@@ -102,31 +99,51 @@ class TurnEvents {
       const index = call.index ?? 0
       let id = this.streaming.get(index)
       if (id === undefined && call.id !== undefined && call.name !== undefined) {
-        this.endText()
-        this.endReasoning()
+        const ended: Array<SessionEventBody> = []
+        this.endText(ended)
+        this.endReasoning(ended)
+        this.emitAll(ended)
         id = call.id
         this.streaming.set(index, id)
-        this.calls.set(id, { started: false, answered: false })
+        this.calls.set(id, { name: call.name, started: false, answered: false, committed: false })
         this.emit({ type: "TOOL_CALL_START", toolCallId: id, toolCallName: call.name })
       }
       if (id !== undefined && call.args !== undefined && call.args !== "") this.emit({ type: "TOOL_CALL_ARGS", toolCallId: id, delta: call.args })
     }
   }
 
-  /** Ends the open messages and tool call streams of a model call. */
-  endCall() {
-    this.endText()
-    this.endReasoning()
-    for (const id of this.streaming.values()) this.emit({ type: "TOOL_CALL_END", toolCallId: id })
+  /** The events that end the open messages and tool call streams of a model call, which the caller commits. */
+  endEvents(): Array<SessionEventBody> {
+    const ended: Array<SessionEventBody> = []
+    this.endText(ended)
+    this.endReasoning(ended)
+    for (const id of this.streaming.values()) ended.push({ type: "TOOL_CALL_END", toolCallId: id })
     this.streaming.clear()
+    return ended
   }
 
-  /** Announces a call the final message holds that streamed no start, such as one with unparsable arguments. */
-  ensureCall(id: string, name: string) {
-    if (this.calls.has(id)) return
-    this.calls.set(id, { started: false, answered: false })
-    this.emit({ type: "TOOL_CALL_START", toolCallId: id, toolCallName: name })
-    this.emit({ type: "TOOL_CALL_END", toolCallId: id })
+  /** Ends the open messages and tool call streams of a model call that produced no message. */
+  endCall() {
+    this.emitAll(this.endEvents())
+  }
+
+  /**
+   * Commits the model call's message as an item with the events that end
+   * its streams, and the start of each call the message holds that
+   * streamed none, such as one with unparsable arguments.
+   */
+  commitMessage(message: AIMessage) {
+    const events = this.endEvents()
+    for (const call of message.tool_calls ?? []) {
+      const known = this.calls.get(call.id!)
+      if (known !== undefined) {
+        known.committed = true
+        continue
+      }
+      this.calls.set(call.id!, { name: call.name, started: false, answered: false, committed: true })
+      events.push({ type: "TOOL_CALL_START", toolCallId: call.id!, toolCallName: call.name }, { type: "TOOL_CALL_END", toolCallId: call.id! })
+    }
+    if (!this.closed) this.context.commitAssistant(message, events)
   }
 
   started(id: string) {
@@ -142,10 +159,21 @@ class TurnEvents {
     if (call !== undefined) call.cancelNote = note
   }
 
+  /** Records the call's result: an item with its event for a committed call, else the event alone. */
   result(id: string, content: ToolContent, outcome: ToolOutcome) {
     const call = this.calls.get(id)
-    if (call !== undefined) call.answered = true
-    this.emit({ type: "TOOL_CALL_RESULT", messageId: crypto.randomUUID(), toolCallId: id, role: "tool", content: contentText(content), outcome })
+    if (call === undefined || this.closed) return
+    call.answered = true
+    const event: SessionEventBody = {
+      type: "TOOL_CALL_RESULT",
+      messageId: crypto.randomUUID(),
+      toolCallId: id,
+      role: "tool",
+      content: toolContentText(content),
+      outcome,
+    }
+    if (call.committed) this.context.commitResult({ callId: id, name: call.name, content, outcome }, event)
+    else this.emit(event)
   }
 
   /** Ends open streams and gives each of the turn's calls without a result a failed result of `outcome`. */
@@ -189,10 +217,10 @@ const finalMessage = (chunks: ReadonlyArray<AIMessageChunk>): { message: AIMessa
 }
 
 /**
- * The turn runner over a LangGraph `StateGraph` with compaction, model, tool,
- * and steering steps, checkpointed per step in the session's thread. The
- * graph runs under `Effect.promise`, whose `AbortSignal` it receives, so
- * interrupting the turn's fiber aborts it.
+ * The turn runner: a loop of model calls, their tool calls in order, and
+ * step boundaries, over the session's current checkpoint window. It runs
+ * under `Effect.promise`, whose `AbortSignal` it receives, so interrupting
+ * the turn's fiber aborts the running model call and tool calls.
  */
 export const agentRunner =
   (options: AgentOptions): TurnRunner =>
@@ -211,7 +239,7 @@ export const agentRunner =
 
 const runTurn = async (options: AgentOptions, context: TurnContext, events: TurnEvents, signal: AbortSignal): Promise<TurnOutcome> => {
   try {
-    return await runGraph(options, context, events, signal)
+    return await loop(options, context, events, signal)
   } catch (error) {
     if (signal.aborted) throw error
     events.settle("failed")
@@ -220,89 +248,52 @@ const runTurn = async (options: AgentOptions, context: TurnContext, events: Turn
   }
 }
 
-const runGraph = async (options: AgentOptions, context: TurnContext, events: TurnEvents, signal: AbortSignal): Promise<TurnOutcome> => {
+/** The model port with every call traced as an `ashe_agent.model_call` span of the turn and timed. */
+const tracedPort = (port: ModelPort, context: TurnContext): ModelPort => ({
+  stream: async function* (call, callSignal) {
+    const span = startSpan("ashe_agent.model_call", { "ashe_agent.model": call.model }, context.trace)
+    const startedAt = performance.now()
+    let failure: ErrorClass | undefined
+    try {
+      yield* port.stream(call, callSignal)
+    } catch (error) {
+      failure = callSignal.aborted ? "canceled" : error instanceof ModelCallError && error.overflow ? "context_overflow" : "model_call_failed"
+      throw error
+    } finally {
+      // Also reached when the consumer stops reading early.
+      endSpan(span, {}, failure)
+      recordDuration("ashe_agent.model_call.duration", (performance.now() - startedAt) / 1000, {
+        "ashe_agent.model": call.model,
+        ...(failure === undefined ? {} : { "error.type": failure }),
+      })
+    }
+  },
+})
+
+const loop = async (options: AgentOptions, context: TurnContext, events: TurnEvents, signal: AbortSignal): Promise<TurnOutcome> => {
   const { session, turn } = context
-  const own = { runId: turn.runId, model: turn.model }
   const model = options.models.find((candidate) => candidate.id === turn.model)
   if (model === undefined) throw new TurnFailure(`the model ${turn.model} is not configured`, "model_unavailable")
-  const overrides = session.modelOverrides[model.id]
-  const usable = checkpointWindowSize(model, overrides)
-  const settings = callSettings(model, overrides, turn.reasoningEffort)
-  const first = session.firstMessage
-  // A tool the session's rules wholly deny is not offered.
-  const available = () => (typeof options.tools === "function" ? options.tools() : options.tools).filter(context.offered)
-  // The tools of the latest model call, which its tool calls run against.
-  let tools = new Map(available().map((tool) => [tool.spec.name, tool]))
+  const settings = callSettings(model, session.modelOverrides[model.id], turn.reasoningEffort)
+  const port = tracedPort(options.port, context)
 
-  const steer = async (state: StateValue) => {
-    const steered = context.takeSteered()
-    if (steered.length === 0) return {}
-    const inputs: Array<Entry> = steered.map((input) => ({ ...own, kind: "input", text: input.text }))
-    return { window: { ...state.window, entries: [...state.window.entries, ...inputs] } }
-  }
+  for (;;) {
+    signal.throwIfAborted()
+    // The tools of this model call, which its tool calls run against.
+    const offered = context.tools()
+    const tools = new Map(offered.map((tool) => [tool.spec.name, tool]))
+    const specs = offered.map((tool) => tool.spec)
+    const issue = toolDefinitionsIssue(specs)
+    if (issue !== null) throw new TurnFailure(`the model call was not sent: ${allowanceMessage(issue)}`, "tool_definitions_over_allowance")
 
-  /**
-   * The model port with every call traced as an `ashe_agent.model_call`
-   * span of the turn and timed, the compaction summary call included.
-   */
-  const port: ModelPort = {
-    stream: async function* (call, callSignal) {
-      const span = startSpan("ashe_agent.model_call", { "ashe_agent.model": call.model }, context.trace)
-      const startedAt = performance.now()
-      let failure: ErrorClass | undefined
-      try {
-        yield* options.port.stream(call, callSignal)
-      } catch (error) {
-        failure = callSignal.aborted
-          ? "canceled"
-          : error instanceof ModelCallError && error.overflow
-            ? "context_overflow"
-            : "model_call_failed"
-        throw error
-      } finally {
-        // Also reached when the consumer stops reading early.
-        endSpan(span, {}, failure)
-        recordDuration("ashe_agent.model_call.duration", (performance.now() - startedAt) / 1000, {
-          "ashe_agent.model": call.model,
-          ...(failure === undefined ? {} : { "error.type": failure }),
-        })
-      }
-    },
-  }
-
-  const compactStep = async (state: StateValue) => {
-    if (!state.overflowed && !needsCompaction(state.window, first, turn.model, usable)) return {}
-    let compaction
-    try {
-      compaction = await compact(port, state.window, first, turn.model, signal, settings)
-    } catch (error) {
-      if (signal.aborted) throw error
-      throw new TurnFailure(`compaction failed: ${error instanceof Error ? error.message : String(error)}`, "compaction_failed")
-    }
-    if (compaction === null) {
-      if (state.overflowed) throw new TurnFailure("the conversation exceeds the model's context window and cannot be compacted", "context_overflow")
-      return {}
-    }
-    events.emit({
-      type: "COMPACTED",
-      runId: turn.runId,
-      tokensBefore: compaction.tokensBefore,
-      tokensAfter: compaction.tokensAfter,
-      promptRevision: SUMMARY_PROMPT_REVISION,
-    })
-    return { window: compaction.window, overflowed: false, retried: state.overflowed }
-  }
-
-  const modelStep = async (state: StateValue) => {
-    tools = new Map(available().map((tool) => [tool.spec.name, tool]))
+    const window = context.window()
     const chunks: Array<AIMessageChunk> = []
-    const window = state.window
     try {
       const call = {
         model: turn.model,
         instructions: REQUEST_INSTRUCTIONS,
-        messages: renderWindow(window, first, turn.model, model.imageInput),
-        tools: [...tools.values()].map((tool) => tool.spec),
+        messages: renderWindow(window.harness, window.items, turn.model, model.imageInput),
+        tools: specs,
         ...settings,
       }
       for await (const chunk of port.stream(call, signal)) {
@@ -311,122 +302,89 @@ const runGraph = async (options: AgentOptions, context: TurnContext, events: Tur
       }
     } catch (error) {
       if (signal.aborted) throw error
-      // Calls the failed model call streamed never reach the window; their events get failed results.
-      events.settle("failed")
       if (error instanceof ModelCallError && error.overflow) {
-        if (state.retried) throw new TurnFailure("the conversation exceeds the model's context window after compaction", "context_overflow")
-        return { overflowed: true }
+        throw new TurnFailure("the conversation exceeds the model's context window", "context_overflow")
       }
       throw new TurnFailure(`the model call failed: ${error instanceof Error ? error.message : String(error)}`, "model_failed")
     }
-    events.endCall()
     const { message, invalid } = finalMessage(chunks)
-    const entries: Array<Entry> = [...window.entries, { ...own, kind: "assistant", message }]
-    for (const call of message.tool_calls ?? []) events.ensureCall(call.id!, call.name)
-    for (const [id, raw] of invalid) {
-      const name = message.tool_calls!.find((call) => call.id === id)!.name
-      const content = `The arguments were not valid JSON: ${raw}`
-      events.result(id, content, "failed")
-      entries.push({ ...own, kind: "result", callId: id, name, content, outcome: "failed" })
-    }
-    const inputTokens = (message.usage_metadata as { input_tokens?: number } | undefined)?.input_tokens
-    const usage = inputTokens === undefined ? null : { model: turn.model, inputTokens, entries: state.window.entries.length }
-    return { window: { summary: state.window.summary, entries, usage }, retried: false }
-  }
+    events.commitMessage(message)
+    for (const [id, raw] of invalid) events.result(id, `The arguments were not valid JSON: ${raw}`, "failed")
 
-  const toolStep = async (state: StateValue) => {
-    const entries = [...state.window.entries]
+    const calls = (message.tool_calls ?? []).filter((call) => !invalid.has(call.id!))
+    if (calls.length === 0 && invalid.size === 0) {
+      // A step boundary after a reply without tool calls: the turn ends unless input joins it.
+      if (!context.deliver()) return { status: "finished" }
+      continue
+    }
     let stopped = false
-    for (const { callId, name, entry } of unansweredCalls(entries)) {
-      if (entry.runId !== turn.runId) continue
-      const call = (entry as Entry & { kind: "assistant" }).message.tool_calls!.find((candidate) => candidate.id === callId)!
-      let result: ToolResult
+    for (const call of calls) {
+      const callId = call.id!
       if (stopped) {
-        result = { outcome: "failed", content: unfinishedResult("canceled", false) }
-        events.result(callId, result.content, "canceled")
-        entries.push({ ...own, kind: "result", callId, name, content: result.content, outcome: "canceled" })
+        events.result(callId, unfinishedResult("canceled", false), "canceled")
         continue
       }
-      const tool = tools.get(name)
-      // A name no offered tool has is the model's text, so it is not recorded.
-      const toolName = tool === undefined ? "unknown" : name
-      const span = startSpan("ashe_agent.tool_call", { "ashe_agent.tool": toolName, "ashe_agent.tool.in_program": false }, context.trace)
-      const startedAt = performance.now()
-      const ended = (outcome: ToolOutcome) => {
-        endSpan(span, { "ashe_agent.tool.outcome": outcome }, outcome === "canceled" ? "canceled" : undefined)
-        recordDuration("ashe_agent.tool_call.duration", (performance.now() - startedAt) / 1000, {
-          "ashe_agent.tool": toolName,
-          "ashe_agent.tool.outcome": outcome,
-          "ashe_agent.tool.in_program": false,
-        })
-      }
-      if (tool === undefined) {
-        result = { outcome: "failed", content: `There is no tool named ${name}.` }
-      } else {
-        try {
-          result = await otelContext.with(withSpan(span, context.trace), () => tool.run(call.args, {
-            sessionId: session.id,
-            runId: turn.runId,
-            toolCallId: callId,
-            cwd: session.sessionDir,
-            imageInput: model.imageInput,
-            signal,
-            authorize: (check, also) => context.authorize(callId, check, also === undefined ? signal : AbortSignal.any([signal, also])),
-            started: () => events.started(callId),
-            onCancel: (note) => events.cancelNote(callId, note),
-            programCall: (tool, outcome) => events.emit({ type: "PROGRAM_CALL_FINISHED", toolCallId: callId, tool, outcome }),
-            offered: context.offered,
-          }))
-        } catch (error) {
-          if (signal.aborted) {
-            ended("canceled")
-            throw error
-          }
-          result = failedResult(error)
-        }
-      }
-      ended(result.outcome)
+      const result = await runTool(tools.get(call.name), call.name, call.args, callId, context, events, signal, model.imageInput)
+      signal.throwIfAborted()
       if (result.outcome === "declined" && result.endTurn) stopped = true
       events.result(callId, result.content, result.outcome)
-      entries.push({ ...own, kind: "result", callId, name, content: result.content, outcome: result.outcome })
     }
-    return { window: { ...state.window, entries }, stopped }
+    if (stopped) return { status: "finished" }
+    // A step boundary after the tool results.
+    context.deliver()
   }
+}
 
-  const afterModel = (state: StateValue) => {
-    if (state.overflowed) return "compact"
-    if (state.stopped) return END
-    return unansweredCalls(state.window.entries).some((call) => call.entry.runId === turn.runId) ? "tools" : "steer"
+const runTool = async (
+  tool: Tool | undefined,
+  name: string,
+  args: unknown,
+  callId: string,
+  context: TurnContext,
+  events: TurnEvents,
+  signal: AbortSignal,
+  imageInput: boolean,
+): Promise<ToolResult> => {
+  // A name no offered tool has is the model's text, so it is not recorded.
+  const toolName = tool === undefined ? "unknown" : name
+  const span = startSpan("ashe_agent.tool_call", { "ashe_agent.tool": toolName, "ashe_agent.tool.in_program": false }, context.trace)
+  const startedAt = performance.now()
+  const ended = (outcome: ToolOutcome) => {
+    endSpan(span, { "ashe_agent.tool.outcome": outcome }, outcome === "canceled" ? "canceled" : undefined)
+    recordDuration("ashe_agent.tool_call.duration", (performance.now() - startedAt) / 1000, {
+      "ashe_agent.tool": toolName,
+      "ashe_agent.tool.outcome": outcome,
+      "ashe_agent.tool.in_program": false,
+    })
   }
-  const afterTools = (state: StateValue) => (state.stopped ? END : "steer")
-  const afterSteer = (state: StateValue) => (state.window.entries.at(-1)?.kind === "assistant" ? END : "compact")
-
-  const graph = new StateGraph(State)
-    .addNode("compact", compactStep)
-    .addNode("model", modelStep)
-    .addNode("tools", toolStep)
-    .addNode("steer", steer)
-    .addEdge(START, "compact")
-    .addEdge("compact", "model")
-    .addConditionalEdges("model", afterModel, ["compact", "tools", "steer", END])
-    .addConditionalEdges("tools", afterTools, ["steer", END])
-    .addConditionalEdges("steer", afterSteer, ["compact", END])
-    .compile({ checkpointer: options.saver })
-
-  const config = { configurable: { thread_id: session.id }, signal, recursionLimit: 100_000, durability: "sync" as const }
-  const previous = (await graph.getState(config)).values as Partial<StateValue>
-  const window = previous.window ?? emptyWindow
-  const entries: Array<Entry> = [...window.entries]
-  // Calls an earlier turn left without a result get the result its events recorded, else an interrupted one.
-  for (const { callId, name, entry } of unansweredCalls(window.entries)) {
-    const recorded = context.toolResult(callId)
-    const content = recorded?.content ?? unfinishedResult("interrupted", false)
-    const outcome = recorded?.outcome ?? "interrupted"
-    if (recorded === null) events.result(callId, content, outcome)
-    entries.push({ runId: entry.runId, model: entry.model, kind: "result", callId, name, content, outcome })
+  let result: ToolResult
+  if (tool === undefined) {
+    result = { outcome: "failed", content: `There is no tool named ${name}.` }
+  } else {
+    try {
+      result = await otelContext.with(withSpan(span, context.trace), () =>
+        tool.run(args, {
+          sessionId: context.session.id,
+          runId: context.turn.runId,
+          toolCallId: callId,
+          cwd: context.session.sessionDir,
+          imageInput,
+          signal,
+          authorize: (check, also) => context.authorize(callId, check, also === undefined ? signal : AbortSignal.any([signal, also])),
+          started: () => events.started(callId),
+          onCancel: (note) => events.cancelNote(callId, note),
+          programCall: (program, outcome) => events.emit({ type: "PROGRAM_CALL_FINISHED", toolCallId: callId, tool: program, outcome }),
+          offered: context.offered,
+        }),
+      )
+    } catch (error) {
+      if (signal.aborted) {
+        ended("canceled")
+        throw error
+      }
+      result = failedResult(error)
+    }
   }
-  for (const note of context.notes) entries.push({ ...own, kind: "note", text: note })
-  entries.push({ ...own, kind: "input", text: context.input.text })
-  await graph.invoke({ window: { ...window, entries }, overflowed: false, retried: false, stopped: false }, config)
-  return { status: "finished" }
+  ended(result.outcome)
+  return result
 }

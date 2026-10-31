@@ -85,7 +85,6 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
     const [
       { responsesModelPort },
       { agentRunner },
-      { SqliteCheckpointSaver },
       { ShellProcesses },
       { builtinTools },
       { McpRegistry },
@@ -94,7 +93,6 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
     ] = await Promise.all([
       import("./agent/model.ts"),
       import("./agent/runner.ts"),
-      import("./store/checkpointer.ts"),
       import("./tools/shell/index.ts"),
       import("./tools/builtin.ts"),
       import("./tools/mcp/servers.ts"),
@@ -153,20 +151,19 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
             skillRoots: inputs.skillRoots,
             codeMode: sessionCodeModeCatalog(() => mcp.tools(false)),
           }),
+          tools,
           permission: inputs.permission,
           home: sources.dirs.home,
-          runner: (db) =>
-            agentRunner({
-              port: responsesModelPort((id) => {
-                const model = models.find((candidate) => candidate.id === id)
-                const key = model === undefined ? undefined : apiKeys.get(model.provider)
-                if (model === undefined || key === undefined) return undefined
-                return { baseURL: inputs.providers[model.provider]!.baseURL, apiKey: Redacted.value(key), upstream: model.upstream }
-              }),
-              tools,
-              saver: new SqliteCheckpointSaver(db),
-              models,
+          userTimeZone: inputs.userTimeZone,
+          runner: agentRunner({
+            port: responsesModelPort((id) => {
+              const model = models.find((candidate) => candidate.id === id)
+              const key = model === undefined ? undefined : apiKeys.get(model.provider)
+              if (model === undefined || key === undefined) return undefined
+              return { baseURL: inputs.providers[model.provider]!.baseURL, apiKey: Redacted.value(key), upstream: model.upstream }
             }),
+            models,
+          }),
         }),
       ),
       Layer.provide(Store.layer(databasePath(inputs.stateDir))),

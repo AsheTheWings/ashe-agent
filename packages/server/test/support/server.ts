@@ -50,8 +50,19 @@ export class ScriptedRunner {
 
   readonly runner: TurnRunner = (context) => {
     const self = this
+    // The user messages the turn holds: its starting input's, then those steered in at each delivery.
+    const users = () =>
+      context.window().items.flatMap((item) => (item.kind === "user" && item.runId === context.turn.runId ? [item] : []))
+    let seen = users().length
+    const takeSteered = () => {
+      context.deliver()
+      const all = users()
+      const fresh = all.slice(seen)
+      seen = all.length
+      return fresh
+    }
     return Effect.gen(function* () {
-      const text = context.input.text
+      const text = users()[0]?.text ?? ""
       self.started.push(text)
       const say = (message: string) => {
         const messageId = crypto.randomUUID()
@@ -72,11 +83,11 @@ export class ScriptedRunner {
       }
       const gate = self.gate(text)
       for (;;) {
-        for (const steered of context.takeSteered()) say(`steered: ${steered.text}`)
+        for (const steered of takeSteered()) say(`steered: ${steered.text}`)
         if (yield* Deferred.isDone(gate)) break
         yield* Effect.sleep("10 millis")
       }
-      for (const steered of context.takeSteered()) say(`steered: ${steered.text}`)
+      for (const steered of takeSteered()) say(`steered: ${steered.text}`)
       if (text.startsWith("hold")) {
         self.pastLastBoundary.add(text)
         yield* Deferred.await(self.gate(`${text} end`))
@@ -120,7 +131,7 @@ export class TestServer {
         Sessions.layer({
           models,
           defaultModel: models[0]!.id,
-          runner: () => this.script.runner,
+          runner: this.script.runner,
           setup: noAgents,
           permission: this.permission,
           home: this.dir,
