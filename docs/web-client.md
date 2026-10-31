@@ -8,11 +8,10 @@ endpoint.
 ## Run and build
 
 ```sh
-cd packages/web
-bun run dev
+bun run dev:web
 ```
 
-serves the client for development on `127.0.0.1`, on Vite's port. The
+from the repository root serves the client for development on `127.0.0.1`, on Vite's port. The
 server accepts a browser connection only from an origin that
 `ASHE_AGENT_ORIGINS` lists, so that input must name the origin the
 client is served from; see [configuration](configuration.md).
