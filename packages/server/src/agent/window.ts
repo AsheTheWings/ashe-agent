@@ -1,5 +1,6 @@
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages"
 import { block, userBlock, developerBlock, escapeTags } from "./blocks.ts"
+import { estimateTokens, IMAGE_TOKENS } from "../context/constants.ts"
 
 export type ToolContentPart =
   | { readonly type: "text"; readonly text: string }
@@ -195,9 +196,7 @@ export const renderWindow = (window: Window, first: string, model: string, image
 }
 
 /** A rough token count of text: four characters per token. */
-export const estimateText = (text: string) => Math.ceil(text.length / 4)
-
-const IMAGE_TOKENS = 1_500
+export const estimateText = estimateTokens
 
 /** A rough token count of one entry as a model call carries it. */
 export const estimateEntry = (entry: Entry): number => {

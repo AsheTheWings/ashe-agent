@@ -27,6 +27,7 @@
  */
 
 import { searchSignature } from "@ashe-agent/codemode"
+import { CHARACTERS_PER_TOKEN, CODE_MODE_CATALOG_ALLOWANCE } from "../../context/constants.ts"
 
 /** A callable tool of the code mode inventory: its path under `tools`, description, and signature. */
 export interface CatalogTool {
@@ -53,9 +54,8 @@ export interface CatalogSummary {
   readonly namespaces: ReadonlyArray<NamespaceSummary>
 }
 
-/** The catalog's budget, in tokens estimated at 4 characters each. */
-export const CATALOG_BUDGET = 4_000
-const CHARACTERS_PER_TOKEN = 4
+/** The catalog's budget, in estimated tokens: the seed's code mode catalog allowance. */
+export const CATALOG_BUDGET = CODE_MODE_CATALOG_ALLOWANCE
 const DESCRIPTION_LIMIT = 120
 
 const byCodePoint = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0)
