@@ -16,6 +16,10 @@
     "test:conformance": "bun scripts/task.ts test:conformance",
     "test:test262": "bun scripts/task.ts test:test262",
     "build:web": "bun scripts/task.ts build:web",
+    "build:binary": "bun scripts/task.ts build:binary",
+    "bundle": "bun scripts/task.ts bundle",
+    "test:qualification": "bun scripts/task.ts test:qualification",
+    "release-gate": "bun scripts/task.ts release-gate",
     "generate": "bun scripts/task.ts generate"
   },
   "devDependencies": {
