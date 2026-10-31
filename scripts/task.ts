@@ -2,9 +2,9 @@
  * Runs the repository's tasks under the pinned Bun, refusing any other
  * version, and runs tests with an explicit environment allowlist.
  */
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { dirname, isAbsolute, join } from "node:path"
 
 const root = join(import.meta.dir, "..")
 const pinned = (await Bun.file(join(root, ".bun-version")).text()).trim()
@@ -14,7 +14,7 @@ if (Bun.version !== pinned) {
   process.exit(1)
 }
 
-const testClasses = ["unit", "component", "integration", "conformance"] as const
+const testClasses = ["unit", "component", "integration", "conformance", "qualification"] as const
 type TestClass = (typeof testClasses)[number]
 
 const run = async (command: ReadonlyArray<string>, env?: Record<string, string>) => {
@@ -48,7 +48,7 @@ const testSeed = (): string => {
   return given ?? String(Math.floor(Math.random() * 2 ** 31))
 }
 
-const test = async (testClass: TestClass) => {
+const test = async (testClass: TestClass, inputs: Record<string, string> = {}) => {
   const seed = testSeed()
   process.stdout.write(`\n== ${testClass} tests (seed ${seed}) ==\n`)
   const home = mkdtempSync(join(tmpdir(), "ashe-agent-test-home-"))
@@ -63,7 +63,7 @@ const test = async (testClass: TestClass) => {
         "--path-ignore-patterns=packages/codemode/test/test262.integration.test.ts",
         `.${testClass}.test.ts`,
       ],
-      testEnvironment(home),
+      { ...testEnvironment(home), ...inputs },
     )
     if (code !== 0 || testClass !== "integration") return code
     process.stdout.write("\n== integration tests under Vitest ==\n")
@@ -73,7 +73,6 @@ const test = async (testClass: TestClass) => {
   }
 }
 
-/** Typechecks the workspace, then `packages/codemode` under the compiler options it was written for. */
 /**
  * Fetches tc39/test262 at the revision packages/codemode pins, copies its selection into a
  * run-owned corpus, and runs code mode's test262 suite over it.
@@ -123,19 +122,88 @@ const typecheck = async () => {
   return code !== 0 ? code : await run([tsc, "-p", "packages/web/tsconfig.json"])
 }
 
+const git = (...args: Array<string>) => Bun.spawnSync(["git", ...args], { cwd: root }).stdout.toString().trim()
+
 /**
- * Builds the web client from the checked-out commit, stamping its revision;
- * a worktree with changes would build something no commit holds, so it is refused.
+ * The checked-out commit, which builds stamp into what they build; a
+ * worktree with changes would build something no commit holds, so it is
+ * refused.
  */
+const cleanRevision = (): string | null => {
+  if (git("status", "--porcelain") !== "") {
+    process.stderr.write("builds stamp the commit they are built from; commit or set aside the changes first\n")
+    return null
+  }
+  return git("rev-parse", "HEAD")
+}
+
+const dist = join(root, "dist")
+const bundleName = "ashe-agent-linux-x64.tar"
+
+/** Builds the web client into `packages/web/dist`, stamping its revision. */
 const buildWeb = async () => {
   process.stdout.write("\n== web build ==\n")
-  const git = (...args: Array<string>) => Bun.spawnSync(["git", ...args], { cwd: root }).stdout.toString().trim()
-  if (git("status", "--porcelain") !== "") {
-    process.stderr.write("the web build stamps the commit it is built from; commit or set aside the changes first\n")
+  const revision = cleanRevision()
+  if (revision === null) return 1
+  return await run([process.execPath, join(root, "packages/web/scripts/build.ts"), revision])
+}
+
+/** Compiles the server and its commands into one linux-x64 executable at `dist/bin/ashe-agent`. */
+const buildBinary = async () => {
+  process.stdout.write("\n== binary build ==\n")
+  const revision = cleanRevision()
+  if (revision === null) return 1
+  return await run([
+    process.execPath,
+    "build",
+    "--compile",
+    "--target=bun-linux-x64",
+    "--define",
+    `ASHE_AGENT_REVISION=${JSON.stringify(revision)}`,
+    join(root, "packages/server/src/main.ts"),
+    "--outfile",
+    join(dist, "bundle/bin/ashe-agent"),
+  ])
+}
+
+/**
+ * Builds the binary and the web client and packages them, as `bin/ashe-agent`
+ * and `web/`, into `dist/ashe-agent-linux-x64.tar`, with entries in name
+ * order, owned by root, and dated at the commit.
+ */
+const bundle = async () => {
+  rmSync(dist, { recursive: true, force: true })
+  const built = await steps([buildBinary, buildWeb])
+  if (built !== 0) return built
+  process.stdout.write("\n== bundle ==\n")
+  const staging = join(dist, "bundle")
+  cpSync(join(root, "packages/web/dist"), join(staging, "web"), { recursive: true })
+  const committed = git("log", "-1", "--format=%ct")
+  const tar = ["tar", "--sort=name", "--owner=0", "--group=0", "--numeric-owner", `--mtime=@${committed}`]
+  return await run([...tar, "-C", staging, "-cf", join(dist, bundleName), "bin", "web"])
+}
+
+/** Qualifies the bundle at the given path, by default the one `bundle` wrote. */
+const qualification = async () => {
+  const given = process.argv[3] ?? join(dist, bundleName)
+  const path = isAbsolute(given) ? given : join(process.cwd(), given)
+  if (!existsSync(path)) {
+    process.stderr.write(`no bundle at ${path}; run bun run bundle first\n`)
     return 1
   }
-  return await run([process.execPath, join(root, "packages/web/scripts/build.ts"), git("rev-parse", "HEAD")])
+  return await test("qualification", { ASHE_AGENT_QUALIFICATION_BUNDLE: path })
 }
+
+const steps = async (all: ReadonlyArray<() => Promise<number>>) => {
+  for (const step of all) {
+    const code = await step()
+    if (code !== 0) return code
+  }
+  return 0
+}
+
+/** The fast gate: typecheck, then the unit, component, and conformance tests. */
+const gate = () => steps([typecheck, () => test("unit"), () => test("component"), () => test("conformance")])
 
 const tasks: Record<string, () => Promise<number>> = {
   typecheck,
@@ -145,14 +213,13 @@ const tasks: Record<string, () => Promise<number>> = {
   "test:conformance": () => test("conformance"),
   "test:test262": test262,
   "build:web": buildWeb,
+  "build:binary": buildBinary,
+  bundle,
+  "test:qualification": qualification,
   generate: () => run([process.execPath, join(root, "scripts/generate.ts")]),
-  gate: async () => {
-    for (const step of [typecheck, () => test("unit"), () => test("component"), () => test("conformance")]) {
-      const code = await step()
-      if (code !== 0) return code
-    }
-    return 0
-  },
+  gate,
+  /** The gate a release needs: the fast gate, then the bundle built and qualified. */
+  "release-gate": () => steps([gate, bundle, qualification]),
 }
 
 const name = process.argv[2] ?? ""

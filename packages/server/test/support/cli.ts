@@ -16,14 +16,21 @@ export const waitFor = async <A>(what: string, check: () => A | undefined | Prom
   }
 }
 
-/** A run-owned state directory, inputs, and the `ashe-agent` CLI run against them. */
+/**
+ * A run-owned state directory, inputs, and the `ashe-agent` CLI run
+ * against them, from inside the run's directory: from source by default,
+ * or the given command, such as a built binary.
+ */
 export class CliRun {
   readonly dir = mkdtempSync(join(tmpdir(), "ashe-agent-cli-"))
   readonly stateDir = join(this.dir, "state")
   readonly env: Record<string, string>
   private readonly servers: Array<Subprocess> = []
 
-  constructor(extraEnv: Record<string, string> = {}) {
+  constructor(
+    extraEnv: Record<string, string> = {},
+    private readonly command: ReadonlyArray<string> = [process.execPath, main],
+  ) {
     mkdirSync(this.stateDir)
     const keyFile = join(this.dir, "model-api-key")
     writeFileSync(keyFile, "sk-synthetic-test-key")
@@ -50,8 +57,9 @@ export class CliRun {
   }
 
   async run(args: ReadonlyArray<string>, options: { stdin?: string; env?: Record<string, string> } = {}) {
-    const child = Bun.spawn([process.execPath, main, ...args], {
+    const child = Bun.spawn([...this.command, ...args], {
       env: { ...this.env, ...options.env },
+      cwd: this.dir,
       stdin: options.stdin === undefined ? "ignore" : new TextEncoder().encode(options.stdin),
       stdout: "pipe",
       stderr: "pipe",
@@ -75,7 +83,7 @@ export class CliRun {
 
   /** Starts `serve` and returns the WebSocket URL it prints. */
   async serve(): Promise<string> {
-    const child = Bun.spawn([process.execPath, main, "serve"], { env: this.env, stdout: "pipe", stderr: "inherit" })
+    const child = Bun.spawn([...this.command, "serve"], { env: this.env, cwd: this.dir, stdout: "pipe", stderr: "inherit" })
     this.servers.push(child)
     const reader = child.stdout.getReader()
     let output = ""

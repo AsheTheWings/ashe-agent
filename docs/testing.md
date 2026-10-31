@@ -2,7 +2,9 @@
 
 Tests run on `bun test` under the pinned Bun. Every test command runs the
 tests with only `PATH`, a temporary `HOME`, `TMPDIR`, `LANG`, and `TZ` in
-their environment, so no developer or production input reaches them.
+their environment, so no developer or production input reaches them;
+`bun run test:qualification` adds only the path of the bundle it
+qualifies.
 
 ## Fast gate
 
@@ -20,6 +22,7 @@ A test's class is the suffix of its file name.
 | component | `.component.test.ts` | `bun run test:component` | the session hub and agent loop in the test's process, with a fake model port and fake tools, on a SQLite file in the test's own temporary directory; code mode programs in the interpreter, in the test's process; the web client's session client over a scripted fake server behind its socket port |
 | integration | `.integration.test.ts`, `.integration.vitest.ts` | `bun run test:integration` | real SQLite files, `ashe-agent` and bash processes, WebSocket connections, and fake upstream APIs on loopback ports that the test creates, with files in its own temporary directory |
 | conformance | `.conformance.test.ts` | `bun run test:conformance` | read-only checks that generated files, pins, and versions match their sources |
+| qualification | `.qualification.test.ts` | `bun run test:qualification [<bundle>]` | the binary and web build of a built bundle, extracted into the test's own directory; the binary runs as the server against a run-owned state directory and a fake Responses API on a loopback port |
 
 The `.integration.vitest.ts` files run LangGraph's checkpoint saver
 validation suite, which is written for Vitest; `bun run test:integration`
@@ -36,9 +39,23 @@ stays out of the fast gate; CI runs it after the integration tests.
 
 `bun run typecheck` runs the TypeScript checker alone, over the workspace
 and then over the web client's browser sources with their own config.
-CI runs `bun run build:web` last; see [web client](web-client.md).
 
 Each test command prints the seed of its randomized tests, which also
 appears in their names. Setting `ASHE_AGENT_TEST_SEED` to it for a test
 command reruns them with the same values; the command gives the seed to
 the tests as a build-time constant, not through their environment.
+
+## Bundle and release gate
+
+`bun run bundle` builds, from a worktree without changes, the server as
+one `bun build --compile` executable for linux-x64 and the web client's
+production build (see [web client](web-client.md)), both stamped with the
+commit, and packages them as `bin/ashe-agent` and `web/` into
+`dist/ashe-agent-linux-x64.tar`. `bun run test:qualification` qualifies
+that file, or the bundle it is given: it checks that `web/` holds
+`index.html` and a `revision.txt` equal to the binary's `--version`, then
+migrates, sets a password, signs in over WebSocket, and runs a turn with
+a shell command and a `file_read` of a docx.
+
+`bun run release-gate` is the release gate: the fast gate, then the
+bundle built and qualified.
