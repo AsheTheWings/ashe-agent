@@ -16,7 +16,7 @@ with status 1.
 | `token create <name>` | Creates an API token and prints it once. |
 | `token list` | Lists active API tokens with their creation and last use. |
 | `token revoke <name>` | Revokes an API token and closes its connections. |
-| `--version` | Prints the revision the command was built from. |
+| `--version` | Prints `AsheAgent` and the revision the command was built from. |
 
 `serve`, `db dump`, `owner set-password`, and the `token` commands refuse
 to run until `migrate` has applied every migration, and `serve` also
