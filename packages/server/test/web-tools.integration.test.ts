@@ -50,6 +50,7 @@ const call = (tool: Tool, args: unknown) => {
     started: () => {},
     onCancel: () => {},
     programCall: () => {},
+    offered: () => true,
   }
   return tool.run(args, run)
 }

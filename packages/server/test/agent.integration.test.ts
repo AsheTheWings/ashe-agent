@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { HumanMessage } from "@langchain/core/messages"
 import { REQUEST_INSTRUCTIONS } from "../src/agent/blocks.ts"
 import { ModelCallError, responsesModelPort } from "../src/agent/model.ts"
-import { AgentHarness, agentModels } from "./support/agent.ts"
+import { AgentHarness, configuredModel } from "./support/agent.ts"
 
 type Captured = { readonly path: string; readonly authorization: string | null; readonly body: Record<string, any> }
 
@@ -58,7 +58,9 @@ const stream = (events: ReadonlyArray<Record<string, unknown>>) => () => new Res
 describe("the Responses model port", () => {
   test("a turn's calls reach the configured endpoint with the fixed instructions and the protocol's own tool items", async () => {
     const api = fakeResponsesApi([stream(toolReply), stream(textReply)])
-    const harness = new AgentHarness({ port: responsesModelPort({ baseUrl: api.baseUrl, apiKey: "synthetic-key" }) })
+    const models = [configuredModel("test/alpha", { efforts: ["low", "high"], settings: { reasoningEffort: "high" } })]
+    const endpoint = (id: string) => (id === "test/alpha" ? { baseURL: api.baseUrl, apiKey: "synthetic-key", upstream: "alpha" } : undefined)
+    const harness = new AgentHarness({ port: responsesModelPort(endpoint), models })
     try {
       const id = harness.create()
       harness.input(id, "hello")
@@ -69,7 +71,9 @@ describe("the Responses model port", () => {
       expect(api.captured.map((request) => request.path)).toEqual(["/v1/responses", "/v1/responses"])
       for (const { authorization, body } of api.captured) {
         expect(authorization).toBe("Bearer synthetic-key")
-        expect(body).toMatchObject({ model: agentModels[0]!.id, instructions: REQUEST_INSTRUCTIONS, store: false, stream: true })
+        // The provider receives its own model id, and the reasoning field goes in the body whatever the model's name.
+        expect(body).toMatchObject({ model: "alpha", instructions: REQUEST_INSTRUCTIONS, store: false, stream: true })
+        expect(body.reasoning).toEqual({ effort: "high", summary: "auto" })
         expect(body.include).toEqual(["reasoning.encrypted_content"])
         expect(body.tools.map((tool: any) => [tool.type, tool.name])).toEqual([
           ["function", "echo"],
@@ -102,8 +106,8 @@ describe("the Responses model port", () => {
         ),
     ])
     try {
-      const port = responsesModelPort({ baseUrl: api.baseUrl, apiKey: "synthetic-key" })
-      const call = { model: "m", instructions: REQUEST_INSTRUCTIONS, messages: [new HumanMessage("hi")], tools: [] }
+      const port = responsesModelPort(() => ({ baseURL: api.baseUrl, apiKey: "synthetic-key", upstream: "m" }))
+      const call = { model: "p/m", instructions: REQUEST_INSTRUCTIONS, messages: [new HumanMessage("hi")], tools: [] }
       let failure: unknown
       try {
         for await (const _ of port.stream(call, new AbortController().signal)) {

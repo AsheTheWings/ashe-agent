@@ -5,6 +5,9 @@ import m0004 from "../../migrations/0004_turn_windows.sql" with { type: "text" }
 import m0005 from "../../migrations/0005_session_grants.sql" with { type: "text" }
 import m0006 from "../../migrations/0006_agent_settings.sql" with { type: "text" }
 import m0007 from "../../migrations/0007_session_directories.sql" with { type: "text" }
+import m0008 from "../../migrations/0008_session_data.sql" with { type: "text" }
+import m0009 from "../../migrations/0009_session_agents.sql" with { type: "text" }
+import m0010 from "../../migrations/0010_reasoning_efforts.sql" with { type: "text" }
 
 /**
  * The migration directory `packages/server/migrations`, embedded so a
@@ -19,4 +22,7 @@ export const migrationFiles: ReadonlyArray<{ readonly file: string; readonly sql
   { file: "0005_session_grants.sql", sql: m0005 },
   { file: "0006_agent_settings.sql", sql: m0006 },
   { file: "0007_session_directories.sql", sql: m0007 },
+  { file: "0008_session_data.sql", sql: m0008 },
+  { file: "0009_session_agents.sql", sql: m0009 },
+  { file: "0010_reasoning_efforts.sql", sql: m0010 },
 ]

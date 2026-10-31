@@ -7,10 +7,11 @@
 import { CodeMode, Tool as CodeModeTool, toolError, type ToolError } from "@ashe-agent/codemode"
 import { context as otelContext, type Context as TraceContext } from "@opentelemetry/api"
 import { Deferred, Effect, Option, Schema } from "effect"
-import { builtinTool, failedResult, type Tool, type ToolResult, type ToolRun } from "../../agent/tools.ts"
+import { builtinTool, failedResult, withholdingName, type Tool, type ToolResult, type ToolRun } from "../../agent/tools.ts"
 import type { ToolContentPart, ToolOutcome } from "../../agent/window.ts"
 import { endSpan, recordDuration, startSpan } from "../../telemetry/signals.ts"
-import type { CatalogTool } from "./catalog.ts"
+import { whollyDenied, type Rule } from "../../permissions/rules.ts"
+import { renderCatalog, type CatalogTool } from "./catalog.ts"
 
 /** Limits on each program, as the code mode limits input names them. */
 export interface CodeModeLimits {
@@ -122,12 +123,26 @@ export const catalogTools = (inventory: ReadonlyArray<Tool>): ReadonlyArray<Cata
   CodeMode.make({ tools: programTools(inventory, null) }).catalog
 
 /**
+ * The code mode catalog of a session with `rules`, over the tools
+ * `inventory` gives: null when the rules wholly deny `execute`, and
+ * without the tools they wholly deny.
+ */
+export const sessionCodeModeCatalog =
+  (inventory: () => ReadonlyArray<Tool>) =>
+  (rules: ReadonlyArray<Rule>): string | null =>
+    whollyDenied(rules, "execute")
+      ? null
+      : renderCatalog(catalogTools(inventory().filter((tool) => !whollyDenied(rules, withholdingName(tool)))))
+
+/**
  * `execute`: runs a code mode program over the tools `inventory` gives at
- * the call, under the `execute` permission by `*` and `limits`.
+ * the call that the session's rules leave offered, under the `execute`
+ * permission by `*` and `limits`.
  */
 export const executeTool = (inventory: () => ReadonlyArray<Tool>, limits: CodeModeLimits): Tool =>
   builtinTool({
     name: "execute",
+    permission: "execute",
     description,
     args: CodeMode.Input,
     prepare: () => ({ check: { permission: "execute", subjects: ["*"], patterns: ["*"] }, plan: undefined }),
@@ -136,7 +151,7 @@ export const executeTool = (inventory: () => ReadonlyArray<Tool>, limits: CodeMo
       const program = Effect.gen(function* () {
         const execution: Execution = { run, images: [], calls: 0, declined: yield* Deferred.make<string>(), trace }
         const runtime = CodeMode.make({
-          tools: programTools(inventory(), execution),
+          tools: programTools(inventory().filter(run.offered), execution),
           limits: {
             ...(limits.wallClockMs === undefined ? {} : { timeoutMs: limits.wallClockMs }),
             ...(limits.toolCalls === undefined ? {} : { maxToolCalls: limits.toolCalls }),

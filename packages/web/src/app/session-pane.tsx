@@ -31,7 +31,7 @@ const ModelSwitch = () => {
       <SelectContent>
         {models.map((choice) => (
           <SelectItem key={choice.id} value={choice.id}>
-            {choice.id}
+            {choice.name}
           </SelectItem>
         ))}
       </SelectContent>

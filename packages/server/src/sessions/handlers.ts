@@ -19,10 +19,13 @@ export const sessionHandlers = (hub: SessionHub) => {
   }
 
   const handlers: Handlers = {
-    "models.list": async () => ({ models: [...hub.models()] }),
+    "models.list": async () => {
+      const { models, defaultModel } = hub.models()
+      return { models: [...models], defaultModel }
+    },
     "agents.list": async () => {
-      const { agents, refused } = hub.agents()
-      return { agents: [...agents], refused: [...refused] }
+      const { agents, defaultAgent } = hub.agents()
+      return { agents: [...agents], defaultAgent }
     },
     "session.list": async () => ({ sessions: [...hub.list()] }),
     "session.create": async (params) => ({ session: hub.create(params) }),
@@ -61,7 +64,7 @@ export const sessionHandlers = (hub: SessionHub) => {
       return {}
     },
     "session.setModel": async (params, context) => {
-      hub.setModel(params.sessionId, params.model, context.principal)
+      hub.setModel(params.sessionId, params.model, params.reasoningEffort, context.principal)
       return {}
     },
     "session.fork": async (params) => ({ session: hub.fork(params.sessionId, params.runId) }),

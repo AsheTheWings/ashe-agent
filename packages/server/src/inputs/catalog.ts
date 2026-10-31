@@ -1,17 +1,21 @@
 import { Schema } from "effect"
 import {
   AbsolutePath,
+  Agents,
+  AuxiliaryModels,
   CodeModeLimits,
   ExporterSelection,
   HttpUrl,
   McpServers,
-  Models,
+  ModelId,
   Origin,
   OtlpProtocol,
   Permission,
   Port,
   PositiveInt,
   Profile,
+  Providers,
+  TimeZone,
 } from "./shapes.ts"
 
 /** The processes an entry point can start; each validates only its own inputs. */
@@ -22,6 +26,7 @@ export interface Dirs {
   readonly home: string
   readonly configHome: string
   readonly stateHome: string
+  readonly cacheHome: string
 }
 
 interface Base<S extends Schema.Top> {
@@ -110,37 +115,30 @@ export const catalog = {
     processes: serve,
     defaults: { development: () => 7420 },
   }),
-  modelBaseUrl: configuration({
-    description: "Base URL of the OpenAI Responses API the model calls go to.",
-    env: "ASHE_AGENT_MODEL_BASE_URL",
-    codec: "string",
-    schema: HttpUrl,
-    processes: serve,
-    defaults: { development: () => "http://127.0.0.1:8317/v1" },
-  }),
-  modelApiKeyFile: configuration({
-    description: "Path of the protected file holding the model API key.",
-    env: "ASHE_AGENT_MODEL_API_KEY_FILE",
-    codec: "string",
-    schema: AbsolutePath,
-    processes: serve,
-    defaults: {},
-  }),
-  modelApiKey: {
-    class: "protected",
-    description: "API key sent to the model endpoint.",
-    file: "modelApiKeyFile",
-    schema: Schema.String,
-    processes: serve,
-  } satisfies ProtectedInput<typeof Schema.String>,
-  models: configuration({
+  providers: configuration({
     description:
-      "Models sessions may use, the first being the default, each with its id, context window, and image input.",
-    env: "ASHE_AGENT_MODELS",
+      "OpenAI Responses endpoints by provider id, each with its base URL, the protected file of its API key, and its models by upstream model id.",
+    env: "ASHE_AGENT_PROVIDERS",
     codec: "json",
-    schema: Models,
+    schema: Providers,
     processes: serve,
     defaults: {},
+  }),
+  defaultModel: configuration({
+    description: "The <provider>/<model> id sessions start with when neither the request nor the agent names a model.",
+    env: "ASHE_AGENT_DEFAULT_MODEL",
+    codec: "string",
+    schema: ModelId,
+    processes: serve,
+    defaults: {},
+  }),
+  auxiliaryModels: configuration({
+    description: "Optional <provider>/<model> ids for the handoff, compaction, and research tasks.",
+    env: "ASHE_AGENT_AUXILIARY_MODELS",
+    codec: "json",
+    schema: AuxiliaryModels,
+    processes: serve,
+    defaults: both(() => ({})),
   }),
   origins: configuration({
     description: "Browser origins allowed to open a WebSocket connection.",
@@ -191,20 +189,52 @@ export const catalog = {
     defaults: both(() => 64),
   }),
   instructionsFile: configuration({
-    description: "Global instructions file recorded into sessions without an agent.",
+    description: "Global instructions file, the user instructions of sessions whose agent has no title file.",
     env: "ASHE_AGENT_INSTRUCTIONS_FILE",
     codec: "string",
     schema: AbsolutePath,
     processes: serve,
     defaults: both((dirs) => `${dirs.configHome}/ashe-agent/AGENTS.md`),
   }),
-  agentsDir: configuration({
-    description: "Directory of agent files.",
-    env: "ASHE_AGENT_AGENTS_DIR",
+  agents: configuration({
+    description: "Agents by title, each with an optional starting model, per-model setting overrides, and permission rules.",
+    env: "ASHE_AGENT_AGENTS",
+    codec: "json",
+    schema: Agents,
+    processes: serve,
+    defaults: both(() => ({})),
+  }),
+  defaultAgent: configuration({
+    description: "Optional title of the agent sessions created without one run as.",
+    env: "ASHE_AGENT_DEFAULT_AGENT",
+    codec: "string",
+    schema: Schema.NullOr(Schema.NonEmptyString),
+    processes: serve,
+    defaults: both(() => null),
+  }),
+  titlesDir: configuration({
+    description: "Directory of title files, <title>.md, holding each agent's description and user instructions.",
+    env: "ASHE_AGENT_TITLES_DIR",
     codec: "string",
     schema: AbsolutePath,
     processes: serve,
-    defaults: both((dirs) => `${dirs.configHome}/ashe-agent/agents`),
+    defaults: both((dirs) => `${dirs.configHome}/ashe-agent/titles`),
+  }),
+  scratchRoot: configuration({
+    description: "Directory holding each session's scratch directory, for reproducible and disposable files.",
+    env: "ASHE_AGENT_SCRATCH_ROOT",
+    codec: "string",
+    schema: AbsolutePath,
+    processes: serve,
+    defaults: both((dirs) => `${dirs.cacheHome}/ashe-agent/scratch`),
+  }),
+  userTimeZone: configuration({
+    description: "The user's IANA time zone, in which session facts give the user's date.",
+    env: "ASHE_AGENT_USER_TIME_ZONE",
+    codec: "string",
+    schema: TimeZone,
+    processes: serve,
+    defaults: { development: () => "UTC" },
   }),
   skillRoots: configuration({
     description: "Directories searched for skills, the first winning a duplicate name.",

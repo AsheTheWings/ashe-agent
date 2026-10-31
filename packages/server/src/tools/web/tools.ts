@@ -89,6 +89,7 @@ export const webTools = (exa: ExaClient): ReadonlyArray<Tool> => [
   builtinTool({
     namespace: "web",
     name: "search",
+    permission: "web",
     description:
       "Search the web for any topic and get clean, ready-to-use content. Use web_fetch on promising URLs when highlights are insufficient.",
     args: SearchArgs,
@@ -117,6 +118,7 @@ export const webTools = (exa: ExaClient): ReadonlyArray<Tool> => [
   builtinTool({
     namespace: "web",
     name: "fetch",
+    permission: "web",
     description:
       "Read one or more webpages as clean Markdown. Use after web_search when highlights are insufficient or when the URLs are already known.",
     args: FetchArgs,

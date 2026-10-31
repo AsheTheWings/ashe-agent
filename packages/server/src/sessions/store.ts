@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite"
 import { join } from "node:path"
 import type { SessionEvent, SessionEventBody, SessionSummary } from "@ashe-agent/protocol"
-import type { AgentSettings } from "../agents/agents.ts"
+import type { ModelOverrides, Permission } from "../inputs/shapes.ts"
 import { copyThread, latestCheckpointId, truncateThread } from "../store/checkpoint-threads.ts"
 
 export type TurnStatus = "running" | "finished" | "cancelled" | "failed" | "interrupted"
@@ -16,11 +16,15 @@ export interface SessionRecord {
   readonly id: string
   /** The session's own directory under the sessions directory, its starting working directory. */
   readonly sessionDir: string
+  /** The title of the session's agent, or null for the implicit agent. */
   readonly agent: string | null
   readonly model: string
-  readonly instructions: string | null
-  /** The agent's settings as recorded at creation. */
-  readonly agentSettings: AgentSettings
+  /** The reasoning effort selected for the model, or null for its default. */
+  readonly reasoningEffort: string | null
+  /** The agent's model setting overrides, by model id, as recorded at creation. */
+  readonly modelOverrides: Readonly<Record<string, ModelOverrides>>
+  /** The agent's permission rules as recorded at creation, or null without any. */
+  readonly permission: Permission | null
   readonly createdAt: number
   readonly nextSeq: number
   /** The first message of every model call, rendered at creation. */
@@ -37,6 +41,8 @@ export interface TurnRecord {
   readonly inputId: string
   readonly inputText: string
   readonly model: string
+  /** The session's reasoning effort selection when the turn started. */
+  readonly reasoningEffort: string | null
   readonly status: TurnStatus
   readonly firstSeq: number
   /** The fork and rewind notes the turn delivered, which a rewind of it delivers again; catalog notes are derived anew. */
@@ -49,10 +55,11 @@ export interface TurnRecord {
 
 interface SessionRow {
   id: string
-  agent: string | null
+  agent_key: string | null
   model: string
-  instructions: string | null
-  agent_settings: string
+  reasoning_effort: string | null
+  model_overrides: string
+  permission: string | null
   created_at: number
   next_seq: number
   first_message: string
@@ -60,19 +67,14 @@ interface SessionRow {
   pending_notes: string
 }
 
-/** The agent settings a session row records, by field, ignoring any other key the JSON holds. */
-const agentSettingsOf = (json: string): AgentSettings => {
-  const recorded = JSON.parse(json) as Partial<AgentSettings>
-  return { temperature: recorded.temperature ?? null, permission: recorded.permission ?? null }
-}
-
 const toSession = (row: SessionRow, sessionsDir: string): SessionRecord => ({
   id: row.id,
   sessionDir: join(sessionsDir, row.id),
-  agent: row.agent,
+  agent: row.agent_key,
   model: row.model,
-  instructions: row.instructions,
-  agentSettings: agentSettingsOf(row.agent_settings),
+  reasoningEffort: row.reasoning_effort,
+  modelOverrides: JSON.parse(row.model_overrides),
+  permission: row.permission === null ? null : JSON.parse(row.permission),
   createdAt: row.created_at,
   nextSeq: row.next_seq,
   firstMessage: row.first_message,
@@ -86,6 +88,7 @@ interface TurnRow {
   input_id: string
   input_text: string
   model: string
+  reasoning_effort: string | null
   status: TurnStatus
   first_seq: number
   notes: string
@@ -99,6 +102,7 @@ const toTurn = (row: TurnRow): TurnRecord => ({
   inputId: row.input_id,
   inputText: row.input_text,
   model: row.model,
+  reasoningEffort: row.reasoning_effort,
   status: row.status,
   firstSeq: row.first_seq,
   notes: JSON.parse(row.notes),
@@ -106,7 +110,7 @@ const toTurn = (row: TurnRow): TurnRecord => ({
   checkpointId: row.checkpoint_id,
 })
 
-const turnColumns = "run_id, position, input_id, input_text, model, status, first_seq, notes, catalogs, checkpoint_id"
+const turnColumns = "run_id, position, input_id, input_text, model, reasoning_effort, status, first_seq, notes, catalogs, checkpoint_id"
 
 /** Session, event, and turn persistence. Every write that numbers an event takes the session's counter. */
 export class SessionStore {
@@ -142,6 +146,7 @@ export class SessionStore {
       sessionDir: session.sessionDir,
       agent: session.agent,
       model: session.model,
+      reasoningEffort: session.reasoningEffort,
       createdAt: session.createdAt,
       running,
       lastSeq: last?.seq ?? 0,
@@ -157,16 +162,17 @@ export class SessionStore {
       this.db
         .query(
           `INSERT INTO sessions
-            (id, agent, model, instructions, agent_settings, forked_from_session, forked_from_run, created_at, next_seq,
-             first_message, catalogs)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+            (id, agent_key, model, reasoning_effort, model_overrides, permission, forked_from_session, forked_from_run,
+             created_at, next_seq, first_message, catalogs)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
         )
         .run(
           session.id,
           session.agent,
           session.model,
-          session.instructions,
-          JSON.stringify(session.agentSettings),
+          session.reasoningEffort,
+          JSON.stringify(session.modelOverrides),
+          session.permission === null ? null : JSON.stringify(session.permission),
           forkedFrom?.sessionId ?? null,
           forkedFrom?.runId ?? null,
           session.createdAt,
@@ -175,14 +181,21 @@ export class SessionStore {
         )
       this.appendEvent(
         session.id,
-        { type: "SESSION_CREATED", sessionDir: this.sessionDir(session.id), agent: session.agent, model: session.model, forkedFrom },
+        {
+          type: "SESSION_CREATED",
+          sessionDir: this.sessionDir(session.id),
+          agent: session.agent,
+          model: session.model,
+          reasoningEffort: session.reasoningEffort,
+          forkedFrom,
+        },
         session.createdAt,
       )
     })()
   }
 
-  setModel(sessionId: string, model: string) {
-    this.db.query("UPDATE sessions SET model = ? WHERE id = ?").run(model, sessionId)
+  setModel(sessionId: string, model: string, reasoningEffort: string | null) {
+    this.db.query("UPDATE sessions SET model = ?, reasoning_effort = ? WHERE id = ?").run(model, reasoningEffort, sessionId)
   }
 
   setFirstMessage(sessionId: string, firstMessage: string, catalogs: Catalogs) {
@@ -269,8 +282,9 @@ export class SessionStore {
         ?.p ?? 0) + 1
     this.db
       .query(
-        `INSERT INTO turns (session_id, run_id, position, input_id, input_text, model, status, first_seq, started_at, notes, catalogs)
-          VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)`,
+        `INSERT INTO turns
+          (session_id, run_id, position, input_id, input_text, model, reasoning_effort, status, first_seq, started_at, notes, catalogs)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)`,
       )
       .run(
         sessionId,
@@ -279,6 +293,7 @@ export class SessionStore {
         turn.inputId,
         turn.inputText,
         turn.model,
+        turn.reasoningEffort,
         turn.firstSeq,
         startedAt,
         JSON.stringify(turn.notes),
@@ -342,16 +357,17 @@ export class SessionStore {
       this.db
         .query(
           `INSERT INTO sessions
-            (id, agent, model, instructions, agent_settings, forked_from_session, forked_from_run, created_at, next_seq,
-             first_message, catalogs, pending_notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (id, agent_key, model, reasoning_effort, model_overrides, permission, forked_from_session, forked_from_run,
+             created_at, next_seq, first_message, catalogs, pending_notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           target.id,
           source.agent,
           source.model,
-          source.instructions,
-          JSON.stringify(source.agentSettings),
+          source.reasoningEffort,
+          JSON.stringify(source.modelOverrides),
+          source.permission === null ? null : JSON.stringify(source.permission),
           source.id,
           throughRunId,
           target.createdAt,
@@ -365,6 +381,7 @@ export class SessionStore {
         sessionDir: this.sessionDir(target.id),
         agent: source.agent,
         model: source.model,
+        reasoningEffort: source.reasoningEffort,
         forkedFrom: { sessionId: source.id, runId: throughRunId },
       }
       const insert = this.db.query("INSERT INTO events (session_id, seq, timestamp, body) VALUES (?, ?, ?, ?)")
@@ -378,10 +395,10 @@ export class SessionStore {
       this.db
         .query(
           `INSERT INTO turns
-            (session_id, run_id, position, input_id, input_text, model, status, first_seq, started_at, ended_at, notes, catalogs,
-             checkpoint_id)
-            SELECT ?, run_id, position, input_id, input_text, model, status, first_seq, started_at, ended_at, notes, catalogs,
-              checkpoint_id
+            (session_id, run_id, position, input_id, input_text, model, reasoning_effort, status, first_seq, started_at, ended_at,
+             notes, catalogs, checkpoint_id)
+            SELECT ?, run_id, position, input_id, input_text, model, reasoning_effort, status, first_seq, started_at, ended_at,
+              notes, catalogs, checkpoint_id
             FROM turns WHERE session_id = ? AND first_seq < ?`,
         )
         .run(target.id, source.id, cutoff)

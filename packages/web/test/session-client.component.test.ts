@@ -12,10 +12,10 @@ type Answer = { readonly result: unknown } | { readonly error: { code: number; m
 const SESSION = "s1"
 const START = 1_800_000_000_000
 const models: Array<Model> = [
-  { id: "alpha", contextWindow: 200_000, imageInput: false },
-  { id: "beta", contextWindow: 480_000, imageInput: true },
+  { id: "alpha", name: "Alpha", contextLimit: 200_000, imageInput: false, reasoningEfforts: [], reasoningEffort: null },
+  { id: "beta", name: "Beta", contextLimit: 480_000, imageInput: true, reasoningEfforts: ["low", "high"], reasoningEffort: "low" },
 ]
-const summary = { id: SESSION, sessionDir: "/state/sessions/s1", agent: null, model: "alpha", createdAt: START, running: false, lastSeq: 0 }
+const summary = { id: SESSION, sessionDir: "/state/sessions/s1", agent: null, model: "alpha", reasoningEffort: null, createdAt: START, running: false, lastSeq: 0 }
 const principal = { kind: "login", loginId: "l1" } as const
 
 /** One socket the fake server accepted, with the requests it received. */
@@ -81,9 +81,9 @@ class FakeServer {
       case "auth.authenticate":
         return { result: { principal } }
       case "models.list":
-        return { result: { models } }
+        return { result: { models, defaultModel: "alpha" } }
       case "agents.list":
-        return { result: { agents: [], refused: [] } }
+        return { result: { agents: [], defaultAgent: null } }
       case "session.list":
         return { result: { sessions: [summary] } }
       case "session.subscribe":
@@ -164,6 +164,7 @@ const created: SessionEventBody = {
   sessionDir: "/state/sessions/s1",
   agent: null,
   model: "alpha",
+  reasoningEffort: null,
   forkedFrom: null,
 }
 const sender = principal

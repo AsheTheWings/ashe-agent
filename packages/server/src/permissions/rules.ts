@@ -47,6 +47,19 @@ export const evaluate = (rules: ReadonlyArray<Rule>, permission: string, subject
   return "allow"
 }
 
+/**
+ * Whether the rules deny every call under `permission`: the last rule
+ * matching the name, whatever its pattern, is a `deny` for the pattern `*`.
+ * A later narrower rule for the name keeps it allowed.
+ */
+export const whollyDenied = (rules: ReadonlyArray<Rule>, permission: string): boolean => {
+  for (let index = rules.length - 1; index >= 0; index -= 1) {
+    const rule = rules[index]!
+    if (wildcard(rule.permission, permission)) return rule.pattern === "*" && rule.action === "deny"
+  }
+  return false
+}
+
 export type Decision =
   | { readonly action: "allow" }
   | { readonly action: "deny"; readonly denied: ReadonlyArray<string> }

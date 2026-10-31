@@ -38,6 +38,8 @@ export interface ToolRun {
    * the called tool's permission name, emitting `PROGRAM_CALL_FINISHED`.
    */
   readonly programCall: (tool: string, outcome: ToolOutcome) => void
+  /** Whether the session's rules leave `tool` offered: false for a tool they wholly deny. */
+  readonly offered: (tool: Tool) => boolean
 }
 
 /**
@@ -51,14 +53,22 @@ export type ToolResult =
 /**
  * A tool the model can call. `run` receives the model's arguments, parsed
  * from JSON and otherwise unchanged. A tool in a namespace is sent to
- * models as `<namespace>_<name>`.
+ * models as `<namespace>_<name>`. `permission` names the permission its
+ * calls are decided under, or null for a tool that asks none.
  */
 export interface Tool {
   readonly namespace: string | null
   readonly name: string
+  readonly permission: string | null
   readonly spec: ToolSpec
   readonly run: (args: unknown, run: ToolRun) => Promise<ToolResult>
 }
+
+/**
+ * The name the rules withhold a tool by: its permission name, or for a
+ * tool that asks none, the name the model calls it by.
+ */
+export const withholdingName = (tool: Tool) => tool.permission ?? tool.spec.name
 
 /** The draft-07 JSON Schema of an Effect Schema, standing alone, its objects closed to other properties. */
 export const draft07 = (schema: Schema.Top): Record<string, unknown> => {
@@ -82,6 +92,7 @@ export const draft07 = (schema: Schema.Top): Record<string, unknown> => {
 export const builtinTool = <S extends Schema.Codec<unknown, unknown, never, never>, P = undefined>(definition: {
   readonly namespace?: string
   readonly name: string
+  readonly permission: string | null
   readonly description: string
   readonly args: S
   readonly prepare?: (args: S["Type"], run: ToolRun) => Prepared<P> | ToolResult | Promise<Prepared<P> | ToolResult>
@@ -92,6 +103,7 @@ export const builtinTool = <S extends Schema.Codec<unknown, unknown, never, neve
   return {
     namespace,
     name: definition.name,
+    permission: definition.permission,
     spec: {
       name: namespace === null ? definition.name : `${namespace}_${definition.name}`,
       description: definition.description,

@@ -76,6 +76,7 @@ export const shellTools = (processes: ShellProcesses, options: ShellToolOptions)
   builtinTool<typeof ExecArgs, string>({
     namespace: "shell",
     name: "exec_command",
+    permission: "shell",
     description: "Runs a command in a PTY or on pipes, returning output or a process_id for ongoing interaction.",
     args: ExecArgs,
     prepare: (args, run) => {
@@ -108,6 +109,7 @@ export const shellTools = (processes: ShellProcesses, options: ShellToolOptions)
   builtinTool({
     namespace: "shell",
     name: "write_stdin",
+    permission: null,
     description: "Writes characters to a running process from shell_exec_command and returns its recent output.",
     args: WriteArgs,
     run: async (args, run) => {

@@ -110,8 +110,11 @@ export const ProgramCallFinished = event("PROGRAM_CALL_FINISHED", {
 export const SessionCreated = event("SESSION_CREATED", {
   /** The session's own directory, its starting working directory. */
   sessionDir: Schema.String,
+  /** The title of the session's agent, or null for the implicit agent. */
   agent: Schema.NullOr(Schema.String),
   model: Id,
+  /** The reasoning effort selected for the model, or null for its default. */
+  reasoningEffort: Schema.NullOr(Schema.String),
   forkedFrom: Schema.NullOr(
     Schema.Struct({
       sessionId: Id,
@@ -133,8 +136,10 @@ export const InputReceived = event("INPUT_RECEIVED", {
   sender: Sender,
 })
 
+/** The session's model and reasoning effort selection changed; a null effort is the model's default. */
 export const ModelChanged = event("MODEL_CHANGED", {
   model: Id,
+  reasoningEffort: Schema.NullOr(Schema.String),
   sender: Sender,
 })
 

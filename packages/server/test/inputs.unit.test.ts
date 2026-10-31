@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { Redacted, Result } from "effect"
-import { readProtectedFile, resolveInputs, type FileRead, type Sources } from "../src/inputs/resolve.ts"
+import { readProtectedFile, readProviderKeys, resolveInputs, type FileRead, type Sources } from "../src/inputs/resolve.ts"
 
-const dirs = { home: "/home/owner", configHome: "/home/owner/.config", stateHome: "/home/owner/.local/state" }
+const dirs = { home: "/home/owner", configHome: "/home/owner/.config", stateHome: "/home/owner/.local/state", cacheHome: "/home/owner/.cache" }
 const configPath = "/home/owner/.config/ashe-agent/config.json"
-const keyPath = "/run/ashe-agent/model-api-key"
+const keyPath = "/run/ashe-agent/exa-api-key"
 
-const model = { id: "provider/model-a", contextWindow: 400_000, imageInput: true }
+const modelEntry = { limit: { context: 400_000 }, capabilities: { input: ["text", "image"] } }
+const providers = { main: { baseURL: "http://127.0.0.1:8317/v1", apiKeyFile: "/run/ashe-agent/main-key", models: { "model-a": modelEntry } } }
 
 /** Sources with the given process input and files, everything else absent. */
 const sources = (
@@ -21,10 +22,11 @@ const sources = (
 const protectedFile = (text: string, mode = 0o600): FileRead => ({ kind: "ok", text, mode })
 const configFile = (config: unknown): FileRead => ({ kind: "ok", text: JSON.stringify(config), mode: 0o644 })
 
-/** Process input that satisfies every input serve requires in development. */
+/** Process input that satisfies every input serve requires in development, with the Exa key file as a protected input. */
 const serveEnv = {
-  ASHE_AGENT_MODEL_API_KEY_FILE: keyPath,
-  ASHE_AGENT_MODELS: JSON.stringify([model]),
+  ASHE_AGENT_EXA_API_KEY_FILE: keyPath,
+  ASHE_AGENT_PROVIDERS: JSON.stringify(providers),
+  ASHE_AGENT_DEFAULT_MODEL: "main/model-a",
 }
 const serveFiles = { [keyPath]: protectedFile("sk-test-key") }
 
@@ -53,7 +55,7 @@ describe("profiles", () => {
     const files = { [configPath]: { kind: "ok", text: "{", mode: 0o644 } as const }
     expect(issuesOf(resolveInputs("serve", sources(env, files))).sort()).toEqual([
       "ASHE_AGENT_CONFIG_FILE",
-      "ASHE_AGENT_MODEL_API_KEY_FILE",
+      "ASHE_AGENT_EXA_API_KEY_FILE",
       "ASHE_AGENT_PROFILE",
     ])
   })
@@ -67,12 +69,17 @@ describe("defaults", () => {
     expect(resolution.inputs.listenPort).toBe(7420)
     expect(resolution.inputs.stateDir).toBe("/home/owner/.local/state/ashe-agent")
     expect(resolution.inputs.instructionsFile).toBe("/home/owner/.config/ashe-agent/AGENTS.md")
+    expect(resolution.inputs.titlesDir).toBe("/home/owner/.config/ashe-agent/titles")
+    expect(resolution.inputs.scratchRoot).toBe("/home/owner/.cache/ashe-agent/scratch")
+    expect(resolution.inputs.userTimeZone).toBe("UTC")
+    expect(resolution.inputs.agents).toEqual({})
+    expect(resolution.inputs.defaultAgent).toBeNull()
+    expect(resolution.inputs.auxiliaryModels).toEqual({})
     expect(resolution.inputs.skillRoots).toEqual([
       "/home/owner/.agents/skills",
       "/home/owner/.config/ashe-agent/skills",
     ])
     expect(resolution.inputs.shellYieldMs).toBe(10_000)
-    expect(resolution.inputs.exaApiKey).toBeNull()
   })
 
   test("an input without a production default is required in production", () => {
@@ -80,14 +87,14 @@ describe("defaults", () => {
     expect(issuesOf(resolution).sort()).toEqual([
       "ASHE_AGENT_DEPLOYMENT_ENVIRONMENT",
       "ASHE_AGENT_LISTEN_PORT",
-      "ASHE_AGENT_MODEL_BASE_URL",
       "ASHE_AGENT_ORIGINS",
+      "ASHE_AGENT_USER_TIME_ZONE",
       "OTEL_EXPORTER_OTLP_ENDPOINT",
     ])
   })
 
   test("a process validates only the inputs it uses", () => {
-    const resolution = resolveInputs("token", sources({ ASHE_AGENT_MODELS: "not json" }))
+    const resolution = resolveInputs("token", sources({ ASHE_AGENT_PROVIDERS: "not json" }))
     expect(resolution.ok).toBe(true)
   })
 })
@@ -95,19 +102,19 @@ describe("defaults", () => {
 describe("protected inputs", () => {
   test("a missing protected file is refused", () => {
     const resolution = resolveInputs("serve", sources(serveEnv))
-    expect(issuesOf(resolution)).toEqual(["ASHE_AGENT_MODEL_API_KEY_FILE"])
+    expect(issuesOf(resolution)).toEqual(["ASHE_AGENT_EXA_API_KEY_FILE"])
   })
 
-  test("serve requires the model API key file input", () => {
-    const { ASHE_AGENT_MODEL_API_KEY_FILE: _, ...withoutKey } = serveEnv
-    const resolution = resolveInputs("serve", sources(withoutKey, serveFiles))
-    expect(issuesOf(resolution)).toEqual(["ASHE_AGENT_MODEL_API_KEY_FILE"])
+  test("an optional protected input without its file input is null", () => {
+    const { ASHE_AGENT_EXA_API_KEY_FILE: _, ...withoutKey } = serveEnv
+    const resolution = resolveInputs("serve", sources(withoutKey))
+    expect(resolution.ok && resolution.inputs.exaApiKey).toBeNull()
   })
 
   test("the value is the file's bytes, redacted", () => {
     const resolution = resolveInputs("serve", sources(serveEnv, { [keyPath]: protectedFile("sk-test-key\n") }))
     if (!resolution.ok) throw new Error(JSON.stringify(resolution.issues))
-    const key = resolution.inputs.modelApiKey
+    const key = resolution.inputs.exaApiKey
     expect(key).not.toBeNull()
     expect(Redacted.value(key!)).toBe("sk-test-key\n")
     expect(String(key)).not.toContain("sk-test-key")
@@ -115,21 +122,21 @@ describe("protected inputs", () => {
 
   test("a file its group or others can read is refused", () => {
     const resolution = resolveInputs("serve", sources(serveEnv, { [keyPath]: protectedFile("sk-test-key", 0o640) }))
-    expect(issuesOf(resolution)).toEqual(["ASHE_AGENT_MODEL_API_KEY_FILE"])
+    expect(issuesOf(resolution)).toEqual(["ASHE_AGENT_EXA_API_KEY_FILE"])
   })
 
   test("a protected input in the config file is refused", () => {
     const resolution = resolveInputs(
       "serve",
-      sources(serveEnv, { ...serveFiles, [configPath]: configFile({ modelApiKey: "sk-test-key" }) }),
+      sources(serveEnv, { ...serveFiles, [configPath]: configFile({ exaApiKey: "sk-test-key" }) }),
     )
-    expect(issuesOf(resolution)).toEqual(['config file key "modelApiKey"'])
+    expect(issuesOf(resolution)).toEqual(['config file key "exaApiKey"'])
   })
 
   test("issues never carry a protected value", () => {
     const resolution = resolveInputs(
       "serve",
-      sources(serveEnv, { ...serveFiles, [configPath]: configFile({ modelApiKey: "sk-secret-marker" }) }),
+      sources(serveEnv, { ...serveFiles, [configPath]: configFile({ exaApiKey: "sk-secret-marker" }) }),
     )
     expect(JSON.stringify(resolution)).not.toContain("sk-secret-marker")
   })
@@ -244,32 +251,6 @@ describe("boundaries", () => {
   })
 })
 
-describe("models", () => {
-  const withModels = (models: unknown) =>
-    resolveInputs("serve", sources({ ...serveEnv, ASHE_AGENT_MODELS: JSON.stringify(models) }, serveFiles))
-
-  test("an empty model list is refused", () => {
-    expect(issuesOf(withModels([]))).toEqual(["ASHE_AGENT_MODELS"])
-  })
-
-  test("a repeated model id is refused", () => {
-    expect(issuesOf(withModels([model, { ...model, imageInput: false }]))).toEqual(["ASHE_AGENT_MODELS"])
-  })
-
-  test("a context window below 200,000 tokens is refused", () => {
-    expect(issuesOf(withModels([{ ...model, contextWindow: 199_999 }]))).toEqual(["ASHE_AGENT_MODELS"])
-  })
-
-  test("a context window of exactly 200,000 tokens is accepted", () => {
-    expect(withModels([{ ...model, contextWindow: 200_000 }]).ok).toBe(true)
-  })
-
-  test("a model list set by process input is used", () => {
-    const resolution = withModels([model])
-    expect(resolution.ok && resolution.inputs.models).toEqual([model])
-  })
-})
-
 describe("layer precedence", () => {
   test("the config file overrides a default and process input overrides the config file", () => {
     const files = { ...serveFiles, [configPath]: configFile({ listenHost: "0.0.0.0", listenPort: 9000 }) }
@@ -291,10 +272,10 @@ describe("layer precedence", () => {
     expect(issuesOf(resolution)).toEqual(['config file key "configFile"'])
   })
 
-  test("a model list set by the config file is used when process input sets none", () => {
-    const { ASHE_AGENT_MODELS: _, ...env } = serveEnv
-    const files = { ...serveFiles, [configPath]: configFile({ models: [model] }) }
+  test("providers set by the config file are used when process input sets none", () => {
+    const { ASHE_AGENT_PROVIDERS: _, ...env } = serveEnv
+    const files = { ...serveFiles, [configPath]: configFile({ providers }) }
     const resolution = resolveInputs("serve", sources(env, files))
-    expect(resolution.ok && resolution.inputs.models).toEqual([model])
+    expect(resolution.ok && (resolution.inputs.providers as unknown)).toEqual(providers)
   })
 })

@@ -25,10 +25,17 @@ export const Sender = Schema.Union([
 
 export type Sender = typeof Sender.Type
 
+/** A configured model: its `<provider>/<model>` id, display name, capabilities, and reasoning effort setting. */
 export const Model = Schema.Struct({
   id: Id,
-  contextWindow: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+  name: Schema.String,
+  /** The model's context window, in tokens. */
+  contextLimit: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
   imageInput: Schema.Boolean,
+  /** The reasoning efforts the model lists; empty for a model without reasoning. */
+  reasoningEfforts: Schema.Array(Schema.String),
+  /** The model entry's own reasoning effort setting, if any. */
+  reasoningEffort: Schema.NullOr(Schema.String),
 })
 
 export type Model = typeof Model.Type
@@ -37,8 +44,11 @@ export const SessionSummary = Schema.Struct({
   id: Id,
   /** The session's own directory, its starting working directory. */
   sessionDir: Schema.String,
+  /** The title of the session's agent, or null for the implicit agent. */
   agent: Schema.NullOr(Schema.String),
   model: Id,
+  /** The reasoning effort selected for the session's model, or null for its default. */
+  reasoningEffort: Schema.NullOr(Schema.String),
   createdAt: Timestamp,
   running: Schema.Boolean,
   /** The number of the session's last persisted event; a subscriber that received it is caught up. */
@@ -55,20 +65,25 @@ export const PermissionAnswer = Schema.Literals(["once", "always", "reject"])
 
 export type PermissionAnswer = typeof PermissionAnswer.Type
 
-export const AgentMode = Schema.Literals(["primary", "subagent", "all"])
+/** A title file's state: present, absent, or refused with the reason. */
+export const TitleFileState = Schema.Union([
+  Schema.Struct({ state: Schema.Literal("present") }),
+  Schema.Struct({ state: Schema.Literal("absent") }),
+  Schema.Struct({ state: Schema.Literal("refused"), reason: Schema.String }),
+])
 
+/** A configured agent, keyed by its title. */
 export const Agent = Schema.Struct({
-  name: Id,
+  key: Id,
+  /** The key in words, such as "Code Reviewer" for `code-reviewer`. */
+  title: Schema.String,
+  /** The title file's description, or null without a present title file. */
   description: Schema.NullOr(Schema.String),
-  mode: AgentMode,
-  /** The agent's model, or null when it uses the session's selected model. */
+  /** The model the agent starts sessions with, or null when it names none. */
   model: Schema.NullOr(Id),
+  /** The agent's reasoning effort overrides, by model id. */
+  reasoningEfforts: Schema.Record(Schema.String, Schema.String),
+  titleFile: TitleFileState,
 })
 
 export type Agent = typeof Agent.Type
-
-/** An agent file the server refused, by its path, with the reason. */
-export const RefusedAgentFile = Schema.Struct({
-  path: Schema.String,
-  reason: Schema.String,
-})

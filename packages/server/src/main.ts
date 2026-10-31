@@ -10,11 +10,14 @@ import { loginShell } from "./tools/shell/login-shell.ts"
 import { Cause, Effect, Exit, Fiber, Layer, Redacted, Result } from "effect"
 import { createApiToken, hasOwnerPassword, listApiTokens, revokeApiToken, setOwnerPassword } from "./auth/credentials.ts"
 import { readSecretLine } from "./cli/terminal.ts"
-import { loadInputsOrExit, processSources, removeDependencyVariables } from "./inputs/bootstrap.ts"
+import { loadInputsOrExit, processSources, readDiskFile, removeDependencyVariables } from "./inputs/bootstrap.ts"
+import { readProviderKeys } from "./inputs/resolve.ts"
 import { catalog } from "./inputs/catalog.ts"
 import { ProtocolServer, serveProgram } from "./server/serve.ts"
 import { Sessions } from "./sessions/hub.ts"
+import { AgentRegistry } from "./agents/agents.ts"
 import { fileSetup } from "./agents/setup.ts"
+import { configuredModels } from "./models/registry.ts"
 import { databasePath, openDatabase, openDatabaseReadonly, Store } from "./store/database.ts"
 import { dumpDatabase } from "./store/dump.ts"
 import { migrationFiles } from "./store/migration-files.ts"
@@ -71,8 +74,12 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
     const sources = processSources()
     const { inputs } = loadInputsOrExit("serve", sources)
     removeDependencyVariables(process.env)
-    const modelApiKey = inputs.modelApiKey
-    if (modelApiKey === null) fail("serve needs ASHE_AGENT_MODEL_API_KEY_FILE")
+    const keys = readProviderKeys(inputs.providers, readDiskFile)
+    if (Result.isFailure(keys)) {
+      fail(`invalid inputs\n${keys.failure.map((issue) => `  ${issue.input}: ${issue.problem}`).join("\n")}`, 2)
+    }
+    const apiKeys = Result.getOrThrow(keys)
+    const models = configuredModels(inputs.providers)
     openCurrentDatabase(inputs.stateDir).close()
     // The agent loop's libraries load only for serve, so operator commands start quickly.
     const [
@@ -82,8 +89,7 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
       { ShellProcesses },
       { builtinTools },
       { McpRegistry },
-      { executeTool, catalogTools },
-      { renderCatalog },
+      { executeTool, sessionCodeModeCatalog },
       { startTelemetry },
     ] = await Promise.all([
       import("./agent/model.ts"),
@@ -93,7 +99,6 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
       import("./tools/builtin.ts"),
       import("./tools/mcp/servers.ts"),
       import("./tools/codemode/execute.ts"),
-      import("./tools/codemode/catalog.ts"),
       import("./telemetry/sdk.ts"),
     ])
     // The SDK starts before any work, so every signal reaches the selected exporters.
@@ -139,23 +144,28 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
     }).pipe(
       Layer.provideMerge(
         Sessions.layer({
-          models: inputs.models,
+          models,
+          defaultModel: inputs.defaultModel,
           sessionsDir: join(inputs.stateDir, "sessions"),
           setup: fileSetup({
-            agentsDir: inputs.agentsDir,
+            agents: new AgentRegistry(inputs.agents, inputs.defaultAgent, inputs.titlesDir),
             instructionsFile: inputs.instructionsFile,
             skillRoots: inputs.skillRoots,
-            modelIds: new Set(inputs.models.map((model) => model.id)),
-            codeMode: () => renderCatalog(catalogTools(mcp.tools(false))),
+            codeMode: sessionCodeModeCatalog(() => mcp.tools(false)),
           }),
           permission: inputs.permission,
           home: sources.dirs.home,
           runner: (db) =>
             agentRunner({
-              port: responsesModelPort({ baseUrl: inputs.modelBaseUrl, apiKey: Redacted.value(modelApiKey!) }),
+              port: responsesModelPort((id) => {
+                const model = models.find((candidate) => candidate.id === id)
+                const key = model === undefined ? undefined : apiKeys.get(model.provider)
+                if (model === undefined || key === undefined) return undefined
+                return { baseURL: inputs.providers[model.provider]!.baseURL, apiKey: Redacted.value(key), upstream: model.upstream }
+              }),
               tools,
               saver: new SqliteCheckpointSaver(db),
-              models: inputs.models,
+              models,
             }),
         }),
       ),
