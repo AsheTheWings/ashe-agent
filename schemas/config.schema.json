@@ -191,6 +191,10 @@
       },
       "description": "Host names the development web server answers besides its loopback address."
     },
+    "devWebServerUrl": {
+      "type": "string",
+      "description": "WebSocket endpoint the development web client connects to."
+    },
     "permission": {
       "anyOf": [
         {

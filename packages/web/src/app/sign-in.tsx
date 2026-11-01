@@ -1,21 +1,18 @@
-import { useState, type FormEvent } from "react"
+import type { FormEvent } from "react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
+import { Field, FieldGroup } from "@/components/ui/field"
 import { useClient, useClientState } from "./client-context.tsx"
 
 /** The base-nova login-03 card, signing the server's owner in with GitHub. */
 export const SignIn = () => {
   const client = useClient()
-  const remembered = useClientState((state) => state.serverUrl)
   const error = useClientState((state) => state.error)
   const connecting = useClientState((state) => state.status === "connecting")
-  const [serverUrl, setServerUrl] = useState(remembered ?? "")
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    void client.signIn(serverUrl.trim())
+    void client.signIn()
   }
   return (
     <main className="bg-muted flex min-h-svh flex-col items-center justify-center gap-6 p-6 md:p-10">
@@ -28,11 +25,6 @@ export const SignIn = () => {
           <CardContent>
             <form onSubmit={submit}>
               <FieldGroup>
-                <Field>
-                  <FieldLabel htmlFor="server-url">Server URL</FieldLabel>
-                  <Input id="server-url" type="url" required placeholder="wss://server.example/v1/ws"
-                    pattern="wss?://.+" value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} />
-                </Field>
                 {error !== null && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
                 <Field>
                   <Button variant="outline" type="submit" disabled={connecting}>

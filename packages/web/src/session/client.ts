@@ -26,8 +26,8 @@ export type ConnectionStatus = "signedOut" | "connecting" | "connected" | "recon
 
 export type ClientState = {
   readonly status: ConnectionStatus
-  /** The server's WebSocket URL, remembered across visits. */
-  readonly serverUrl: string | null
+  /** The configured server's WebSocket URL. */
+  readonly serverUrl: string
   readonly principal: Sender | null
   /** The last failure to show the user, cleared by the next success. */
   readonly error: string | null
@@ -39,8 +39,7 @@ export type ClientState = {
 }
 
 export const storageKeys = {
-  serverUrl: "ashe-agent.serverUrl",
-  refreshToken: "ashe-agent.refreshToken",
+  refreshToken: (serverUrl: string) => `ashe-agent.refreshToken:${serverUrl}`,
   verifier: "ashe-agent.signInVerifier",
   signInServer: "ashe-agent.signInServer",
 } as const
@@ -88,7 +87,7 @@ export class SessionClient {
     this.ports = ports
     this.store = createStore<ClientState>()(() => ({
       status: "signedOut",
-      serverUrl: ports.storage.getItem(storageKeys.serverUrl),
+      serverUrl: ports.serverUrl,
       principal: null,
       error: null,
       models: [],
@@ -107,19 +106,19 @@ export class SessionClient {
     this.store.setState(partial)
   }
 
-  /** Connects with the stored refresh token, when the browser holds one for a remembered server. */
+  /** Connects with the stored refresh token only when it belongs to the configured server. */
   resume() {
     if (this.completeSignIn()) return
     const url = this.state.serverUrl
-    if (url === null || this.ports.storage.getItem(storageKeys.refreshToken) === null) return
+    if (this.ports.storage.getItem(storageKeys.refreshToken(url)) === null) return
     this.connect(url, ++this.generation, null)
   }
 
   /** Starts GitHub sign-in with a verifier held by this browser tab. */
-  async signIn(serverUrl: string): Promise<void> {
+  async signIn(): Promise<void> {
     try {
+      const serverUrl = this.state.serverUrl
       const start = new URL(serverUrl)
-      if (start.protocol !== "ws:" && start.protocol !== "wss:") throw new Error("Enter a ws:// or wss:// server URL.")
       start.protocol = start.protocol === "ws:" ? "http:" : "https:"
       start.pathname = "/v1/auth/github/start"
       start.search = ""
@@ -156,13 +155,12 @@ export class SessionClient {
       this.set({ error: messages[error] ?? "Sign-in failed. Please try again." })
       return true
     }
-    if (!verifier || !serverUrl) {
+    if (!verifier || !serverUrl || serverUrl !== this.state.serverUrl) {
       this.set({ error: "This tab has no pending sign-in. Start again with Continue with GitHub." })
       return true
     }
     this.disconnect()
-    this.ports.storage.setItem(storageKeys.serverUrl, serverUrl)
-    this.set({ serverUrl, error: null })
+    this.set({ error: null })
     void this.connect(serverUrl, ++this.generation, { code: fragment.get("signIn")!, verifier })
     return true
   }
@@ -170,7 +168,7 @@ export class SessionClient {
   /** Signs out on this browser: forgets the tokens and closes the connection. */
   signOut() {
     this.disconnect()
-    this.ports.storage.removeItem(storageKeys.refreshToken)
+    this.ports.storage.removeItem(storageKeys.refreshToken(this.state.serverUrl))
     this.set({ status: "signedOut", principal: null, activeSessionId: null, views: {}, sessions: [] })
   }
 
@@ -247,7 +245,7 @@ export class SessionClient {
   private refreshOn(connection: Connection, generation: number): Promise<Sender> {
     return this.ports.withLock(REFRESH_LOCK, async () => {
       // Read inside the lock: another page may have just exchanged the token it held.
-      const refreshToken = this.ports.storage.getItem(storageKeys.refreshToken)
+      const refreshToken = this.ports.storage.getItem(storageKeys.refreshToken(this.state.serverUrl))
       if (refreshToken === null) {
         throw new ProtocolError({ code: ErrorCode.authenticationFailed, message: "signed out" })
       }
@@ -259,7 +257,7 @@ export class SessionClient {
   /** Stores the tokens of `generation`, unless a sign-in or sign-out has begun another since. */
   private accept(tokens: Tokens, generation: number): Sender {
     if (generation !== this.generation) throw new Superseded()
-    this.ports.storage.setItem(storageKeys.refreshToken, tokens.refreshToken)
+    this.ports.storage.setItem(storageKeys.refreshToken(this.state.serverUrl), tokens.refreshToken)
     this.access = { token: tokens.accessToken, expiresAt: tokens.accessTokenExpiresAt }
     this.scheduleRefresh(tokens.accessTokenExpiresAt - REFRESH_MARGIN_MS - this.ports.now())
     return tokens.principal
@@ -276,7 +274,6 @@ export class SessionClient {
   /** Refreshes the tokens on a connection of its own, which closes once it has them. */
   private async refresh(generation: number) {
     const url = this.state.serverUrl
-    if (url === null) return
     const side = new Connection(url, this.ports, { onEvent: () => {}, onClose: () => {} })
     this.side = side
     try {
@@ -300,7 +297,6 @@ export class SessionClient {
     this.connection = null
     this.set({ status: "reconnecting" })
     const url = this.state.serverUrl
-    if (url === null) return
     const generation = this.generation
     const delay = this.reconnectDelay
     this.reconnectDelay = Math.min(delay * 2, RECONNECT_MAX_DELAY_MS)

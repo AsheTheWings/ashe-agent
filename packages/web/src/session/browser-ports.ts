@@ -1,7 +1,8 @@
 import type { SessionClientPorts } from "./ports.ts"
 
 /** The session client's ports in a browser: WebSocket, `localStorage`, and Web Locks. */
-export const browserPorts = (): SessionClientPorts => ({
+export const browserPorts = (serverUrl: string): SessionClientPorts => ({
+  serverUrl,
   openSocket: (url, handlers) => {
     let closed = false
     const close = (code: number, reason: string) => {

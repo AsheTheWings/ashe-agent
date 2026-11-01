@@ -64,20 +64,22 @@ its bytes, and configure the app and the owner's numeric GitHub user ID:
 {
   "githubClientId": "<OAuth app client ID>",
   "githubClientSecretFile": "/absolute/path/to/github-client-secret",
-  "githubCallbackUrl": "https://server.example/v1/auth/github/callback",
+  "githubCallbackUrl": "https://agent.example/v1/auth/github/callback",
   "githubOwnerId": 123456,
-  "origins": ["https://client.example"]
+  "origins": ["https://agent.example"]
 }
 ```
 
 For development register the development server's HTTP callback, list the
-development client's origin in `origins`, and set `devWebAllowedHosts` when
+development client's origin in `origins`, set `devWebServerUrl` to the
+browser-accessible WebSocket endpoint, and set `devWebAllowedHosts` when
 accessing Vite by a host name. `bun run dev:web` selects development itself
 and uses the same config-file loader; it refuses an occupied port.
 
 `serve` also needs the providers, with each provider's API key file, and
 the default model; see [configuration](docs/configuration.md). Open the
-[web client](docs/web-client.md) and choose **Continue with GitHub**.
+[web client](docs/web-client.md), with `/v1/*` routed to the server on the
+client's origin, and choose **Continue with GitHub**.
 [Authentication](docs/authentication.md) describes the flow and limits.
 
 ## Documentation
