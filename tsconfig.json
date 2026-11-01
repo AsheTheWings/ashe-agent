@@ -24,7 +24,8 @@
     "packages/*/test/**/*.ts",
     "packages/web/scripts/**/*.ts",
     "scripts/**/*.ts",
-    "test/**/*.ts"
+    "test/**/*.ts",
+    "images/*/*.ts"
   ],
   "exclude": [
     "packages/web/src/**"

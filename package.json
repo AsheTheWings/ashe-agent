@@ -22,6 +22,8 @@
     "test:qualification": "bun scripts/task.ts test:qualification",
     "test:web-image": "bun scripts/task.ts test:web-image",
     "web-image": "bun scripts/task.ts web-image",
+    "test:gateway-image": "bun scripts/task.ts test:gateway-image",
+    "gateway-image": "bun scripts/task.ts gateway-image",
     "release-gate": "bun scripts/task.ts release-gate",
     "generate": "bun scripts/task.ts generate"
   },
