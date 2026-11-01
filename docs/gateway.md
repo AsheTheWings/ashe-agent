@@ -47,10 +47,12 @@ no capabilities. It takes its whole configuration as arguments:
 `--github-user` decides who gets through; `--email-domain=*` only stops
 the email check from refusing that user. Every sign-in reads the user's
 organizations and teams, so the scope needs `read:org` besides
-`user:email`; it grants no access to repositories. GitHub OAuth apps issue
-no refresh tokens, so a session lasts the cookie's 30 days, after which the
-gateway sends the browser to GitHub again. With logging off, the container prints
-one line at startup, `Warning: Logging disabled`, and nothing after.
+`user:email`; it grants no access to repositories. The gateway uses the
+GitHub token only during sign-in and never refreshes or checks it again, so
+an OAuth app's expiring tokens end no session. A session lasts until its
+30-day cookie expires; the gateway then sends the browser to GitHub again. With logging off, the
+container prints one line at startup, `Warning: Logging disabled`, and
+nothing after.
 
 Create the GitHub OAuth app with `https://<origin>` as its homepage and
 `https://<origin>/oauth2/callback` as its callback URL. The client secret
