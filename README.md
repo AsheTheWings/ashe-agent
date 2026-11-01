@@ -41,9 +41,8 @@ executable, `bin/ashe-agent`, and the web client's static files under
 `web/`. `bun run release-gate` also tests and qualifies it; see
 [testing](docs/testing.md). CI builds the same bundle on every push and
 publishes it to the host's artifact registry.
-It also builds two container images, which it qualifies and publishes the
-same way: the [web client](docs/web-client.md) and the
-[sign-in gateway](docs/gateway.md).
+It also builds, qualifies, and publishes the
+[web client image](docs/web-client.md#container-image).
 
 ## Use
 
@@ -103,8 +102,6 @@ the default model; see [configuration](docs/configuration.md). Open the
   permissions and limits of programs.
 - [Model context](docs/model-context.md): what each model call carries,
   developer components, and model switching.
-- [Sign-in gateway](docs/gateway.md): the image that limits a public
-  deployment to one GitHub account.
 - [Web client](docs/web-client.md): running and building the web client,
   signing in, and what it keeps in the browser.
 - [Telemetry](docs/telemetry.md): the traces, metrics, and logs the server
