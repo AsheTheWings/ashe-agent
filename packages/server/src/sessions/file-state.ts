@@ -149,7 +149,7 @@ export class FileState {
         SELECT sha256 FROM snapshot_files
         UNION SELECT sha256 FROM memory_generation_files
         UNION SELECT sha256 FROM pending_restore_files
-        UNION SELECT sha256 FROM research_baselines
+        UNION SELECT json_extract(f.value, '$.sha256') FROM research_baselines b, json_each(b.files) f
         UNION SELECT json_extract(sources, '$.userInstructions.sha256') FROM developer_components
           WHERE json_extract(sources, '$.userInstructions.sha256') IS NOT NULL
       )`,

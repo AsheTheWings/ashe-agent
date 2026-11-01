@@ -17,6 +17,10 @@ import m0016 from "../../migrations/0016_sessions_without_windows.sql" with { ty
 import m0017 from "../../migrations/0017_snapshots.sql" with { type: "text" }
 import m0018 from "../../migrations/0018_pending_restores.sql" with { type: "text" }
 import m0019 from "../../migrations/0019_session_generations.sql" with { type: "text" }
+import m0020 from "../../migrations/0020_timeline_entries.sql" with { type: "text" }
+import m0021 from "../../migrations/0021_chat_boundaries.sql" with { type: "text" }
+import m0022 from "../../migrations/0022_context_turns.sql" with { type: "text" }
+import m0023 from "../../migrations/0023_research_baseline_versions.sql" with { type: "text" }
 
 /**
  * The migration directory `packages/server/migrations`, embedded so a
@@ -43,4 +47,8 @@ export const migrationFiles: ReadonlyArray<{ readonly file: string; readonly sql
   { file: "0017_snapshots.sql", sql: m0017 },
   { file: "0018_pending_restores.sql", sql: m0018 },
   { file: "0019_session_generations.sql", sql: m0019 },
+  { file: "0020_timeline_entries.sql", sql: m0020 },
+  { file: "0021_chat_boundaries.sql", sql: m0021 },
+  { file: "0022_context_turns.sql", sql: m0022 },
+  { file: "0023_research_baseline_versions.sql", sql: m0023 },
 ]

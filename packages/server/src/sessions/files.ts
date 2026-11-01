@@ -301,6 +301,47 @@ export class SessionFiles {
     }
   }
 
+  /** The session's memory draft directory, which a context turn edits. */
+  draftDir(id: string) {
+    return join(this.sessionDir(id), "memory-draft")
+  }
+
+  /**
+   * Every entry directly inside the session's `research/` or
+   * `memory-draft/`, by name, with its text when it is a regular Markdown
+   * file read without following a symlink; empty when the directory is
+   * missing.
+   */
+  listArea(id: string, area: "research" | "memory-draft"): ReadonlyArray<{ readonly name: string; readonly file: StoredFile | null }> {
+    const dir = join(this.sessionDir(id), area)
+    if (lstat(dir)?.isDirectory() !== true) return []
+    return readdirSync(dir)
+      .sort()
+      .map((name) => {
+        if (!markdownName(name) || lstat(join(dir, name))?.isFile() !== true) return { name, file: null }
+        const read = readNoFollow(join(dir, name))
+        return { name, file: read === null || read.data === null ? null : { name, data: read.data, sha256: sha256(read.data) } }
+      })
+  }
+
+  /** Writes the session's memory draft as a writable copy of `files`, replacing any draft left before. */
+  writeDraft(id: string, files: ReadonlyArray<StoredFile>) {
+    const dir = this.draftDir(id)
+    removeTree(dir)
+    mkdirSync(dir, { mode: 0o700 })
+    for (const file of files) writeFileSync(join(dir, file.name), file.data, { mode: 0o600, flag: "wx" })
+  }
+
+  /** Whether the session has a memory draft. */
+  hasDraft(id: string) {
+    return lstat(this.draftDir(id)) !== null
+  }
+
+  /** Removes the session's memory draft, whatever it holds. */
+  removeDraft(id: string) {
+    removeTree(this.draftDir(id))
+  }
+
   /** Recreates the session's scratch target, and its `scratch` symlink, when missing; returns whether the target was lost. */
   ensureScratch(id: string): boolean {
     const target = this.scratchTarget(id)

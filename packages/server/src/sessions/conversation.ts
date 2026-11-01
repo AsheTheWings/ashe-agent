@@ -15,6 +15,8 @@ export type ItemBody =
       readonly name: string
       readonly content: ToolContent
       readonly outcome: ToolOutcome
+      /** Whether a context turn's clearing replaced the result with a placeholder. */
+      readonly cleared?: boolean
     }
 
 /** A window item with its place, its owning turn, and that turn's model; both are null for an item session creation made. */
@@ -63,7 +65,12 @@ interface ItemRow {
   heading: string | null
   text: string | null
   sources: string | null
+  cleared: number
 }
+
+const itemColumns = `i.position, i.run_id, i.model, i.kind, i.body, c.type, c.name, c.heading, c.text, c.sources,
+  (SELECT count(*) FROM tool_result_clearings r WHERE r.session_id = i.session_id AND r.item_position = i.position) AS cleared`
+const itemTables = "window_items i LEFT JOIN developer_components c ON c.session_id = i.session_id AND c.item_position = i.position"
 
 const toItem = (row: ItemRow): Item => {
   const owned = { position: row.position, runId: row.run_id, model: row.model }
@@ -79,8 +86,9 @@ const toItem = (row: ItemRow): Item => {
       return { ...owned, kind: "assistant", message: mapStoredMessagesToChatMessages([stored])[0] as AIMessage }
     }
     case "user":
-    case "result":
       return { ...owned, ...JSON.parse(row.body) }
+    case "result":
+      return { ...owned, ...JSON.parse(row.body), cleared: row.cleared === 1 }
   }
 }
 
@@ -131,8 +139,7 @@ export class Conversation {
   items(sessionId: string, window: number): ReadonlyArray<Item> {
     return this.db
       .query<ItemRow, [string, number]>(
-        `SELECT i.position, i.run_id, i.model, i.kind, i.body, c.type, c.name, c.heading, c.text, c.sources
-          FROM window_items i LEFT JOIN developer_components c ON c.session_id = i.session_id AND c.item_position = i.position
+        `SELECT ${itemColumns} FROM ${itemTables}
           WHERE i.session_id = ? AND i.window_position = ? ORDER BY i.position`,
       )
       .all(sessionId, window)
@@ -143,12 +150,50 @@ export class Conversation {
   turnItems(sessionId: string, runId: string): ReadonlyArray<Item> {
     return this.db
       .query<ItemRow, [string, string]>(
-        `SELECT i.position, i.run_id, i.model, i.kind, i.body, c.type, c.name, c.heading, c.text, c.sources
-          FROM window_items i LEFT JOIN developer_components c ON c.session_id = i.session_id AND c.item_position = i.position
+        `SELECT ${itemColumns} FROM ${itemTables}
           WHERE i.session_id = ? AND i.run_id = ? ORDER BY i.position`,
       )
       .all(sessionId, runId)
       .map(toItem)
+  }
+
+  /** The session's items from the position `from` on, across checkpoint windows, in order. */
+  itemsFrom(sessionId: string, from: number): ReadonlyArray<Item> {
+    return this.db
+      .query<ItemRow, [string, number]>(`SELECT ${itemColumns} FROM ${itemTables} WHERE i.session_id = ? AND i.position >= ? ORDER BY i.position`)
+      .all(sessionId, from)
+      .map(toItem)
+  }
+
+  /** The position of the session's newest item. */
+  lastItemPosition(sessionId: string): number {
+    return this.db.query<{ p: number | null }, [string]>("SELECT max(position) AS p FROM window_items WHERE session_id = ?").get(sessionId)?.p ?? 0
+  }
+
+  /** Records that the clearing `attempt` of the context turn `runId` replaced the results at `positions`. */
+  clear(sessionId: string, runId: string, attempt: number, positions: ReadonlyArray<number>) {
+    const insert = this.db.query("INSERT INTO tool_result_clearings (session_id, item_position, run_id, attempt) VALUES (?, ?, ?, ?)")
+    for (const position of positions) insert.run(sessionId, position, runId, attempt)
+  }
+
+  /** The research baseline of the checkpoint window `window`: its newest kept version, empty without one. */
+  baseline(sessionId: string, window: number): ReadonlyArray<{ readonly name: string; readonly sha256: string }> {
+    const row = this.db
+      .query<{ files: string }, [string, number]>(
+        "SELECT files FROM research_baselines WHERE session_id = ? AND window_position = ? ORDER BY position DESC LIMIT 1",
+      )
+      .get(sessionId, window)
+    return row === null ? [] : JSON.parse(row.files)
+  }
+
+  /** Records a new version of the checkpoint window's research baseline, owned by `runId`; the caller stores the files' bytes. */
+  recordBaseline(sessionId: string, window: number, runId: string | null, files: ReadonlyArray<{ readonly name: string; readonly sha256: string }>) {
+    const position =
+      (this.db.query<{ p: number | null }, [string]>("SELECT max(position) AS p FROM research_baselines WHERE session_id = ?").get(sessionId)
+        ?.p ?? 0) + 1
+    this.db
+      .query("INSERT INTO research_baselines (session_id, position, window_position, run_id, files) VALUES (?, ?, ?, ?, ?)")
+      .run(sessionId, position, window, runId, JSON.stringify(files.map((file) => ({ name: file.name, sha256: file.sha256 }))))
   }
 
   /** Appends an item to the checkpoint window `window`, owned by `owner`, or by no turn. */
@@ -278,8 +323,8 @@ export class Conversation {
       .run(target, source, kept, target)
     this.db
       .query(
-        `INSERT INTO research_baselines (session_id, window_position, run_id, name, sha256)
-          SELECT ?, window_position, run_id, name, sha256 FROM research_baselines WHERE session_id = ? AND ${owned}
+        `INSERT INTO research_baselines (session_id, position, window_position, run_id, files)
+          SELECT ?, position, window_position, run_id, files FROM research_baselines WHERE session_id = ? AND ${owned}
             AND window_position IN (SELECT position FROM checkpoint_windows WHERE session_id = ?)`,
       )
       .run(target, source, kept, target)

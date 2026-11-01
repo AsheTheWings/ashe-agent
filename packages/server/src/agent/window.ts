@@ -1,7 +1,9 @@
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages"
 import { developerBlock, systemBlock } from "../context/components.ts"
 import type { Item } from "../sessions/conversation.ts"
+import { estimateTokens, IMAGE_TOKENS } from "../context/constants.ts"
 import { block, escapeTags, userBlock } from "./blocks.ts"
+import type { ToolSpec } from "./model.ts"
 
 export type ToolContentPart =
   | { readonly type: "text"; readonly text: string }
@@ -14,6 +16,12 @@ export type ToolContent = string | ReadonlyArray<ToolContentPart>
 export type ToolOutcome = "success" | "failed" | "canceled" | "declined" | "interrupted"
 
 type ResultItem = Extract<Item, { kind: "result" }>
+
+/** The text a cleared tool result reads as. */
+export const CLEARED_RESULT = "[Result cleared to free context. Run the call again if you need it.]"
+
+/** A result item's content as a model call carries it: the placeholder once cleared. */
+const resultContent = (item: ResultItem): ToolContent => (item.cleared === true ? CLEARED_RESULT : item.content)
 
 export const messageText = (message: AIMessage): string => {
   if (typeof message.content === "string") return message.content
@@ -54,7 +62,7 @@ export const renderTranscript = (items: ReadonlyArray<Item>): string =>
           return parts
         }
         case "result":
-          return [block("tool_result", escapeTags(toolContentText(item.content)), ` id="${attribute(item.callId)}" outcome="${item.outcome}"`)]
+          return [block("tool_result", escapeTags(toolContentText(resultContent(item))), ` id="${attribute(item.callId)}" outcome="${item.outcome}"`)]
       }
     })
     .join("\n")
@@ -84,7 +92,7 @@ const replayable = (message: AIMessage): AIMessage => {
 
 /** A tool result as a model call carries it: images as images for a model that takes them, else as placeholders. */
 const toolMessage = (item: ResultItem, imageInput: boolean) => {
-  const content = item.content
+  const content = resultContent(item)
   if (typeof content === "string" || !imageInput || !content.some((part) => part.type === "image")) {
     return new ToolMessage({ tool_call_id: item.callId, content: toolContentText(content) })
   }
@@ -101,8 +109,9 @@ const toolMessage = (item: ResultItem, imageInput: boolean) => {
  * harness instructions as the `<system>` block of the first user input,
  * then its items. Consecutive input items form one user input, in which
  * adjoining developer components form one `<developer>` block. Items
- * `model` owns, and those of no turn, are ordinary messages and items; each
- * run of consecutive items another model owns is one transcript component.
+ * `model` owns, those of no turn, and seed components are ordinary
+ * messages and items; each run of consecutive items another model owns is
+ * one transcript component. A cleared tool result reads as its placeholder.
  * Tool result images are sent as images only when `imageInput` says the
  * model takes them.
  */
@@ -126,7 +135,8 @@ export const renderWindow = (harness: string, items: ReadonlyArray<Item>, model:
     blocks = []
   }
   for (const item of items) {
-    if (item.model !== null && item.model !== model) {
+    const seed = item.kind === "component" && item.component.type === "seed"
+    if (!seed && item.model !== null && item.model !== model) {
       foreign.push(item)
       continue
     }
@@ -151,6 +161,30 @@ export const renderWindow = (harness: string, items: ReadonlyArray<Item>, model:
   }
   flush()
   return messages
+}
+
+/**
+ * The estimated input tokens of a model call: its instructions, the text
+ * of its messages, an assistant message's tool calls and reasoning
+ * summaries included, each image at a fixed estimate, and the offered
+ * tool definitions.
+ */
+export const estimateCall = (instructions: string, messages: ReadonlyArray<BaseMessage>, tools: ReadonlyArray<ToolSpec>): number => {
+  let text = instructions
+  let images = 0
+  for (const message of messages) {
+    if (typeof message.content === "string") text += message.content
+    else {
+      for (const part of message.content) {
+        if (typeof part !== "object") continue
+        if (part.type === "text" && typeof part.text === "string") text += part.text
+        else if (part.type === "reasoning" && typeof part.reasoning === "string") text += part.reasoning
+        else if (part.type === "image" || part.type === "image_url") images += 1
+      }
+    }
+    if (message instanceof AIMessage) text += JSON.stringify(message.tool_calls ?? [])
+  }
+  return estimateTokens(text) + images * IMAGE_TOKENS + estimateTokens(JSON.stringify(tools))
 }
 
 /** The tool calls of the assistant items that have no result item, in order. */
