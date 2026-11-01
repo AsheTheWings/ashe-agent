@@ -3,6 +3,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Subprocess } from "bun"
 
+import { FakeGithub } from "./github.ts"
+
 const main = join(import.meta.dir, "../../src/main.ts")
 
 /** Bounded wait for a condition, polling every 10 ms. */
@@ -23,6 +25,7 @@ export const waitFor = async <A>(what: string, check: () => A | undefined | Prom
  * serves the model `test/model` at `modelBaseUrl`, with a synthetic key.
  */
 export class CliRun {
+  readonly github = new FakeGithub()
   readonly dir = mkdtempSync(join(tmpdir(), "ashe-agent-cli-"))
   readonly stateDir = join(this.dir, "state")
   readonly env: Record<string, string>
@@ -37,6 +40,8 @@ export class CliRun {
     const keyFile = join(this.dir, "provider-api-key")
     writeFileSync(keyFile, "sk-synthetic-test-key")
     chmodSync(keyFile, 0o600)
+    const githubKey = join(this.dir, "github-key")
+    writeFileSync(githubKey, "synthetic-github-secret", { mode: 0o600 })
     this.env = {
       PATH: process.env.PATH ?? "/usr/bin:/bin",
       HOME: this.dir,
@@ -48,6 +53,12 @@ export class CliRun {
       }),
       ASHE_AGENT_DEFAULT_MODEL: "test/model",
       ASHE_AGENT_LISTEN_PORT: "0",
+      ASHE_AGENT_GITHUB_CLIENT_ID: "test-client",
+      ASHE_AGENT_GITHUB_CLIENT_SECRET_FILE: githubKey,
+      ASHE_AGENT_GITHUB_CALLBACK_URL: "http://127.0.0.1/callback",
+      ASHE_AGENT_GITHUB_OWNER_ID: "42",
+      ASHE_AGENT_GITHUB_URL: this.github.base,
+      ASHE_AGENT_GITHUB_API_URL: this.github.base,
       ASHE_AGENT_ORIGINS: JSON.stringify(["http://127.0.0.1:5173"]),
       OTEL_TRACES_EXPORTER: "none",
       OTEL_METRICS_EXPORTER: "none",
@@ -76,12 +87,10 @@ export class CliRun {
     return { code, stdout, stderr }
   }
 
-  /** Migrates, sets the owner password, and returns this run. */
-  async prepare(password = "owner-password") {
+  /** Migrates and returns this run. */
+  async prepare() {
     const migrated = await this.run(["migrate"])
     if (migrated.code !== 0) throw new Error(`migrate failed: ${migrated.stderr}`)
-    const owner = await this.run(["owner", "set-password"], { stdin: `${password}\n` })
-    if (owner.code !== 0) throw new Error(`owner set-password failed: ${owner.stderr}`)
     return this
   }
 
@@ -110,6 +119,7 @@ export class CliRun {
 
   async cleanup() {
     await this.stopServers()
+    this.github.stop()
     rmSync(this.dir, { recursive: true, force: true })
   }
 }

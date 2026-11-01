@@ -6,7 +6,7 @@ import { logs, SeverityNumber } from "@opentelemetry/api-logs"
  * with its attributes, units, and error classes. Bump the version whenever
  * a name, attribute, unit, or error class changes.
  */
-export const SIGNAL_CATALOG_VERSION = 3
+export const SIGNAL_CATALOG_VERSION = 4
 
 /** The instrumentation scope of every signal. */
 export const SCOPE = "ashe-agent"
@@ -18,7 +18,6 @@ export const ERROR_CLASSES = [
   "invalid_params",
   "unauthenticated",
   "authentication_failed",
-  "rate_limited",
   "not_found",
   "conflict",
   "already_resolved",
@@ -42,6 +41,10 @@ export const ERROR_CLASSES = [
   "snapshot_failed",
   "restore_failed",
   "user_instructions_unreadable",
+  "sign_in_denied",
+  "not_owner",
+  "github_failed",
+  "sign_in_unknown_state",
 ] as const
 
 export type ErrorClass = (typeof ERROR_CLASSES)[number]
@@ -55,6 +58,7 @@ export const CONTEXT_TRIGGERS = ["threshold", "limit"] as const
 export const VALIDATION_RESULTS = ["passed", "failed"] as const
 export const QUESTION_OUTCOMES = ["answered", "message", "canceled"] as const
 export const CHECKPOINT_WINDOW_CAUSES = ["creation", "context_turn"] as const
+export const SIGN_IN_OUTCOMES = ["signed_in", "denied", "not_owner", "github_failed", "unknown_state"] as const
 
 /** Every attribute a signal may carry, with its type and, when bounded by a list, its values. */
 export const ATTRIBUTES = {
@@ -89,6 +93,12 @@ export const ATTRIBUTES = {
     type: "string",
     values: CHECKPOINT_WINDOW_CAUSES,
     description: "Why a checkpoint window was built: session creation or a context turn.",
+  },
+  "ashe_agent.sign_in.outcome": {
+    type: "string",
+    values: SIGN_IN_OUTCOMES,
+    description:
+      "How a GitHub sign-in callback ended: the owner signed in, the user denied access, another GitHub user, a GitHub failure, or an unknown state.",
   },
 } as const
 
@@ -132,6 +142,10 @@ export const SPANS = {
   "ashe_agent.memory_publish": { description: "Publishing a session's next memory generation.", attributes: ["error.type"] },
   "ashe_agent.snapshot": { description: "Reading a session's research and memory files for a turn's snapshot.", attributes: ["error.type"] },
   "ashe_agent.restore": { description: "Completing a rewind's pending restore of research and memory files.", attributes: ["error.type"] },
+  "ashe_agent.github_sign_in": {
+    description: "One GitHub sign-in callback, from GitHub's redirect to the redirect back to the client.",
+    attributes: ["ashe_agent.sign_in.outcome", "error.type"],
+  },
 } as const satisfies Record<string, { description: string; attributes: ReadonlyArray<AttributeName> }>
 
 export const METRICS = {
@@ -170,6 +184,11 @@ export const LOGS = {
     severity: "WARN",
     description: "MCP tools whose registered names collide, none registered.",
     attributes: ["ashe_agent.tool", "ashe_agent.mcp.collision.servers", "ashe_agent.mcp.collision.tools"],
+  },
+  "ashe_agent.github_token_revoke_failed": {
+    severity: "WARN",
+    description: "Revoking the GitHub token of a sign-in failed; the sign-in's outcome is unchanged.",
+    attributes: ["error.type"],
   },
 } as const satisfies Record<string, { severity: "ERROR" | "WARN"; description: string; attributes: ReadonlyArray<AttributeName> }>
 

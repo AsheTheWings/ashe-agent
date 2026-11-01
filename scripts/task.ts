@@ -147,7 +147,7 @@ const buildWeb = async () => {
 }
 
 /** Serves the web client for development on 127.0.0.1, on Vite's port. */
-const devWeb = () => run([process.execPath, "--bun", "x", "vite", "--host", "127.0.0.1"], undefined, join(root, "packages/web"))
+const devWeb = () => run([process.execPath, join(root, "packages/web/scripts/dev.ts")])
 
 /** Compiles the server and its commands into one linux-x64 executable at `dist/bin/ashe-agent`. */
 const buildBinary = async () => {

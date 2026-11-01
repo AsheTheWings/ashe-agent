@@ -45,10 +45,11 @@ describe("OTLP export", () => {
     chmodSync(headersFile, 0o600)
     run.env.ASHE_AGENT_OTLP_HEADERS_FILE = headersFile
     try {
-      await run.prepare("owner-password")
+      await run.prepare()
+      const token = (await run.run(["token", "create", "telemetry"])).stdout.trim()
       const url = await run.serve()
       const client = await Client.connect(url)
-      expect((await client.request("auth.login", { password: "owner-password", protocolVersion: 1 })).error).toBeUndefined()
+      expect((await client.request("auth.authenticate", { token, protocolVersion: 1 })).error).toBeUndefined()
       expect((await client.request("models.list")).error).toBeUndefined()
       client.close()
       // Stopping the server flushes every signal it holds.

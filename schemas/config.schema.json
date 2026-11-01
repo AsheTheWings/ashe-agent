@@ -155,6 +155,42 @@
       },
       "description": "Browser origins allowed to open a WebSocket connection."
     },
+    "githubClientId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Client ID of the GitHub OAuth app the owner signs in through."
+    },
+    "githubClientSecretFile": {
+      "type": "string",
+      "pattern": "^\\/",
+      "description": "Path of the protected file holding the GitHub OAuth app's client secret."
+    },
+    "githubCallbackUrl": {
+      "type": "string",
+      "description": "The server's sign-in callback URL, <server origin>/v1/auth/github/callback, as the OAuth app registers it."
+    },
+    "githubOwnerId": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Numeric GitHub user ID of the owner, the only account that signs in."
+    },
+    "githubUrl": {
+      "type": "string",
+      "description": "Base URL of GitHub's authorize and token endpoints."
+    },
+    "githubApiUrl": {
+      "type": "string",
+      "description": "Base URL of GitHub's REST API."
+    },
+    "devWebAllowedHosts": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Host names the development web server answers besides its loopback address."
+    },
     "permission": {
       "anyOf": [
         {

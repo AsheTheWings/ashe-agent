@@ -6,6 +6,8 @@ import {
   ErrorCode,
   PROTOCOL_PATH,
   PROTOCOL_VERSIONS,
+  SIGN_IN_CALLBACK_PATH,
+  SIGN_IN_START_PATH,
   authMethods,
   methods,
   unsupportedVersionError,
@@ -16,7 +18,8 @@ import {
   type ResultOf,
   type Sender,
 } from "@ashe-agent/protocol"
-import { authenticate, login, principalActive, refresh } from "../auth/credentials.ts"
+import { authenticate, createLogin, principalActive, refresh } from "../auth/credentials.ts"
+import { GithubSignIn, type GithubSignInConfig } from "../auth/github.ts"
 import { emitLog, endSpan, startSpan, type ErrorClass } from "../telemetry/signals.ts"
 
 /** How long a connection may wait before its first message, which must authenticate it. */
@@ -43,8 +46,6 @@ const errorClassOf = (code: number): ErrorClass => {
       return "unauthenticated"
     case ErrorCode.authenticationFailed:
       return "authentication_failed"
-    case ErrorCode.rateLimited:
-      return "rate_limited"
     case ErrorCode.notFound:
       return "not_found"
     case ErrorCode.conflict:
@@ -91,6 +92,8 @@ export interface WebSocketServerOptions {
   readonly hostname: string
   readonly port: number
   readonly origins: ReadonlyArray<string>
+  /** The GitHub OAuth app the owner signs in through, and the owner's GitHub user ID. */
+  readonly github: GithubSignInConfig
   readonly handlers: Handlers
   readonly now?: () => number
   readonly onClose?: (connection: Connection) => void
@@ -114,12 +117,16 @@ const error = (code: number, message: string): ErrorObject => ({ code, message }
 const decodeRequest = Schema.decodeUnknownResult(AnyRequest)
 
 /**
- * Serves the protocol on one WebSocket path. A connection's first message
- * must authenticate it within `AUTH_DEADLINE_MS`; any other first message,
- * a failed authentication, or an unsupported version closes it.
+ * Serves the protocol on one WebSocket path and the GitHub sign-in on its
+ * start and callback paths; every other path is not found. A connection's
+ * first message must authenticate it within `AUTH_DEADLINE_MS`; any other
+ * first message, a failed authentication, or an unsupported version closes
+ * it.
  */
 export const startWebSocketServer = (options: WebSocketServerOptions): WebSocketServer => {
   const now = options.now ?? Date.now
+  const signIn = new GithubSignIn(options.github, options.origins, now)
+  const ownerId = options.github.ownerId
   const sockets = new Set<ServerWebSocket<Connection>>()
 
   const send = (socket: ServerWebSocket<Connection>, message: unknown) => {
@@ -135,7 +142,7 @@ export const startWebSocketServer = (options: WebSocketServerOptions): WebSocket
   }
 
   /** Authenticates the connection by its first request, returning the error it answered with, if any. */
-  const authenticateConnection = async (socket: ServerWebSocket<Connection>, request: AnyRequest): Promise<ErrorObject | null> => {
+  const authenticateConnection = async (socket: ServerWebSocket<Connection>, request: AnyRequest, exchangeUserId: number | null): Promise<ErrorObject | null> => {
     const refusing = (failure: ErrorObject) => {
       refuse(socket, request.id, failure)
       return failure
@@ -157,26 +164,18 @@ export const startWebSocketServer = (options: WebSocketServerOptions): WebSocket
       return refusing(unsupportedVersionError())
     }
     let result: { principal: Sender } & Record<string, unknown>
-    if (method === "auth.login") {
-      const outcome = await login(options.db, (value as unknown as ParamsOf<"auth.login">).password, now())
-      if (!outcome.ok) {
-        if (outcome.reason === "rate-limited") {
-          return refusing({
-            code: ErrorCode.rateLimited,
-            message: "too many failed logins",
-            data: { retryAt: outcome.retryAt },
-          })
-        }
-        const message = outcome.reason === "no-password" ? "no owner password is set" : "wrong password"
-        return refusing(error(ErrorCode.authenticationFailed, message))
+    if (method === "auth.exchange") {
+      const githubUserId = exchangeUserId
+      if (githubUserId === null || githubUserId !== ownerId) {
+        return refusing(error(ErrorCode.authenticationFailed, "invalid sign-in code"))
       }
-      result = { ...outcome.tokens }
+      result = { ...createLogin(options.db, githubUserId, now()) }
     } else if (method === "auth.refresh") {
-      const outcome = refresh(options.db, (value as unknown as ParamsOf<"auth.refresh">).refreshToken, now())
+      const outcome = refresh(options.db, (value as unknown as ParamsOf<"auth.refresh">).refreshToken, ownerId, now())
       if (!outcome.ok) return refusing(error(ErrorCode.authenticationFailed, "invalid refresh token"))
       result = { ...outcome.tokens }
     } else {
-      const outcome = authenticate(options.db, (value as unknown as ParamsOf<"auth.authenticate">).token, now())
+      const outcome = authenticate(options.db, (value as unknown as ParamsOf<"auth.authenticate">).token, ownerId, now())
       if (!outcome.ok) return refusing(error(ErrorCode.authenticationFailed, "invalid token"))
       result = { principal: outcome.principal }
     }
@@ -207,7 +206,7 @@ export const startWebSocketServer = (options: WebSocketServerOptions): WebSocket
       fail(socket, request.id, failure)
       return failure
     }
-    if (!principalActive(options.db, principal)) {
+    if (!principalActive(options.db, principal, ownerId)) {
       const failure = error(ErrorCode.unauthenticated, "the login or API token was revoked")
       refuse(socket, request.id, failure)
       return failure
@@ -244,6 +243,15 @@ export const startWebSocketServer = (options: WebSocketServerOptions): WebSocket
     port: options.port,
     fetch(request, server) {
       const url = new URL(request.url)
+      if (url.pathname === SIGN_IN_START_PATH || url.pathname === SIGN_IN_CALLBACK_PATH) {
+        if (request.method !== "GET") {
+          return new Response("method not allowed", {
+            status: 405,
+            headers: { Allow: "GET", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" },
+          })
+        }
+        return url.pathname === SIGN_IN_START_PATH ? signIn.start(url) : signIn.callback(url)
+      }
       if (url.pathname !== PROTOCOL_PATH) return new Response("not found", { status: 404 })
       const origin = request.headers.get("origin")
       if (origin !== null && !options.origins.includes(origin)) return new Response("origin not allowed", { status: 403 })
@@ -273,8 +281,11 @@ export const startWebSocketServer = (options: WebSocketServerOptions): WebSocket
           const replyId = typeof id === "string" || Number.isInteger(id) ? (id as RequestId) : null
           return socket.data.principal === null ? refuse(socket, replyId, failure) : fail(socket, replyId, failure)
         }
+        const exchangeParams = request.success.params as { code?: unknown; verifier?: unknown } | undefined
+        const exchangeUserId = request.success.method === "auth.exchange" && typeof exchangeParams?.code === "string"
+          ? signIn.exchange(exchangeParams.code, typeof exchangeParams.verifier === "string" ? exchangeParams.verifier : "") : null
         const principal = socket.data.principal
-        if (principal === null) return traced(request.success, () => authenticateConnection(socket, request.success))
+        if (principal === null) return traced(request.success, () => authenticateConnection(socket, request.success, exchangeUserId))
         return traced(request.success, () => handle(socket, request.success, principal))
       },
       close(socket) {
@@ -292,7 +303,7 @@ export const startWebSocketServer = (options: WebSocketServerOptions): WebSocket
     dataVersion = version
     for (const socket of sockets) {
       const principal = socket.data.principal
-      if (principal !== null && !principalActive(options.db, principal)) {
+      if (principal !== null && !principalActive(options.db, principal, ownerId)) {
         socket.close(POLICY_VIOLATION, "the login or API token was revoked")
       }
     }

@@ -2,21 +2,19 @@ import { describe, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
-import { login as loginDirect, setOwnerPassword } from "../src/auth/credentials.ts"
 import { tokenHash } from "../src/auth/tokens.ts"
-import { openDatabase } from "../src/store/database.ts"
-import { CliRun, Client, waitFor } from "./support/cli.ts"
+import { CliRun, Client } from "./support/cli.ts"
 
-const PASSWORD = "owner-password"
+import { signInCode } from "./support/github.ts"
 
-/** Runs `body` against a run-owned state directory, migrated with a password unless `fresh`, and cleans up. */
+/** Runs `body` against a run-owned state directory, migrated unless `fresh`, and cleans up. */
 const withRun = async (
   body: (run: CliRun, url: string) => Promise<void>,
   options: { fresh?: boolean; serve?: boolean; env?: Record<string, string> } = {},
 ) => {
   const run = new CliRun(options.env)
   try {
-    if (!options.fresh) await run.prepare(PASSWORD)
+    if (!options.fresh) await run.prepare()
     const url = options.serve === false ? "" : await run.serve()
     await body(run, url)
   } finally {
@@ -24,9 +22,10 @@ const withRun = async (
   }
 }
 
-const login = async (url: string, password = PASSWORD) => {
+const login = async (url: string) => {
+  const exchange = await signInCode(url)
   const client = await Client.connect(url)
-  return { client, response: await client.request("auth.login", { password, protocolVersion: 1 }) }
+  return { client, response: await client.request("auth.exchange", { ...exchange, protocolVersion: 1 }) }
 }
 
 const authenticateWith = async (url: string, token: string, protocolVersion = 1) => {
@@ -126,7 +125,7 @@ describe("entry point and database", () => {
         const destination = join(run.dir, "dump.db")
         expect((await run.run(["db", "dump", destination])).code).toBe(0)
         const copy = new Database(destination, { readonly: true })
-        expect(copy.query("SELECT 1 FROM owner WHERE id = 1").get()).not.toBeNull()
+        expect(copy.query("SELECT count(*) AS n FROM api_tokens").get()).toEqual({ n: 0 })
         copy.close()
       },
       { serve: false },
@@ -181,20 +180,6 @@ describe("authentication over a real WebSocket", () => {
     await withRun(async (_run, url) => expect(url).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/v1\/ws$/))
   })
 
-  test("login is refused while no owner password is set", async () => {
-    await withRun(
-      async (run) => {
-        expect((await run.run(["migrate"])).code).toBe(0)
-        const url = await run.serve()
-        const { client, response } = await login(url, "anything")
-        expect(response.error.code).toBe(-32002)
-        expect(response.error.message).toContain("no owner password")
-        expect((await client.waitClosed()).code).toBe(1008)
-      },
-      { fresh: true, serve: false },
-    )
-  })
-
   test("login and refresh authenticate their own connections", async () => {
     await withRun(async (_run, url) => {
       const first = await login(url)
@@ -234,16 +219,13 @@ describe("authentication over a real WebSocket", () => {
       const dump = JSON.stringify([
         db.query("SELECT * FROM access_tokens").all(),
         db.query("SELECT * FROM refresh_tokens").all(),
-        db.query("SELECT * FROM owner").all(),
       ])
       const access = db.query<{ token_hash: string }, []>("SELECT token_hash FROM access_tokens").all()
       const refresh = db.query<{ token_hash: string }, []>("SELECT token_hash FROM refresh_tokens").all()
-      const owner = db.query<{ password_hash: string }, []>("SELECT password_hash FROM owner").get()!
       db.close()
       expect(access.map((row) => row.token_hash)).toEqual([tokenHash(response.result.accessToken)])
       expect(refresh.map((row) => row.token_hash)).toEqual([tokenHash(response.result.refreshToken)])
-      expect(owner.password_hash.startsWith("$argon2id$")).toBe(true)
-      for (const secret of [response.result.accessToken, response.result.refreshToken, PASSWORD]) {
+      for (const secret of [response.result.accessToken, response.result.refreshToken]) {
         expect(dump).not.toContain(secret)
       }
     })
@@ -312,7 +294,7 @@ describe("authentication over a real WebSocket", () => {
   })
 })
 
-describe("refresh, sign-out, and rate limiting", () => {
+describe("refresh token rotation", () => {
   test("refresh rotates, and reusing a rotated token revokes its family", async () => {
     await withRun(async (_run, url) => {
       const { response } = await login(url)
@@ -336,65 +318,6 @@ describe("refresh, sign-out, and rate limiting", () => {
       expect((await refreshWith(url, rotated.refreshToken)).response.error.code).toBe(-32002)
       expect((await authenticateWith(url, rotated.accessToken)).response.error.code).toBe(-32002)
     })
-  })
-
-  test("a password change revokes refresh tokens and closes login connections", async () => {
-    await withRun(async (run, url) => {
-      const { client, response } = await login(url)
-      expect((await run.run(["owner", "set-password"], { stdin: "another-password\n" })).code).toBe(0)
-      expect((await client.waitClosed(5_000)).code).toBe(1008)
-      expect((await refreshWith(url, response.result.refreshToken)).response.error.code).toBe(-32002)
-      expect((await authenticateWith(url, response.result.accessToken)).response.error.code).toBe(-32002)
-    })
-  })
-
-  test("five failed logins lock login, even with the right password", async () => {
-    await withRun(async (_run, url) => {
-      for (let attempt = 0; attempt < 5; attempt++) {
-        expect((await login(url, "wrong")).response.error.code).toBe(-32002)
-      }
-      const locked = (await login(url)).response
-      expect(locked.error.code).toBe(-32003)
-      expect(locked.error.data.retryAt).toBeGreaterThan(Date.now())
-    })
-  })
-
-  test("concurrent failed logins cannot pass the limit together", async () => {
-    await withRun(async (_run, url) => {
-      const responses = await Promise.all(Array.from({ length: 12 }, () => login(url, "wrong")))
-      const codes = responses.map(({ response }) => response.error.code)
-      expect(codes.filter((code) => code === -32002)).toHaveLength(5)
-      expect(codes.filter((code) => code === -32003)).toHaveLength(7)
-    })
-  })
-})
-
-describe("password change during a login", () => {
-  test("a login whose verification overlaps a password change fails", async () => {
-    await withRun(
-      async (run) => {
-        const db = openDatabase(run.databasePath)
-        try {
-          let release = () => {}
-          const verifying = new Promise<void>((resolve) => (release = resolve))
-          let verifyStarted = false
-          const pending = loginDirect(db, PASSWORD, Date.now(), async (password, hash) => {
-            verifyStarted = true
-            const ok = await Bun.password.verify(password, hash)
-            await verifying
-            return ok
-          })
-          await waitFor("verification to start", () => (verifyStarted ? true : undefined))
-          await setOwnerPassword(db, "changed-password", Date.now())
-          release()
-          expect((await pending).ok).toBe(false)
-          expect(db.query("SELECT count(*) AS n FROM logins WHERE revoked_at IS NULL").get()).toEqual({ n: 0 })
-        } finally {
-          db.close()
-        }
-      },
-      { serve: false },
-    )
   })
 })
 
@@ -431,7 +354,7 @@ describe("API token lifecycle", () => {
       expect((await authenticateWith(url, token)).response.error.code).toBe(-32002)
       expect((await run.run(["token", "list"])).stdout).toContain("laptop")
     })
-  })
+  }, 20_000)
 })
 
 describe("agents over a real WebSocket", () => {

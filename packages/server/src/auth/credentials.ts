@@ -1,6 +1,5 @@
 import type { Database } from "bun:sqlite"
 import type { Sender } from "@ashe-agent/protocol"
-import { LOGIN_FAILURE_WINDOW_MS, loginLockedUntil } from "./rate-limit.ts"
 import { ACCESS_TOKEN_TTL_MS, REFRESH_TOKEN_TTL_MS, newToken, tokenHash, tokenKind } from "./tokens.ts"
 
 export interface Tokens {
@@ -10,11 +9,6 @@ export interface Tokens {
   readonly refreshTokenExpiresAt: number
   readonly principal: Sender
 }
-
-export type LoginResult =
-  | { readonly ok: true; readonly tokens: Tokens }
-  | { readonly ok: false; readonly reason: "no-password" | "wrong-password" }
-  | { readonly ok: false; readonly reason: "rate-limited"; readonly retryAt: number }
 
 export type RefreshResult = { readonly ok: true; readonly tokens: Tokens } | { readonly ok: false }
 
@@ -30,20 +24,6 @@ export interface ApiTokenInfo {
 export type CreateTokenResult =
   | { readonly ok: true; readonly token: string; readonly info: ApiTokenInfo }
   | { readonly ok: false; readonly reason: "empty-name" | "name-taken" }
-
-export const hasOwnerPassword = (db: Database): boolean => db.query("SELECT 1 FROM owner WHERE id = 1").get() !== null
-
-/** Stores the owner password's argon2id hash and revokes every login and its tokens. */
-export const setOwnerPassword = async (db: Database, password: string, now: number): Promise<void> => {
-  const hash = await Bun.password.hash(password, { algorithm: "argon2id" })
-  db.transaction(() => {
-    db.query(
-      `INSERT INTO owner (id, password_hash, updated_at) VALUES (1, ?, ?)
-        ON CONFLICT (id) DO UPDATE SET password_hash = excluded.password_hash, updated_at = excluded.updated_at`,
-    ).run(hash, now)
-    db.query("UPDATE logins SET revoked_at = ? WHERE revoked_at IS NULL").run(now)
-  })()
-}
 
 const issueTokens = (db: Database, loginId: string, now: number): Tokens => {
   const accessToken = newToken("access")
@@ -70,76 +50,33 @@ const issueTokens = (db: Database, loginId: string, now: number): Tokens => {
   }
 }
 
-/**
- * Logs the owner in: a new login with its first access and refresh tokens.
- * Failures count toward the rate limit, and a locked login checks no
- * password at all. Attempts against one database run one at a time. A
- * password change committed while the password was being verified fails
- * the login, so no login outlives the change.
- */
-export const login = (
-  db: Database,
-  password: string,
-  now: number,
-  verify: (password: string, hash: string) => Promise<boolean> = (password, hash) => Bun.password.verify(password, hash),
-): Promise<LoginResult> => {
-  // One attempt at a time per database: an attempt checks the failures only
-  // after the attempts before it recorded theirs, so concurrent attempts
-  // cannot pass the rate limit together or verify passwords in parallel.
-  const previous = loginQueues.get(db) ?? Promise.resolve()
-  const attempt = previous.then(() => attemptLogin(db, password, now, verify))
-  loginQueues.set(
-    db,
-    attempt.then(
-      () => {},
-      () => {},
-    ),
-  )
-  return attempt
-}
-
-const loginQueues = new WeakMap<Database, Promise<void>>()
-
-const attemptLogin = async (
-  db: Database,
-  password: string,
-  now: number,
-  verify: (password: string, hash: string) => Promise<boolean>,
-): Promise<LoginResult> => {
-  db.query("DELETE FROM login_failures WHERE at <= ?").run(now - LOGIN_FAILURE_WINDOW_MS)
-  const failures = db.query<{ at: number }, []>("SELECT at FROM login_failures").all().map((row) => row.at)
-  const lockedUntil = loginLockedUntil(failures, now)
-  if (lockedUntil !== null) return { ok: false, reason: "rate-limited", retryAt: lockedUntil }
-  const owner = db.query<{ password_hash: string }, []>("SELECT password_hash FROM owner WHERE id = 1").get()
-  if (owner === null) return { ok: false, reason: "no-password" }
-  if (!(await verify(password, owner.password_hash))) {
-    db.query("INSERT INTO login_failures (at) VALUES (?)").run(now)
-    return { ok: false, reason: "wrong-password" }
-  }
+/** Creates a login for the owner's GitHub user with its first access and refresh tokens. */
+export const createLogin = (db: Database, githubUserId: number, now: number): Tokens => {
   const loginId = crypto.randomUUID()
-  return db.transaction((): LoginResult => {
-    const current = db.query<{ password_hash: string }, []>("SELECT password_hash FROM owner WHERE id = 1").get()
-    if (current?.password_hash !== owner.password_hash) return { ok: false, reason: "wrong-password" }
-    db.run("DELETE FROM login_failures")
-    db.query("INSERT INTO logins (id, created_at) VALUES (?, ?)").run(loginId, now)
-    return { ok: true, tokens: issueTokens(db, loginId, now) }
+  return db.transaction((): Tokens => {
+    db.query("INSERT INTO logins (id, github_user_id, created_at) VALUES (?, ?, ?)").run(loginId, githubUserId, now)
+    return issueTokens(db, loginId, now)
   }).immediate()
 }
 
 /**
  * Exchanges a refresh token for new tokens and retires it. Presenting a
- * retired refresh token, even an expired one, revokes its whole login.
+ * retired refresh token, even an expired one, revokes its whole login. A
+ * login issued for a GitHub user other than `ownerId` refreshes nothing.
  */
-export const refresh = (db: Database, refreshToken: string, now: number): RefreshResult => {
+export const refresh = (db: Database, refreshToken: string, ownerId: number, now: number): RefreshResult => {
   if (tokenKind(refreshToken) !== "refresh") return { ok: false }
   return db.transaction((): RefreshResult => {
     const row = db
-      .query<{ login_id: string; expires_at: number; rotated_at: number | null; revoked_at: number | null }, [string]>(
-        `SELECT r.login_id, r.expires_at, r.rotated_at, l.revoked_at
+      .query<
+        { login_id: string; github_user_id: number; expires_at: number; rotated_at: number | null; revoked_at: number | null },
+        [string]
+      >(
+        `SELECT r.login_id, l.github_user_id, r.expires_at, r.rotated_at, l.revoked_at
           FROM refresh_tokens AS r JOIN logins AS l ON l.id = r.login_id WHERE r.token_hash = ?`,
       )
       .get(tokenHash(refreshToken))
-    if (row === null || row.revoked_at !== null) return { ok: false }
+    if (row === null || row.revoked_at !== null || row.github_user_id !== ownerId) return { ok: false }
     if (row.rotated_at !== null) {
       db.query("UPDATE logins SET revoked_at = ? WHERE id = ?").run(now, row.login_id)
       return { ok: false }
@@ -150,16 +87,20 @@ export const refresh = (db: Database, refreshToken: string, now: number): Refres
   }).immediate()
 }
 
-/** Checks an access token or an API token, recording an API token's use. */
-export const authenticate = (db: Database, token: string, now: number): AuthenticateResult => {
+/**
+ * Checks an access token or an API token, recording an API token's use. An
+ * access token of a login issued for a GitHub user other than `ownerId`
+ * authenticates nothing.
+ */
+export const authenticate = (db: Database, token: string, ownerId: number, now: number): AuthenticateResult => {
   const kind = tokenKind(token)
   if (kind === "access") {
     const row = db
-      .query<{ login_id: string }, [string, number]>(
+      .query<{ login_id: string }, [string, number, number]>(
         `SELECT a.login_id FROM access_tokens AS a JOIN logins AS l ON l.id = a.login_id
-          WHERE a.token_hash = ? AND a.expires_at > ? AND l.revoked_at IS NULL`,
+          WHERE a.token_hash = ? AND a.expires_at > ? AND l.revoked_at IS NULL AND l.github_user_id = ?`,
       )
-      .get(tokenHash(token), now)
+      .get(tokenHash(token), now, ownerId)
     return row === null ? { ok: false } : { ok: true, principal: { kind: "login", loginId: row.login_id } }
   }
   if (kind === "api") {
@@ -208,8 +149,13 @@ export const listApiTokens = (db: Database): ReadonlyArray<ApiTokenInfo> =>
 export const revokeApiToken = (db: Database, name: string, now: number): boolean =>
   db.query("UPDATE api_tokens SET revoked_at = ? WHERE name = ? AND revoked_at IS NULL").run(now, name).changes > 0
 
-/** Whether a connection's principal still holds: its login or API token is not revoked. */
-export const principalActive = (db: Database, principal: Sender): boolean =>
+/**
+ * Whether a connection's principal still holds: its API token is not
+ * revoked, or its login is not revoked and was issued for `ownerId`.
+ */
+export const principalActive = (db: Database, principal: Sender, ownerId: number): boolean =>
   principal.kind === "login"
-    ? db.query("SELECT 1 FROM logins WHERE id = ? AND revoked_at IS NULL").get(principal.loginId) !== null
+    ? db
+        .query("SELECT 1 FROM logins WHERE id = ? AND revoked_at IS NULL AND github_user_id = ?")
+        .get(principal.loginId, ownerId) !== null
     : db.query("SELECT 1 FROM api_tokens WHERE id = ? AND revoked_at IS NULL").get(principal.tokenId) !== null

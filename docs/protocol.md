@@ -28,12 +28,23 @@ newer peer added.
 
 A connection's first request authenticates it and states the client's
 protocol version, a positive integer; this package describes version 1.
-The request is `auth.login` with the owner password, `auth.refresh` with a
+The request is `auth.exchange` with a one-time sign-in code and verifier, `auth.refresh` with a
 refresh token, or `auth.authenticate` with an access token or an API
 token. A server that does not support the stated version answers with the
 `unsupportedVersion` error, whose `data.supportedVersions` lists the
 versions it does support. [Authentication](authentication.md) covers the
 rules for a connection's first message.
+
+## HTTP sign-in endpoints
+
+The same listener answers `GET /v1/auth/github/start` with the client's
+`origin` and S256 `challenge`, and `GET /v1/auth/github/callback` with
+GitHub's `state` and `code` or `error`. They redirect through GitHub and
+return a one-time code in the client's URL fragment. The client removes
+the fragment before opening `/v1/ws`, then sends `auth.exchange` with
+`code`, `verifier`, and `protocolVersion`. Its result is the same token
+pair as `auth.refresh`. [Authentication](authentication.md) owns the flow's
+validation, time limits, and failures. Every other path receives 404.
 
 ## Methods
 

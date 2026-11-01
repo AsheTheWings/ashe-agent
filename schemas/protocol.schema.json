@@ -37,13 +37,16 @@
             "method": {
               "type": "string",
               "enum": [
-                "auth.login"
+                "auth.exchange"
               ]
             },
             "params": {
               "type": "object",
               "properties": {
-                "password": {
+                "code": {
+                  "type": "string"
+                },
+                "verifier": {
                   "type": "string"
                 },
                 "protocolVersion": {
@@ -53,7 +56,8 @@
                 }
               },
               "required": [
-                "password",
+                "code",
+                "verifier",
                 "protocolVersion"
               ],
               "additionalProperties": true
@@ -947,11 +951,6 @@
                         "minimum": -9007199254740991,
                         "maximum": 9007199254740991
                       }
-                    },
-                    "retryAt": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
                     }
                   },
                   "additionalProperties": true
@@ -4108,10 +4107,13 @@
         }
       ]
     },
-    "auth.login.params": {
+    "auth.exchange.params": {
       "type": "object",
       "properties": {
-        "password": {
+        "code": {
+          "type": "string"
+        },
+        "verifier": {
           "type": "string"
         },
         "protocolVersion": {
@@ -4121,12 +4123,13 @@
         }
       },
       "required": [
-        "password",
+        "code",
+        "verifier",
         "protocolVersion"
       ],
       "additionalProperties": true
     },
-    "auth.login.result": {
+    "auth.exchange.result": {
       "type": "object",
       "properties": {
         "accessToken": {

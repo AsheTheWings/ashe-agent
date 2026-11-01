@@ -26,6 +26,14 @@ export type KeyValueStorage = {
 export type SessionClientPorts = {
   readonly openSocket: (url: string, handlers: SocketHandlers) => Socket
   readonly storage: KeyValueStorage
+  readonly signIn: {
+    readonly storage: KeyValueStorage
+    readonly origin: string
+    readonly fragment: () => string
+    readonly clearFragment: () => void
+    readonly navigate: (url: string) => void
+    readonly randomBytes: () => Uint8Array
+  }
   /**
    * Runs `task` while holding the lock `name`, shared by every page of the
    * client's origin, so only one page at a time exchanges the stored

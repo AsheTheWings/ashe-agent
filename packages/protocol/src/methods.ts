@@ -31,8 +31,12 @@ const method = <P extends Schema.Top, R extends Schema.Top>(params: P, result: R
  * A connection's first request is one of the `auth.*` methods.
  */
 export const methods = {
-  "auth.login": method(
-    Schema.Struct({ password: Schema.String, protocolVersion: ProtocolVersion }),
+  /**
+   * Exchanges a sign-in code from a GitHub sign-in for tokens; `verifier`
+   * is the client's verifier whose challenge started the sign-in.
+   */
+  "auth.exchange": method(
+    Schema.Struct({ code: Schema.String, verifier: Schema.String, protocolVersion: ProtocolVersion }),
     Tokens,
   ),
   "auth.refresh": method(
@@ -122,4 +126,4 @@ export type ResultOf<M extends MethodName> = Methods[M]["result"]["Type"]
 export const methodNames = Object.keys(methods) as ReadonlyArray<MethodName>
 
 /** The methods a connection may send before it is authenticated. */
-export const authMethods = ["auth.login", "auth.refresh", "auth.authenticate"] as const satisfies ReadonlyArray<MethodName>
+export const authMethods = ["auth.exchange", "auth.refresh", "auth.authenticate"] as const satisfies ReadonlyArray<MethodName>

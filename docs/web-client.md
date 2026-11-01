@@ -11,8 +11,11 @@ endpoint.
 bun run dev:web
 ```
 
-from the repository root serves the client for development on `127.0.0.1`, on Vite's port. The
-server accepts a browser connection only from an origin that
+from the repository root selects the development profile, loads the `devWeb`
+process's inputs, and serves the client on `127.0.0.1`, on Vite's port.
+`devWebAllowedHosts` admits configured host names, and an occupied port
+fails the task. The development process excludes inherited dependency
+environment overrides after resolving its inputs. The server accepts a browser connection only from an origin that
 `ASHE_AGENT_ORIGINS` lists, so that input must name the origin the
 client is served from; see [configuration](configuration.md).
 
@@ -59,14 +62,22 @@ revision. A public deployment can put both behind the
 ## Signing in
 
 The sign-in page asks for the server's WebSocket URL, such as
-`ws://host:port/v1/ws`, and the owner password. The browser remembers the
-URL for the next visit. The client keeps the access token in memory and
+`ws://host:port/v1/ws`, and offers **Continue with GitHub**. Register the
+OAuth app and callback as [setup](../README.md#use) describes. The tab keeps
+its verifier and server URL in `sessionStorage` while GitHub signs in the
+owner. On return it removes the URL fragment before connecting, exchanges
+the sign-in code with `auth.exchange`, and forgets the verifier regardless
+of the result. A return without the stored verifier or server URL sends no
+exchange and asks the owner to start again. Denial, another GitHub account,
+a GitHub failure, and a failed code exchange each show an explanation.
+
+The browser remembers the server URL for the next visit. The client keeps the access token in memory and
 the refresh token in `localStorage`, and exchanges the refresh token for a
 new pair a minute before the access token expires, on a connection of
 its own. On a later visit, a stored refresh token signs the client in
-without the password. Signing out forgets the refresh token in this
-browser only; the login stays valid until it expires or the password
-changes.
+without another GitHub sign-in. Signing out forgets the refresh token in this
+browser only; the login stays valid until it expires, is revoked, or its
+GitHub user ID differs from the configured owner.
 
 Presenting a refresh token that was already exchanged signs the whole
 login out, as [authentication](authentication.md) explains. Pages of one

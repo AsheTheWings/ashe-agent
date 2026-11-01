@@ -1,4 +1,5 @@
 import { Context, Effect, Layer } from "effect"
+import type { GithubSignInConfig } from "../auth/github.ts"
 import { sessionHandlers } from "../sessions/handlers.ts"
 import { Sessions } from "../sessions/hub.ts"
 import { Store } from "../store/database.ts"
@@ -8,6 +9,7 @@ export interface ServeOptions {
   readonly hostname: string
   readonly port: number
   readonly origins: ReadonlyArray<string>
+  readonly github: GithubSignInConfig
 }
 
 /** The listening protocol server over the session hub, stopped when its layer is released. */

@@ -13,17 +13,15 @@ with status 1.
 | `migrate` | Creates the state directory and database when absent and applies pending migrations. |
 | `migrate status` | Lists applied and pending migrations without writing; drift fails it. |
 | `db dump <path>` | Writes a consistent copy of the live database to `<path>`. |
-| `owner set-password` | Sets the owner password and signs every login out. |
 | `token create <name>` | Creates an API token and prints it once. |
 | `token list` | Lists active API tokens with their creation and last use. |
 | `token revoke <name>` | Revokes an API token and closes its connections. |
 | `--version` | Prints `AsheAgent` and the revision the command was built from. |
 
-`serve`, `db dump`, `owner set-password`, and the `token` commands refuse
+`serve`, `db dump`, and the `token` commands refuse
 to run until `migrate` has applied every migration, and `serve` also
 refuses a ledger that drifted from the migrations it carries. See
 [storage](storage.md).
 
-`owner set-password` reads the password from the terminal with echo off
-and asks for it twice. When standard input is not a terminal it reads the
-password from the first line of its input instead.
+The owner signs in with GitHub through the [web client](web-client.md);
+[authentication](authentication.md) describes logins and API tokens.
