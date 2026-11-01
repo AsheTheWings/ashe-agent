@@ -53,12 +53,33 @@ or as `bin/ashe-agent` from a bundle. A first start in development:
 ```sh
 export ASHE_AGENT_PROFILE=development
 bun packages/server/src/main.ts migrate
-bun packages/server/src/main.ts owner set-password
 bun packages/server/src/main.ts serve
 ```
 
+Before serving, register a GitHub OAuth app with callback
+`<server origin>/v1/auth/github/callback`. Use a separate app for development
+and production. Write its client secret into an owner-only file, preserving
+its bytes, and configure the app and the owner's numeric GitHub user ID:
+
+```json
+{
+  "githubClientId": "<OAuth app client ID>",
+  "githubClientSecretFile": "/absolute/path/to/github-client-secret",
+  "githubCallbackUrl": "https://server.example/v1/auth/github/callback",
+  "githubOwnerId": 123456,
+  "origins": ["https://client.example"]
+}
+```
+
+For development register the development server's HTTP callback, list the
+development client's origin in `origins`, and set `devWebAllowedHosts` when
+accessing Vite by a host name. `bun run dev:web` selects development itself
+and uses the same config-file loader; it refuses an occupied port.
+
 `serve` also needs the providers, with each provider's API key file, and
-the default model; see [configuration](docs/configuration.md).
+the default model; see [configuration](docs/configuration.md). Open the
+[web client](docs/web-client.md) and choose **Continue with GitHub**.
+[Authentication](docs/authentication.md) describes the flow and limits.
 
 ## Documentation
 
@@ -66,7 +87,7 @@ the default model; see [configuration](docs/configuration.md).
 - [Commands](docs/commands.md): what each `ashe-agent` command does.
 - [Configuration](docs/configuration.md): how inputs reach the server, the
   config file, profiles, and protected files.
-- [Authentication](docs/authentication.md): the owner password, logins,
+- [Authentication](docs/authentication.md): GitHub sign-in, logins,
   API tokens, and how connections authenticate.
 - [Protocol](docs/protocol.md): how clients and the server exchange
   messages and session events.

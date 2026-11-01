@@ -6,7 +6,7 @@ import { CliRun, Client, waitFor } from "./support/cli.ts"
 
 /*
  * Qualifies the bundle `bun run test:qualification` names: the binary it
- * holds runs as the server, migrates, takes a password, and serves a turn
+ * holds runs as the server, migrates, creates an API token, and serves a turn
  * that runs a shell command and reads a docx, against a fake Responses API.
  */
 
@@ -64,7 +64,7 @@ describe("the bundle", () => {
     expect(readFileSync(join(extracted, "web/revision.txt"), "utf8").trim()).toBe(revision)
   })
 
-  test("its binary migrates, signs in the owner, and serves a turn with a shell command and a docx read", async () => {
+  test("its binary migrates, authenticates an API token, and serves a turn with a shell command and a docx read", async () => {
     const replies = [
       callReply("1", "shell_exec_command", JSON.stringify({ cmd: "echo qualified-$((6*7))" })),
       callReply("2", "file_read", JSON.stringify({ path: docx, limit: 3 })),
@@ -81,13 +81,15 @@ describe("the bundle", () => {
     })
     const run = new CliRun({}, [binary], `http://127.0.0.1:${api.port}/v1`)
     try {
-      await run.prepare("qualification-password")
+      await run.prepare()
+      const token = await run.run(["token", "create", "qualification"])
+      expect(token.code).toBe(0)
       const url = await run.serve()
       const client = await Client.connect(url)
       const events: Array<any> = []
       client.onNotification = (message) => events.push(message.params.event)
-      const login = await client.request("auth.login", { password: "qualification-password", protocolVersion: 1 })
-      expect(login.result.principal.kind).toBe("login")
+      const login = await client.request("auth.authenticate", { token: token.stdout.trim(), protocolVersion: 1 })
+      expect(login.result.principal.kind).toBe("token")
       const { result } = await client.request("session.create", {})
       const sessionId = result.session.id
       await client.request("session.subscribe", { sessionId })

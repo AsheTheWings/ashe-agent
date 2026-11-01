@@ -10,8 +10,8 @@ The terms these docs use, with the meaning they have in AsheAgent.
 - **Client**: any process that speaks the protocol, such as the
   [web client](web-client.md). A client can disconnect at any time without
   affecting a session.
-- **Owner**: the one person a server serves, who signs in with the owner
-  password or acts through API tokens.
+- **Owner**: the one person a server serves, who signs in with GitHub
+  or acts through API tokens.
 - **Session**: a durable conversation: its history of events, its session
   directory, which is its starting working directory, its shell
   processes, and its permission grants.

@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { Deferred, Effect, Exit, Layer, ManagedRuntime } from "effect"
+import { Deferred, Effect, Exit, Layer, ManagedRuntime, Redacted } from "effect"
 import { createApiToken } from "../../src/auth/credentials.ts"
 import type { Permission } from "../../src/inputs/shapes.ts"
 import { ProtocolServer } from "../../src/server/serve.ts"
@@ -137,7 +137,7 @@ export class TestServer {
   }
 
   async start() {
-    const layer = ProtocolServer.layer({ hostname: "127.0.0.1", port: 0, origins: [] }).pipe(
+    const layer = ProtocolServer.layer({ hostname: "127.0.0.1", port: 0, origins: [], github: { clientId: "test", clientSecret: Redacted.make("synthetic"), callbackUrl: "http://127.0.0.1/callback", ownerId: 42, githubUrl: "http://127.0.0.1:9", githubApiUrl: "http://127.0.0.1:9" } }).pipe(
       Layer.provideMerge(
         Sessions.layer({
           models,

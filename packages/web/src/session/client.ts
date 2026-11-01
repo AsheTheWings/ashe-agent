@@ -2,6 +2,7 @@
  * The session client: connection, authentication, and session state for
  * any user interface, held in a `zustand/vanilla` store.
  */
+import { sha256 } from "@noble/hashes/sha2.js"
 import {
   ErrorCode,
   PROTOCOL_VERSION,
@@ -40,6 +41,8 @@ export type ClientState = {
 export const storageKeys = {
   serverUrl: "ashe-agent.serverUrl",
   refreshToken: "ashe-agent.refreshToken",
+  verifier: "ashe-agent.signInVerifier",
+  signInServer: "ashe-agent.signInServer",
 } as const
 
 /** How long before the access token expires the client refreshes it. */
@@ -51,7 +54,10 @@ const RECONNECT_MAX_DELAY_MS = 30_000
 const REFRESH_RETRY_DELAY_MS = 10_000
 const REFRESH_LOCK = "ashe-agent.refresh"
 
-type Tokens = ResultOf<"auth.login">
+type Tokens = ResultOf<"auth.exchange">
+type SignInExchange = { readonly code: string; readonly verifier: string }
+
+const base64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
 
 type AccessToken = { readonly token: string; readonly expiresAt: number }
 
@@ -103,17 +109,62 @@ export class SessionClient {
 
   /** Connects with the stored refresh token, when the browser holds one for a remembered server. */
   resume() {
+    if (this.completeSignIn()) return
     const url = this.state.serverUrl
     if (url === null || this.ports.storage.getItem(storageKeys.refreshToken) === null) return
     this.connect(url, ++this.generation, null)
   }
 
-  /** Signs in with the owner password and remembers the server URL. */
-  async signIn(serverUrl: string, password: string): Promise<void> {
+  /** Starts GitHub sign-in with a verifier held by this browser tab. */
+  async signIn(serverUrl: string): Promise<void> {
+    try {
+      const start = new URL(serverUrl)
+      if (start.protocol !== "ws:" && start.protocol !== "wss:") throw new Error("Enter a ws:// or wss:// server URL.")
+      start.protocol = start.protocol === "ws:" ? "http:" : "https:"
+      start.pathname = "/v1/auth/github/start"
+      start.search = ""
+      start.hash = ""
+      const verifier = base64url(this.ports.signIn.randomBytes())
+      start.searchParams.set("origin", this.ports.signIn.origin)
+      start.searchParams.set("challenge", base64url(sha256(new TextEncoder().encode(verifier))))
+      this.ports.signIn.storage.setItem(storageKeys.verifier, verifier)
+      this.ports.signIn.storage.setItem(storageKeys.signInServer, serverUrl)
+      this.set({ error: null })
+      this.ports.signIn.navigate(start.href)
+    } catch (error) {
+      this.set({ error: messageOf(error) })
+    }
+  }
+
+  /** Removes a callback's fragment before opening any connection. */
+  private completeSignIn(): boolean {
+    const fragment = new URLSearchParams(this.ports.signIn.fragment().replace(/^#/, ""))
+    if (!fragment.has("signIn") && !fragment.has("signInError")) return false
+    this.ports.signIn.clearFragment()
+    const storage = this.ports.signIn.storage
+    const verifier = storage.getItem(storageKeys.verifier)
+    const serverUrl = storage.getItem(storageKeys.signInServer)
+    storage.removeItem(storageKeys.verifier)
+    storage.removeItem(storageKeys.signInServer)
+    const error = fragment.get("signInError")
+    if (error !== null) {
+      const messages: Record<string, string> = {
+        denied: "GitHub sign-in was denied. Try again when you are ready.",
+        not_owner: "This GitHub account is not the server's owner.",
+        github_failed: "GitHub sign-in failed. Please try again.",
+      }
+      this.set({ error: messages[error] ?? "Sign-in failed. Please try again." })
+      return true
+    }
+    if (!verifier || !serverUrl) {
+      this.set({ error: "This tab has no pending sign-in. Start again with Continue with GitHub." })
+      return true
+    }
     this.disconnect()
     this.ports.storage.setItem(storageKeys.serverUrl, serverUrl)
     this.set({ serverUrl, error: null })
-    await this.connect(serverUrl, ++this.generation, password)
+    void this.connect(serverUrl, ++this.generation, { code: fragment.get("signIn")!, verifier })
+    return true
   }
 
   /** Signs out on this browser: forgets the tokens and closes the connection. */
@@ -138,7 +189,7 @@ export class SessionClient {
     side?.close()
   }
 
-  private async connect(url: string, generation: number, password: string | null): Promise<void> {
+  private async connect(url: string, generation: number, exchange: SignInExchange | null): Promise<void> {
     const current = () => generation === this.generation
     let authenticated = false
     this.set({ status: this.state.principal === null ? "connecting" : "reconnecting" })
@@ -148,16 +199,16 @@ export class SessionClient {
       },
       onClose: () => {
         // A sign-in that fails reports it; every other dropped connection reconnects.
-        if (current() && this.connection === connection && (authenticated || password === null)) this.lost()
+        if (current() && this.connection === connection && (authenticated || exchange === null)) this.lost()
       },
     })
     this.connection = connection
     let principal: Sender
     try {
-      principal = await this.authenticate(connection, password, generation)
+      principal = await this.authenticate(connection, exchange, generation)
     } catch (error) {
       if (!current()) return
-      if (error instanceof ConnectionClosed && password === null) return
+      if (error instanceof ConnectionClosed && exchange === null) return
       const signedOut = error instanceof ProtocolError && error.code === ErrorCode.authenticationFailed
       if (signedOut) this.signOut()
       else this.disconnect()
@@ -178,11 +229,11 @@ export class SessionClient {
     }
   }
 
-  /** Authenticates a new connection with the password, the access token, or the refresh token. */
-  private async authenticate(connection: Connection, password: string | null, generation: number): Promise<Sender> {
+  /** Authenticates a new connection with a sign-in code, an access token, or a refresh token. */
+  private async authenticate(connection: Connection, exchange: SignInExchange | null, generation: number): Promise<Sender> {
     const protocolVersion = PROTOCOL_VERSION
-    if (password !== null) {
-      return this.accept(await connection.request("auth.login", { password, protocolVersion }), generation)
+    if (exchange !== null) {
+      return this.accept(await connection.request("auth.exchange", { ...exchange, protocolVersion }), generation)
     }
     const access = this.access
     if (access !== null && access.expiresAt - this.ports.now() > ACCESS_TOKEN_MIN_LIFE_MS) {

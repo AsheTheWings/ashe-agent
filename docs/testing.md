@@ -23,7 +23,11 @@ A test's class is the suffix of its file name.
 | conformance | `.conformance.test.ts` | `bun run test:conformance` | read-only checks that generated files, pins, and versions match their sources |
 | qualification | `.qualification.test.ts` | `bun run test:qualification [<bundle>]` | the binary and web build of a built bundle, extracted into the test's own directory; the binary runs as the server against a run-owned state directory and a fake Responses API on a loopback port |
 
-CI runs the integration tests after the fast gate.
+CI runs the integration tests after the fast gate. The GitHub sign-in
+suite uses a run-owned fake GitHub to exercise the owner, rejection,
+expiration, upstream failures, and callback telemetry without real
+credentials. Development web integration checks use real Vite on dynamic
+loopback ports and synthetic configuration.
 
 `bun run test:test262` fetches tc39/test262 at the revision
 `packages/codemode/test/test262/manifest.json` pins, into a directory of
@@ -51,7 +55,7 @@ commit, and packages them as `bin/ashe-agent` and `web/` into
 that file, or the bundle it is given: it checks that `web/` holds
 `index.html` and a `revision.txt` equal to the revision the binary's
 `--version` prints, then
-migrates, sets a password, signs in over WebSocket, and runs a turn with
+migrates, creates an API token, authenticates over WebSocket, and runs a turn with
 a shell command and a `file_read` of a docx.
 
 `bun run release-gate` is the release gate: the fast gate, then the

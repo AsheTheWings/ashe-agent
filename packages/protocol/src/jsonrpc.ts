@@ -6,6 +6,16 @@ import { PROTOCOL_VERSIONS } from "./shared.ts"
 /** The WebSocket path every protocol connection uses. */
 export const PROTOCOL_PATH = "/v1/ws"
 
+/**
+ * The HTTP path that starts a GitHub sign-in, with the query parameters
+ * `origin`, the client's origin, and `challenge`, the base64url SHA-256 of
+ * the client's verifier.
+ */
+export const SIGN_IN_START_PATH = "/v1/auth/github/start"
+
+/** The HTTP path GitHub returns the browser to during a sign-in. */
+export const SIGN_IN_CALLBACK_PATH = "/v1/auth/github/callback"
+
 const JsonRpc = Schema.Literal("2.0")
 
 /** Request ids are strings or integers; a response to an unidentifiable request has id null. */
@@ -54,7 +64,6 @@ export const ErrorCode = {
   unsupportedVersion: -32000,
   unauthenticated: -32001,
   authenticationFailed: -32002,
-  rateLimited: -32003,
   notFound: -32004,
   conflict: -32005,
   alreadyResolved: -32006,
@@ -70,8 +79,6 @@ export const ErrorObject = Schema.Struct({
     Schema.Struct({
       /** Present on `unsupportedVersion`: the versions the server supports. */
       supportedVersions: Schema.optionalKey(Schema.Array(Schema.Int)),
-      /** Present on `rateLimited`: when the next attempt may succeed. */
-      retryAt: Schema.optionalKey(Schema.Int),
     }),
   ),
 })

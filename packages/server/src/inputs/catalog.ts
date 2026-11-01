@@ -19,7 +19,7 @@ import {
 } from "./shapes.ts"
 
 /** The processes an entry point can start; each validates only its own inputs. */
-export type Process = "serve" | "migrate" | "db" | "owner" | "token"
+export type Process = "serve" | "migrate" | "db" | "token" | "devWeb"
 
 /** Platform directories that path defaults are built from. */
 export interface Dirs {
@@ -56,7 +56,8 @@ export interface ProtectedInput<S extends Schema.Top> extends Base<S> {
 
 export type Input = ConfigurationInput<Schema.Top> | ProtectedInput<Schema.Top>
 
-const all: ReadonlyArray<Process> = ["serve", "migrate", "db", "owner", "token"]
+const all: ReadonlyArray<Process> = ["serve", "migrate", "db", "token", "devWeb"]
+const withState: ReadonlyArray<Process> = ["serve", "migrate", "db", "token"]
 const serve: ReadonlyArray<Process> = ["serve"]
 
 const configuration = <S extends Schema.Top>(
@@ -96,7 +97,7 @@ export const catalog = {
     env: "ASHE_AGENT_STATE_DIR",
     codec: "string",
     schema: AbsolutePath,
-    processes: all,
+    processes: withState,
     defaults: both((dirs) => `${dirs.stateHome}/ashe-agent`),
   }),
   listenHost: configuration({
@@ -147,6 +148,69 @@ export const catalog = {
     schema: Schema.Array(Origin),
     processes: serve,
     defaults: { development: () => ["http://127.0.0.1:5173"] },
+  }),
+  githubClientId: configuration({
+    description: "Client ID of the GitHub OAuth app the owner signs in through.",
+    env: "ASHE_AGENT_GITHUB_CLIENT_ID",
+    codec: "string",
+    schema: Schema.NonEmptyString,
+    processes: serve,
+    defaults: {},
+  }),
+  githubClientSecretFile: configuration({
+    description: "Path of the protected file holding the GitHub OAuth app's client secret.",
+    env: "ASHE_AGENT_GITHUB_CLIENT_SECRET_FILE",
+    codec: "string",
+    schema: AbsolutePath,
+    processes: serve,
+    defaults: {},
+  }),
+  githubClientSecret: {
+    class: "protected",
+    description: "Client secret of the GitHub OAuth app.",
+    file: "githubClientSecretFile",
+    schema: Schema.String,
+    processes: serve,
+  } satisfies ProtectedInput<typeof Schema.String>,
+  githubCallbackUrl: configuration({
+    description: "The server's sign-in callback URL, <server origin>/v1/auth/github/callback, as the OAuth app registers it.",
+    env: "ASHE_AGENT_GITHUB_CALLBACK_URL",
+    codec: "string",
+    schema: HttpUrl,
+    processes: serve,
+    defaults: {},
+  }),
+  githubOwnerId: configuration({
+    description: "Numeric GitHub user ID of the owner, the only account that signs in.",
+    env: "ASHE_AGENT_GITHUB_OWNER_ID",
+    codec: "json",
+    schema: PositiveInt,
+    processes: serve,
+    defaults: {},
+  }),
+  githubUrl: configuration({
+    description: "Base URL of GitHub's authorize and token endpoints.",
+    env: "ASHE_AGENT_GITHUB_URL",
+    codec: "string",
+    schema: HttpUrl,
+    processes: serve,
+    defaults: both(() => "https://github.com"),
+  }),
+  githubApiUrl: configuration({
+    description: "Base URL of GitHub's REST API.",
+    env: "ASHE_AGENT_GITHUB_API_URL",
+    codec: "string",
+    schema: HttpUrl,
+    processes: serve,
+    defaults: both(() => "https://api.github.com"),
+  }),
+  devWebAllowedHosts: configuration({
+    description: "Host names the development web server answers besides its loopback address.",
+    env: "ASHE_AGENT_DEV_WEB_ALLOWED_HOSTS",
+    codec: "json",
+    schema: Schema.Array(Schema.NonEmptyString),
+    processes: ["devWeb"],
+    defaults: both(() => []),
   }),
   permission: configuration({
     description: "Permission rules in opencode's shape; a tool call no rule matches is allowed.",

@@ -7,10 +7,8 @@ import { ModelCallError } from "../src/agent/model.ts"
 import type { Tool } from "../src/agent/tools.ts"
 import { AgentRegistry } from "../src/agents/agents.ts"
 import { fileSetup, InstructionsUnreadable } from "../src/agents/setup.ts"
-import { setOwnerPassword } from "../src/auth/credentials.ts"
 import type { UserInstructions } from "../src/sessions/hub.ts"
 import { noAgents } from "../src/sessions/setup.ts"
-import { openDatabase } from "../src/store/database.ts"
 import { mcpLogEvents } from "../src/telemetry/mcp-events.ts"
 import { builtinTools } from "../src/tools/builtin.ts"
 import { executeTool } from "../src/tools/codemode/execute.ts"
@@ -94,16 +92,13 @@ const runTurnWithTools = async () => {
 
 const runProtocolRequests = async () => {
   const server = new TestServer({})
-  const db = openDatabase(server.databasePath)
-  await setOwnerPassword(db, marker.password, Date.now())
-  db.close()
   const token = server.token("telemetry")
   await server.start()
   try {
     const wrong = await Client.connect(server.url)
-    expect((await wrong.request("auth.login", { password: `${marker.password}-wrong`, protocolVersion: 1 })).error).toBeDefined()
+    expect((await wrong.request("auth.exchange", { code: marker.password, verifier: "wrong", protocolVersion: 1 })).error).toBeDefined()
     const owner = await Client.connect(server.url)
-    expect((await owner.request("auth.login", { password: marker.password, protocolVersion: 1 })).error).toBeUndefined()
+    expect((await owner.request("auth.authenticate", { token, protocolVersion: 1 })).error).toBeUndefined()
     const tokenClient = await Client.connect(server.url)
     expect((await tokenClient.request("auth.authenticate", { token, protocolVersion: 1 })).error).toBeUndefined()
     const created = await tokenClient.request("session.create", {})
@@ -142,8 +137,8 @@ describe("telemetry", () => {
 
     const spans = telemetry.spans()
     const methods = spans.filter((span) => span.name === "ashe_agent.request").map((span) => span.attributes["rpc.method"])
-    expect(methods).toEqual(expect.arrayContaining(["auth.login", "auth.authenticate", "session.create", "session.input", "unknown"]))
-    expect(spans.some((span) => span.attributes["rpc.method"] === "auth.login" && span.attributes["error.type"] === "authentication_failed")).toBe(true)
+    expect(methods).toEqual(expect.arrayContaining(["auth.exchange", "auth.authenticate", "session.create", "session.input", "unknown"]))
+    expect(spans.some((span) => span.attributes["rpc.method"] === "auth.exchange" && span.attributes["error.type"] === "authentication_failed")).toBe(true)
     const missing = spans.find((span) => span.name === "ashe_agent.request" && span.attributes["error.type"] === "not_found")
     expect(missing).toBeDefined()
 

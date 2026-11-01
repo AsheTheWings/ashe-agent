@@ -9,6 +9,7 @@
     "@assistant-ui/react-markdown": "0.14.24",
     "@base-ui/react": "1.9.0",
     "@fontsource-variable/geist": "5.3.0",
+    "@noble/hashes": "2.4.0",
     "class-variance-authority": "0.7.1",
     "cn": "0.5.1",
     "effect": "4.1.0",

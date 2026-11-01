@@ -28,6 +28,14 @@ export const browserPorts = (): SessionClientPorts => ({
     }
   },
   storage: window.localStorage,
+  signIn: {
+    storage: window.sessionStorage,
+    origin: window.location.origin,
+    fragment: () => window.location.hash,
+    clearFragment: () => window.history.replaceState(null, "", window.location.pathname + window.location.search),
+    navigate: (url) => window.location.assign(url),
+    randomBytes: () => window.crypto.getRandomValues(new Uint8Array(32)),
+  },
   // Web Locks exist only in secure contexts; elsewhere the task runs unlocked.
   withLock: (name, task) => ("locks" in navigator ? navigator.locks.request(name, task) : task()),
   now: () => Date.now(),

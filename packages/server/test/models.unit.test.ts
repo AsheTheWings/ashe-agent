@@ -19,12 +19,13 @@ const sampling = entry({ capabilities: { input: ["text", "image"], temperature: 
 const config = (overrides: Record<string, unknown> = {}) => ({
   providers: { main: { baseURL: "https://api.example.com/v1", apiKeyFile: "/run/key", models: { thinker: reasoning, sampler: sampling } } },
   defaultModel: "main/thinker",
+  githubClientId: "test", githubClientSecretFile: "/run/key", githubCallbackUrl: "http://127.0.0.1/callback", githubOwnerId: 42,
   ...overrides,
 })
 
 /** Resolves serve's inputs with `config` as the config file. */
 const resolve = (overrides: Record<string, unknown> = {}) => {
-  const files: Record<string, FileRead> = { "/home/owner/.config/ashe-agent/config.json": { kind: "ok", text: JSON.stringify(config(overrides)), mode: 0o600 } }
+  const files: Record<string, FileRead> = { "/run/key": { kind: "ok", text: "synthetic", mode: 0o600 }, "/home/owner/.config/ashe-agent/config.json": { kind: "ok", text: JSON.stringify(config(overrides)), mode: 0o600 } }
   const sources: Sources = { env: { ASHE_AGENT_PROFILE: "development" }, dirs, readFile: (path) => files[path] ?? { kind: "absent" } }
   return resolveInputs("serve", sources)
 }

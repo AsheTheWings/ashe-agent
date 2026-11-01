@@ -1,52 +1,70 @@
 # Authentication
 
-AsheAgent has one owner. Clients act as the owner either through a
-login with the owner password or through a named API token.
+AsheAgent serves one owner, identified by a configured numeric GitHub user
+ID. Browser clients sign in with GitHub; programs use named API tokens.
 
-## Owner password and logins
+## GitHub sign-in
 
-`ashe-agent owner set-password` stores the password's argon2id hash. Until
-a password is set, every login is refused, and no protocol method sets
-one. Setting it again signs every login out: its tokens stop working and
-its open connections close, and a login still checking the old password
-when the change commits fails.
+The client generates a 256-bit verifier and keeps it and the server URL in
+its tab's `sessionStorage`. It navigates to `GET /v1/auth/github/start`
+with its origin and the verifier's base64url SHA-256 challenge. The server
+accepts only a configured origin and a 43-character base64url challenge.
+It redirects to GitHub with a fresh state and a separate server-held PKCE
+verifier, the registered callback URL, `allow_signup=false`, and no scopes.
 
-A login returns an access token valid for 15 minutes and a refresh token
-valid for 30 days. `auth.refresh` exchanges a refresh token for a new pair
-and retires the one it used. Presenting a retired refresh token again,
-even after it expired, revokes the whole login, so a stolen and replayed
-token stops working for its thief and its owner alike. A revoked login's
-access tokens stop working too.
+The server holds at most 64 pending sign-ins for ten minutes each. A new
+one evicts the oldest; an evicted owner starts again. The first callback
+consumes its state. An unknown, expired, or reused state receives 400.
+GitHub denial returns `signInError=denied`; missing codes, malformed
+answers, and failed or timed-out GitHub requests return
+`signInError=github_failed`. Each GitHub request has a ten-second deadline.
 
-After 5 failed logins within 15 minutes, logins are refused, without the
-password being checked, until 15 minutes after the fifth failure; the
-error's `data.retryAt` says when. Login attempts run one at a time, so
-concurrent attempts count against the limit in turn and never verify
-passwords in parallel.
+The callback exchanges the GitHub code using the server verifier, fetches
+`/user`, and accepts only the configured numeric user ID, never the login
+name. Another user returns `signInError=not_owner`. The server revokes the
+GitHub token after the lookup regardless of its outcome; failed revocation
+emits a bounded log record and preserves the sign-in result.
+
+For the owner, the callback redirects to the client's origin with
+`#signIn=<code>`. The code has 256 random bits, lasts 60 seconds, and is bound
+to the client's challenge. The client removes the fragment before connecting
+and sends `auth.exchange` with the code, verifier, and protocol version.
+The first exchange consumes the code even when authentication fails.
+Pending sign-ins and codes live only in server memory and disappear on a
+restart. GitHub credentials and codes are absent from persistence and
+telemetry. Sign-in HTTP responses set `Cache-Control: no-store` and
+`Referrer-Policy: no-referrer`.
+
+## Logins
+
+A successful exchange creates a login tied to the owner's GitHub ID and
+returns an access token valid for 15 minutes and a refresh token valid for
+30 days. `auth.refresh` exchanges a refresh token for a new pair and
+retires the one it used. Presenting a retired token again, even after it
+expires, revokes the entire login and all its access tokens.
+
+Changing the configured owner refuses every other login's access and
+refresh tokens. Open connections of an inactive login close. The client
+keeps access tokens in memory and refresh tokens in `localStorage`; see
+[web client](web-client.md#signing-in).
 
 ## API tokens
 
-`ashe-agent token create <name>` prints a new API token once. Names are
-unique among active tokens; a revoked token's name can be used again, for
-a new token with a new identity. Revoking a token closes every open
-connection it authenticated within about a second, and refuses it from
-then on.
+`ashe-agent token create <name>` prints an API token once. Names are unique
+among active tokens; a revoked token's name can be reused with a new
+identity. Revocation closes its connections within about a second and
+refuses all further authentication. API tokens are independent of logins
+and the configured GitHub owner.
 
-## Connections
+## Connections and storage
 
-A connection must authenticate with its first message, within 10
-seconds, by `auth.login`, `auth.refresh`, or `auth.authenticate` with an
-access token or an API token. Any other first message, a failed
-authentication, an unsupported protocol version, or silence closes the
-connection with WebSocket close code 1008. A browser connection whose
-`Origin` header names an origin outside `ASHE_AGENT_ORIGINS` is refused
-before the upgrade.
+A connection authenticates with its first message within ten seconds, by
+`auth.exchange`, `auth.refresh`, or `auth.authenticate` with an access or API
+token. A failed authentication, unsupported version, other first message,
+or silence closes it with WebSocket code 1008. An unlisted browser origin
+is refused before upgrading. Every authenticated request checks that its
+principal remains active.
 
-Every request on an authenticated connection first checks that its login
-or API token is still active, and a revoked one closes the connection
-instead of being answered.
-
-## Storage
-
-The database stores the password only as its argon2id hash and every
-token only as its SHA-256 hash.
+The database stores AsheAgent tokens only as SHA-256 hashes, with each
+login's GitHub user ID. [Setup](../README.md#use) explains the OAuth app;
+the [input catalog](../schemas/config.schema.json) defines its inputs.

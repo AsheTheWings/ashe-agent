@@ -8,8 +8,7 @@ import { existsSync } from "node:fs"
 import { userInfo } from "node:os"
 import { loginShell } from "./tools/shell/login-shell.ts"
 import { Cause, Effect, Exit, Fiber, Layer, Redacted, Result } from "effect"
-import { createApiToken, hasOwnerPassword, listApiTokens, revokeApiToken, setOwnerPassword } from "./auth/credentials.ts"
-import { readSecretLine } from "./cli/terminal.ts"
+import { createApiToken, listApiTokens, revokeApiToken } from "./auth/credentials.ts"
 import { loadInputsOrExit, processSources, readDiskFile, removeDependencyVariables } from "./inputs/bootstrap.ts"
 import { readProviderKeys } from "./inputs/resolve.ts"
 import { catalog } from "./inputs/catalog.ts"
@@ -41,7 +40,6 @@ commands:
   migrate                  apply pending database migrations
   migrate status           list applied and pending migrations without writing
   db dump <path>           write a consistent copy of the database to <path>
-  owner set-password       set the owner password, read from the terminal
   token create <name>      create an API token and print it once
   token list               list active API tokens
   token revoke <name>      revoke an API token
@@ -159,6 +157,15 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
       hostname: inputs.listenHost,
       port: inputs.listenPort,
       origins: inputs.origins,
+      github: {
+        clientId: inputs.githubClientId,
+        // The secret's file input has no default, so a resolved serve always holds it.
+        clientSecret: inputs.githubClientSecret!,
+        callbackUrl: inputs.githubCallbackUrl,
+        ownerId: inputs.githubOwnerId,
+        githubUrl: inputs.githubUrl,
+        githubApiUrl: inputs.githubApiUrl,
+      },
     }).pipe(
       Layer.provideMerge(
         Sessions.layer({
@@ -248,22 +255,6 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
     openCurrentDatabase(inputs.stateDir).close()
     dumpDatabase(databasePath(inputs.stateDir), destination)
     process.stdout.write(`dumped to ${destination}\n`)
-  },
-
-  async owner(args) {
-    if (args.length !== 1 || args[0] !== "set-password") usageError("owner takes set-password")
-    const { inputs } = loadInputsOrExit("owner")
-    const db = openCurrentDatabase(inputs.stateDir)
-    try {
-      const password = await readSecretLine("New owner password: ")
-      if (password.length === 0) fail("the password is empty")
-      if (process.stdin.isTTY && (await readSecretLine("Repeat it: ")) !== password) fail("the passwords differ")
-      const replacing = hasOwnerPassword(db)
-      await setOwnerPassword(db, password, Date.now())
-      process.stdout.write(replacing ? "owner password changed; every login was signed out\n" : "owner password set\n")
-    } finally {
-      db.close()
-    }
   },
 
   async token(args) {

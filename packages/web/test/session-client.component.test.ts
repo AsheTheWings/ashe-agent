@@ -66,7 +66,7 @@ class FakeServer {
   now = START
   answer(request: Request): Answer {
     switch (request.method) {
-      case "auth.login":
+      case "auth.exchange":
       case "auth.refresh":
         this.issued++
         return {
@@ -114,6 +114,9 @@ const fakePorts = (server: FakeServer) => {
   const timers = new Map<number, { readonly callback: () => void; readonly delayMs: number }>()
   let nextTimer = 1
   const storage = memoryStorage()
+  let fragment = ""
+  let destination = ""
+  const pending = memoryStorage()
   const ports: SessionClientPorts = {
     openSocket: (url, handlers) => {
       const socket = new FakeSocket(url, handlers, server)
@@ -122,6 +125,11 @@ const fakePorts = (server: FakeServer) => {
       return socket
     },
     storage,
+    signIn: {
+      storage: pending, origin: "http://client.test", fragment: () => fragment,
+      clearFragment: () => { fragment = "" }, navigate: (url) => { destination = url },
+      randomBytes: () => new Uint8Array(32).fill(7),
+    },
     withLock: (_name, task) => task(),
     now: () => server.now,
     setTimer: (callback, delayMs) => {
@@ -138,7 +146,7 @@ const fakePorts = (server: FakeServer) => {
     timers.delete(entry[0])
     entry[1].callback()
   }
-  return { ports, storage, fire, timers: () => timers.size }
+  return { ports, storage, pending, setFragment: (value: string) => { fragment = value }, fragment: () => fragment, destination: () => destination, fire, timers: () => timers.size }
 }
 
 /** Yields to pending promise reactions until `condition` holds, within a bounded number of turns. */
@@ -152,9 +160,11 @@ const until = async (what: string, condition: () => boolean) => {
 
 const signedIn = async () => {
   const server = new FakeServer()
-  const { ports, storage, fire, timers } = fakePorts(server)
+  const { ports, storage, fire, timers, pending, setFragment } = fakePorts(server)
   const client = new SessionClient(ports)
-  await client.signIn("ws://server.test/", "owner password")
+  await client.signIn("ws://server.test/")
+  setFragment("#signIn=code")
+  client.resume()
   await until("models", () => client.store.getState().models.length > 0)
   return { server, client, storage, fire, timers }
 }
@@ -220,7 +230,7 @@ describe("session client", () => {
     expect(storage.entries.get(storageKeys.serverUrl)).toBe("ws://server.test/")
     expect(storage.entries.get(storageKeys.refreshToken)).toBe("refresh-1")
     expect([...storage.entries.values()]).not.toContain("access-1")
-    expect(server.last().methods()).toEqual(["auth.login", "models.list", "agents.list", "session.list"])
+    expect(server.last().methods()).toEqual(["auth.exchange", "models.list", "agents.list", "session.list"])
   })
 
   test("streamed deltas and a replayed range build the conversation, and a permission request stays until resolved", async () => {
@@ -439,5 +449,83 @@ describe("session client", () => {
     push({ type: "INPUT_WAITING", inputId: "i6", text: "edited", mode: "steer", sender })
     expect(view(client).pending.map((input) => input.inputId)).toEqual(["i6"])
     expect(texts(view(client)).slice(0, 11).at(-1)).toBe("mark:clearing")
+  })
+})
+
+describe("GitHub browser sign-in", () => {
+  test("start keeps a tab verifier and callback removes its fragment before connecting and exchanging", async () => {
+    const server = new FakeServer()
+    const h = fakePorts(server)
+    const client = new SessionClient(h.ports)
+    await client.signIn("wss://server.test/v1/ws")
+    const verifier = h.pending.getItem(storageKeys.verifier)!
+    expect(verifier).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(h.pending.getItem(storageKeys.signInServer)).toBe("wss://server.test/v1/ws")
+    const start = new URL(h.destination())
+    expect(start.origin).toBe("https://server.test")
+    expect(start.pathname).toBe("/v1/auth/github/start")
+    expect(start.searchParams.get("origin")).toBe("http://client.test")
+    expect(start.searchParams.get("challenge")).toBe(Buffer.from(new Bun.CryptoHasher("sha256").update(verifier).digest()).toString("base64url"))
+    expect(server.sockets).toHaveLength(0)
+    h.setFragment("#signIn=once")
+    const returned = new SessionClient({ ...h.ports, openSocket: (url, handlers) => {
+      expect(h.fragment()).toBe("")
+      expect(h.pending.getItem(storageKeys.verifier)).toBeNull()
+      return h.ports.openSocket(url, handlers)
+    } })
+    returned.resume()
+    await until("signed in", () => returned.store.getState().status === "connected")
+    expect(server.last().requests[0]).toMatchObject({ method: "auth.exchange", params: { code: "once", verifier, protocolVersion: 1 } })
+    expect(h.storage.getItem(storageKeys.refreshToken)).toBe("refresh-1")
+    expect(h.pending.getItem(storageKeys.signInServer)).toBeNull()
+    returned.signOut()
+  })
+
+  test("a return missing either tab value sends no exchange and removes its fragment", () => {
+    for (const missing of [storageKeys.verifier, storageKeys.signInServer]) {
+      const server = new FakeServer()
+      const h = fakePorts(server)
+      h.pending.setItem(storageKeys.verifier, "verifier")
+      h.pending.setItem(storageKeys.signInServer, "ws://server.test")
+      h.pending.removeItem(missing)
+      h.setFragment("#signIn=once")
+      const client = new SessionClient(h.ports)
+      client.resume()
+      expect(h.fragment()).toBe("")
+      expect(server.sockets).toHaveLength(0)
+      expect(client.store.getState().error).toContain("no pending sign-in")
+    }
+  })
+
+  test("denied, non-owner, and GitHub failures show messages and discard tab secrets", () => {
+    for (const error of ["denied", "not_owner", "github_failed"]) {
+      const server = new FakeServer()
+      const h = fakePorts(server)
+      h.pending.setItem(storageKeys.verifier, "verifier")
+      h.pending.setItem(storageKeys.signInServer, "ws://server.test")
+      h.setFragment(`#signInError=${error}`)
+      const client = new SessionClient(h.ports)
+      client.resume()
+      expect(client.store.getState().error).toBeTruthy()
+      expect(client.store.getState().status).toBe("signedOut")
+      expect(server.sockets).toHaveLength(0)
+      expect(h.fragment()).toBe("")
+      expect(h.pending.entries.size).toBe(0)
+    }
+  })
+
+  test("a failed exchange shows its error and forgets the verifier", async () => {
+    const server = new FakeServer()
+    const h = fakePorts(server)
+    server.answer = () => ({ error: { code: ErrorCode.authenticationFailed, message: "invalid sign-in code" } })
+    h.pending.setItem(storageKeys.verifier, "verifier")
+    h.pending.setItem(storageKeys.signInServer, "ws://server.test")
+    h.setFragment("#signIn=once")
+    const client = new SessionClient(h.ports)
+    client.resume()
+    await until("failed exchange", () => client.store.getState().error !== null)
+    expect(client.store.getState().error).toBe("invalid sign-in code")
+    expect(h.pending.entries.size).toBe(0)
+    expect(h.storage.getItem(storageKeys.refreshToken)).toBeNull()
   })
 })

@@ -4,6 +4,7 @@ import { readProtectedFile, readProviderKeys, resolveInputs, type FileRead, type
 
 const dirs = { home: "/home/owner", configHome: "/home/owner/.config", stateHome: "/home/owner/.local/state", cacheHome: "/home/owner/.cache" }
 const configPath = "/home/owner/.config/ashe-agent/config.json"
+const githubKeyPath = "/run/ashe-agent/github-key"
 const keyPath = "/run/ashe-agent/exa-api-key"
 
 const modelEntry = { limit: { context: 400_000 }, capabilities: { input: ["text", "image"] } }
@@ -16,7 +17,7 @@ const sources = (
 ): Sources => ({
   env: { ASHE_AGENT_PROFILE: "development", ...env },
   dirs,
-  readFile: (path) => files[path] ?? { kind: "absent" },
+  readFile: (path) => files[path] ?? (path === githubKeyPath ? { kind: "ok", text: "synthetic-github-secret", mode: 0o600 } : { kind: "absent" }),
 })
 
 const protectedFile = (text: string, mode = 0o600): FileRead => ({ kind: "ok", text, mode })
@@ -24,6 +25,10 @@ const configFile = (config: unknown): FileRead => ({ kind: "ok", text: JSON.stri
 
 /** Process input that satisfies every input serve requires in development, with the Exa key file as a protected input. */
 const serveEnv = {
+  ASHE_AGENT_GITHUB_CLIENT_ID: "test",
+  ASHE_AGENT_GITHUB_CLIENT_SECRET_FILE: githubKeyPath,
+  ASHE_AGENT_GITHUB_CALLBACK_URL: "http://127.0.0.1/callback",
+  ASHE_AGENT_GITHUB_OWNER_ID: "42",
   ASHE_AGENT_EXA_API_KEY_FILE: keyPath,
   ASHE_AGENT_PROVIDERS: JSON.stringify(providers),
   ASHE_AGENT_DEFAULT_MODEL: "main/model-a",
@@ -277,5 +282,32 @@ describe("layer precedence", () => {
     const files = { ...serveFiles, [configPath]: configFile({ providers }) }
     const resolution = resolveInputs("serve", sources(env, files))
     expect(resolution.ok && (resolution.inputs.providers as unknown)).toEqual(providers)
+  })
+})
+
+describe("GitHub and development web inputs", () => {
+  test("the OAuth app and owner have no defaults in either profile", () => {
+    for (const profile of ["development", "production"]) {
+      const env = { ...serveEnv, ASHE_AGENT_PROFILE: profile } as Record<string, string>
+      for (const name of ["ASHE_AGENT_GITHUB_CLIENT_ID", "ASHE_AGENT_GITHUB_CLIENT_SECRET_FILE", "ASHE_AGENT_GITHUB_CALLBACK_URL", "ASHE_AGENT_GITHUB_OWNER_ID"]) delete env[name]
+      const issues = issuesOf(resolveInputs("serve", sources(env, serveFiles)))
+      for (const name of ["ASHE_AGENT_GITHUB_CLIENT_ID", "ASHE_AGENT_GITHUB_CLIENT_SECRET_FILE", "ASHE_AGENT_GITHUB_CALLBACK_URL", "ASHE_AGENT_GITHUB_OWNER_ID"]) expect(issues).toContain(name)
+    }
+  })
+
+  test("callback URLs and owner IDs are validated, and a missing GitHub secret fails closed", () => {
+    for (const owner of ["0", "-1", "1.5", '"42"']) {
+      expect(issuesOf(resolveInputs("serve", sources({ ...serveEnv, ASHE_AGENT_GITHUB_OWNER_ID: owner }, serveFiles)))).toContain("ASHE_AGENT_GITHUB_OWNER_ID")
+    }
+    expect(issuesOf(resolveInputs("serve", sources({ ...serveEnv, ASHE_AGENT_GITHUB_CALLBACK_URL: "/relative" }, serveFiles)))).toContain("ASHE_AGENT_GITHUB_CALLBACK_URL")
+    expect(issuesOf(resolveInputs("serve", sources(serveEnv, { ...serveFiles, [githubKeyPath]: { kind: "absent" } })))).toEqual(["ASHE_AGENT_GITHUB_CLIENT_SECRET_FILE"])
+  })
+
+  test("devWeb resolves only its own inputs and uses an empty allowed-host list by default", () => {
+    const defaults = resolveInputs("devWeb", sources({}))
+    expect(defaults.ok && defaults.inputs.devWebAllowedHosts).toEqual([])
+    const configured = resolveInputs("devWeb", sources({ ASHE_AGENT_DEV_WEB_ALLOWED_HOSTS: '["dev.example"]' }))
+    expect(configured.ok && configured.inputs.devWebAllowedHosts).toEqual(["dev.example"])
+    expect(resolveInputs("token", sources({ ASHE_AGENT_DEV_WEB_ALLOWED_HOSTS: "invalid" })).ok).toBe(true)
   })
 })
