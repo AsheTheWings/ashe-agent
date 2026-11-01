@@ -56,8 +56,9 @@ standard `OTEL_*_EXPORTER` inputs. The `otlp` exporters send over HTTP,
 as protobuf or JSON, to `<endpoint>/v1/traces`, `/v1/metrics`, and
 `/v1/logs`. Export headers, which may carry the endpoint's credentials,
 come only from a protected file of `name=value` lines; the server sends
-them with every export and never records them. A malformed headers file
-stops `serve` before it starts, naming the line, never its content.
+them with every export and never records them. `serve` and `check`
+refuse a malformed headers file as an invalid input, with status 2, naming
+the line, never its content.
 
 Spans and log records leave in batches and metrics every 60 seconds, each
 export bounded by 10 seconds. A failed export is dropped, with no other

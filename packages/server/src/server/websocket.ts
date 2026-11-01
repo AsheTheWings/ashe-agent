@@ -106,6 +106,9 @@ export interface WebSocketServer {
 
 const formatHost = (hostname: string) => (hostname.includes(":") ? `[${hostname}]` : hostname)
 
+/** The URL clients connect to on a server listening at the given host and port. */
+export const protocolUrl = (hostname: string, port: number) => `ws://${formatHost(hostname)}:${port}${PROTOCOL_PATH}`
+
 const error = (code: number, message: string): ErrorObject => ({ code, message })
 
 const decodeRequest = Schema.decodeUnknownResult(AnyRequest)
@@ -294,10 +297,16 @@ export const startWebSocketServer = (options: WebSocketServerOptions): WebSocket
       }
     }
   }
+  // Bun leaves the port undefined only for a unix socket, which this server never listens on.
+  const port = server.port
+  if (port === undefined) {
+    server.stop(true)
+    throw new Error("the WebSocket server listens on no TCP port")
+  }
   const revocationTimer = setInterval(checkRevocations, REVOCATION_CHECK_MS)
 
   return {
-    url: `ws://${formatHost(options.hostname)}:${server.port}${PROTOCOL_PATH}`,
+    url: protocolUrl(options.hostname, port),
     stop: async () => {
       clearInterval(revocationTimer)
       for (const socket of sockets) socket.close(1001, "the server is stopping")

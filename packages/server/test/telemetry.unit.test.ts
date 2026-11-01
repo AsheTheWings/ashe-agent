@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Result } from "effect"
-import { parseOtlpHeaders } from "../src/telemetry/sdk.ts"
+import { parseOtlpHeaders } from "../src/telemetry/headers.ts"
 
 describe("OTLP headers file", () => {
   test("takes name=value lines exactly after the first =, skipping blanks and comments", () => {

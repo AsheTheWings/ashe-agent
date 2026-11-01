@@ -13,7 +13,7 @@ import { BatchLogRecordProcessor, ConsoleLogRecordExporter, LoggerProvider, type
 import { ConsoleMetricExporter, MeterProvider, PeriodicExportingMetricReader, type PushMetricExporter } from "@opentelemetry/sdk-metrics"
 import { BatchSpanProcessor, ConsoleSpanExporter, type SpanExporter } from "@opentelemetry/sdk-trace-base"
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node"
-import { Layer, Redacted, Result } from "effect"
+import { Layer, Redacted } from "effect"
 import type { ExporterSelection, OtlpProtocol } from "../inputs/shapes.ts"
 
 type Selection = typeof ExporterSelection.Type
@@ -26,8 +26,8 @@ export interface TelemetryOptions {
   /** The OTLP endpoint, without the `/v1/<signal>` path. */
   readonly endpoint: string
   readonly protocol: typeof OtlpProtocol.Type
-  /** The protected headers file's content, or null without one. */
-  readonly headers: Redacted.Redacted<string> | null
+  /** The export headers from the protected headers file, parsed by `parseOtlpHeaders`; empty without one. */
+  readonly headers: Redacted.Redacted<Record<string, string>>
   readonly serviceVersion: string
   readonly deploymentEnvironment: string
 }
@@ -35,23 +35,6 @@ export interface TelemetryOptions {
 /** How long one export, and the final flush at shutdown, may take. */
 const EXPORT_TIMEOUT_MS = 10_000
 const METRIC_INTERVAL_MS = 60_000
-
-/**
- * Parses an OTLP headers file: one `name=value` per line, blank lines and
- * `#` comments skipped, the value taken exactly as written after the first
- * `=`. A problem names the line, never its content.
- */
-export const parseOtlpHeaders = (text: string): Result.Result<Record<string, string>, string> => {
-  const headers: Record<string, string> = {}
-  for (const [index, line] of text.split(/\r?\n/).entries()) {
-    if (line.trim() === "" || line.trimStart().startsWith("#")) continue
-    const at = line.indexOf("=")
-    const name = at < 0 ? "" : line.slice(0, at).trim()
-    if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name)) return Result.fail(`line ${index + 1} is not name=value`)
-    headers[name] = line.slice(at + 1)
-  }
-  return Result.succeed(headers)
-}
 
 /** The resource attributes every signal carries. */
 export const resourceAttributes = (options: Pick<TelemetryOptions, "serviceVersion" | "deploymentEnvironment">) => ({
@@ -66,12 +49,10 @@ export const resourceAttributes = (options: Pick<TelemetryOptions, "serviceVersi
  * Starts the OpenTelemetry SDK: registers the global tracer, meter, and
  * logger providers with the selected exporters, and returns the layer that
  * routes Effect spans and metrics to them, and the shutdown that flushes
- * them. Fails, before anything is registered, on a malformed headers file.
+ * them.
  */
 export const startTelemetry = (options: TelemetryOptions) => {
-  const parsed = options.headers === null ? Result.succeed({}) : parseOtlpHeaders(Redacted.value(options.headers))
-  if (Result.isFailure(parsed)) return Result.fail(`the OTLP headers file: ${parsed.failure}`)
-  const headers = parsed.success
+  const headers = Redacted.value(options.headers)
   const attributes = resourceAttributes(options)
   const resource = resourceFromAttributes(attributes)
   const json = options.protocol === "http/json"
@@ -116,5 +97,5 @@ export const startTelemetry = (options: TelemetryOptions) => {
     const flushed = Promise.allSettled([tracerProvider.shutdown(), meterProvider.shutdown(), loggerProvider.shutdown()])
     await Promise.race([flushed, new Promise((resolve) => setTimeout(resolve, EXPORT_TIMEOUT_MS).unref())])
   }
-  return Result.succeed({ effectLayer, shutdown })
+  return { effectLayer, shutdown }
 }
