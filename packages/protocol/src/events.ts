@@ -200,6 +200,97 @@ export const SessionError = event("SESSION_ERROR", {
   runId: Schema.optionalKey(Id),
 })
 
+/** The kinds of timeline entries: four the agent appends and four the harness writes. */
+export const EntryKind = Schema.Literals(["open", "done", "decision", "problem", "compaction", "research", "answer", "handoff"])
+
+/** A timeline entry as recorded: its number in the session's one sequence, its kind, its fields, and what a done entry resolves. */
+export const TimelineEntry = Schema.Struct({
+  number: Seq,
+  kind: EntryKind,
+  /** Field values by name, such as `Text`; a compaction or handoff entry's text is its `Text`. */
+  fields: Schema.Record(Schema.String, Schema.String),
+  /** The open and problem entries a done entry resolves. */
+  resolves: Schema.Array(Seq),
+})
+
+/** An entry recorded in the session's timelines, owned by the run `runId`. */
+export const TimelineEntryRecorded = event("TIMELINE_ENTRY", {
+  runId: Id,
+  entry: TimelineEntry,
+})
+
+/** A compaction call replaced the text of the compaction entry `number`, keeping its number and place. */
+export const TimelineEntryReplaced = event("TIMELINE_ENTRY_REPLACED", {
+  runId: Id,
+  number: Seq,
+  text: Schema.String,
+})
+
+/** The rest of the run is a context turn, started by the reserve running short or by the context limit. */
+export const ContextTurnStarted = event("CONTEXT_TURN_STARTED", {
+  runId: Id,
+  trigger: Schema.Literals(["threshold", "limit"]),
+})
+
+/** A context turn's clearing `attempt`, 1 to 3, replaced tool results with placeholders, freeing an estimate of tokens. */
+export const ToolResultsCleared = event("TOOL_RESULTS_CLEARED", {
+  runId: Id,
+  attempt: Seq,
+  tokensFreed: Count,
+})
+
+/** A checkpoint window construction after a context turn failed; the session keeps its current checkpoint window. */
+export const CheckpointWindowFailed = event("CHECKPOINT_WINDOW_FAILED", {
+  runId: Id,
+  message: Schema.String,
+})
+
+/** A context turn's check `attempt` of `research/` and `memory-draft/` found violations. */
+export const ValidationFailed = event("VALIDATION_FAILED", {
+  runId: Id,
+  attempt: Seq,
+  violations: Schema.Array(Schema.String),
+})
+
+/** One option of a question: its label and what choosing it means. */
+export const QuestionOption = Schema.Struct({
+  label: Schema.String,
+  description: Schema.String,
+})
+
+export const Question = Schema.Struct({
+  id: Schema.String,
+  header: Schema.String,
+  question: Schema.String,
+  options: Schema.Array(QuestionOption),
+})
+
+/**
+ * The agent asks the user `questions` in the tool call `toolCallId`;
+ * `feedback` answers the session's previous question set and comes first.
+ */
+export const QuestionsAsked = event("QUESTIONS_ASKED", {
+  runId: Id,
+  toolCallId: Id,
+  questionSetId: Id,
+  feedback: Schema.optionalKey(Schema.String),
+  questions: Schema.Array(Question),
+})
+
+/** The answer to one question: an option's label as the selection, a note, both, or neither for a skipped question. */
+export const QuestionAnswer = Schema.Struct({
+  id: Schema.String,
+  selection: Schema.optionalKey(Schema.String),
+  note: Schema.optionalKey(Schema.String),
+})
+
+/** The first answer to a question set, which closes it in every client. */
+export const QuestionsAnswered = event("QUESTIONS_ANSWERED", {
+  questionSetId: Id,
+  answers: Schema.Array(QuestionAnswer),
+  sender: Sender,
+})
+
 export const PermissionRequested = event("PERMISSION_REQUESTED", {
   requestId: Id,
   runId: Id,
@@ -251,6 +342,14 @@ export const SessionEventBody = Schema.Union([
   DeveloperMessage,
   CheckpointWindowSeeded,
   SessionError,
+  TimelineEntryRecorded,
+  TimelineEntryReplaced,
+  ContextTurnStarted,
+  ToolResultsCleared,
+  CheckpointWindowFailed,
+  ValidationFailed,
+  QuestionsAsked,
+  QuestionsAnswered,
   PermissionRequested,
   PermissionResolved,
   PermissionWithdrawn,

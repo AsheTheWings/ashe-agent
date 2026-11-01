@@ -11,6 +11,7 @@ import {
   Seq,
   Timestamp,
 } from "./shared.ts"
+import { QuestionAnswer } from "./events.ts"
 
 /** An object with no fields this protocol defines; unknown fields are ignored. */
 const Empty = Schema.Record(Schema.String, Schema.Unknown)
@@ -90,6 +91,16 @@ export const methods = {
    */
   "session.rewind": method(
     Schema.Struct({ sessionId: Id, runId: Id, text: Schema.optionalKey(Schema.String) }),
+    Empty,
+  ),
+  /**
+   * Answers the pending question set `questionSetId`: each answer names a
+   * question by id with an option's label, a note of 1 to 2,000
+   * characters, or both; a question without an answer is skipped. Only
+   * the first answer to a set is taken.
+   */
+  "session.answerQuestion": method(
+    Schema.Struct({ sessionId: Id, questionSetId: Id, answers: Schema.Array(QuestionAnswer) }),
     Empty,
   ),
   "permission.answer": method(

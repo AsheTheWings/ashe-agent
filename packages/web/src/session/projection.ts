@@ -294,6 +294,14 @@ const reduce = (view: SessionView, { seq, event }: SessionEvent): SessionView =>
     case "INPUT_WAITING":
     case "DEVELOPER_MESSAGE":
     case "CHECKPOINT_WINDOW_SEEDED":
+    case "TIMELINE_ENTRY":
+    case "TIMELINE_ENTRY_REPLACED":
+    case "CONTEXT_TURN_STARTED":
+    case "TOOL_RESULTS_CLEARED":
+    case "CHECKPOINT_WINDOW_FAILED":
+    case "VALIDATION_FAILED":
+    case "QUESTIONS_ASKED":
+    case "QUESTIONS_ANSWERED":
       return view
   }
 }
