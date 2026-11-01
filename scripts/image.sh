@@ -1,19 +1,20 @@
 #!/bin/sh
 # Builds one of the repository's container images and publishes it with its OCI annotations.
 #
-# usage: scripts/image.sh build web <layout-dir> <revision> <created>
+# usage: scripts/image.sh build (web | gateway) <layout-dir> <revision> <created>
 #        scripts/image.sh push <layout-dir> <revision> <created> <source> <run-url> (--oci-layout <dir> | <reference>)
 #
 # build writes the image to an OCI layout directory with podman: web
 # packages the client's production build in packages/web/dist, which must
-# hold the revision's revision.txt, with packages/web/image. It refuses a
-# worktree with changes or one not checked out at the revision.
+# hold the revision's revision.txt, with packages/web/image; gateway builds
+# images/gateway. It refuses a worktree with changes or one not checked out
+# at the revision.
 # push writes that image's config and layers, annotated with the revision,
 # source, run URL, creation time, and version, as one manifest: to another
 # OCI layout with --oci-layout, or to a registry reference, reading the
 # registry token on standard input. It prints the manifest digest. ORAS
 # names the oras executable. Relative paths resolve against the caller's
-# directory. See docs/web-client.md.
+# directory. See docs/web-client.md and docs/gateway.md.
 set -eu
 
 usage() {
@@ -64,6 +65,9 @@ build)
 		fi
 		cp packages/web/image/Containerfile packages/web/image/caddy.json "$context/"
 		cp -R packages/web/dist "$context/site"
+		;;
+	gateway)
+		cp images/gateway/Containerfile "$context/"
 		;;
 	*)
 		usage

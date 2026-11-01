@@ -6,7 +6,7 @@ description: >-
 
 inputs:
   image:
-    description: The image to build: web
+    description: The image to build, web or gateway
     required: true
 
 outputs:

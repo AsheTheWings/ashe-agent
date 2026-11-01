@@ -52,6 +52,7 @@ const testSeed = (): string => {
 const ownTaskSuites = [
   "packages/codemode/test/test262.integration.test.ts",
   "packages/web/test/image.qualification.test.ts",
+  "images/gateway/image.qualification.test.ts",
 ]
 
 const test = async (testClass: TestClass, inputs: Record<string, string> = {}, only?: string) => {
@@ -197,6 +198,7 @@ const qualification = async () => {
 /** The repository's container images and the qualification suite of each. */
 const images = {
   web: "packages/web/test/image.qualification.test.ts",
+  gateway: "images/gateway/image.qualification.test.ts",
 } as const
 type Image = keyof typeof images
 
@@ -276,10 +278,12 @@ const tasks: Record<string, () => Promise<number>> = {
   "test:qualification": qualification,
   "test:web-image": imageQualification("web"),
   "web-image": buildImage("web"),
+  "test:gateway-image": imageQualification("gateway"),
+  "gateway-image": buildImage("gateway"),
   generate: () => run([process.execPath, join(root, "scripts/generate.ts")]),
   gate,
-  /** The gate a release needs: the fast gate, then the bundle and the web image built and qualified. */
-  "release-gate": () => steps([gate, bundle, qualification, imageGate("web")]),
+  /** The gate a release needs: the fast gate, then the bundle and both images built and qualified. */
+  "release-gate": () => steps([gate, bundle, qualification, imageGate("web"), imageGate("gateway")]),
 }
 
 const name = process.argv[2] ?? ""

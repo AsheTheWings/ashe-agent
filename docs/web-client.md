@@ -53,7 +53,8 @@ podman compose up -d
 The image's client connects to whichever server its user enters at
 sign-in, so serve it from an origin that server's `ASHE_AGENT_ORIGINS`
 lists, and run both from one commit, since the protocol may change at any
-revision.
+revision. A public deployment can put both behind the
+[sign-in gateway](gateway.md).
 
 ## Signing in
 
