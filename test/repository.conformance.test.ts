@@ -8,6 +8,15 @@ const root = join(import.meta.dir, "..")
 const read = (path: string) => Bun.file(join(root, path)).text()
 const readJson = async (path: string) => JSON.parse(await read(path)) as Record<string, unknown>
 
+/** Workflows and the composite actions they run, which pin actions and Bun alike. */
+const workflowFiles = async () => {
+  const paths: Array<string> = []
+  for (const pattern of [".github/workflows/*.yml", ".github/actions/*/action.yml"]) {
+    for await (const path of new Glob(pattern).scan({ cwd: root, dot: true })) paths.push(path)
+  }
+  return paths.sort()
+}
+
 const manifests = async () => {
   const paths = ["package.json"]
   for await (const path of new Glob("packages/*/package.json").scan(root)) paths.push(path)
@@ -46,9 +55,9 @@ describe("Bun pin", () => {
     expect((manifest.devDependencies as Record<string, string>)["@types/bun"]).toBe(pinned)
   })
 
-  test("every workflow takes Bun from .bun-version", async () => {
+  test("every workflow and action takes Bun from .bun-version", async () => {
     const count = (text: string, needle: string) => text.split(needle).length - 1
-    for await (const path of new Glob(".github/workflows/*.yml").scan({ cwd: root, dot: true })) {
+    for (const path of await workflowFiles()) {
       const workflow = await read(path)
       expect(workflow).not.toMatch(/bun-version:/)
       expect(count(workflow, "bun-version-file:")).toBe(count(workflow, "bun-version-file: .bun-version"))
@@ -60,11 +69,24 @@ describe("Bun pin", () => {
 describe("workflows", () => {
   test("every action is pinned to a full commit SHA", async () => {
     const unpinned: Array<string> = []
-    for await (const path of new Glob(".github/workflows/*.yml").scan({ cwd: root, dot: true })) {
+    for (const path of await workflowFiles()) {
       for (const use of (await read(path)).matchAll(/uses:\s*([^\s#]+)/g)) {
         const reference = use[1] ?? ""
         if (reference.startsWith("./")) continue
         if (!/@[0-9a-f]{40}$/.test(reference)) unpinned.push(`${path} ${reference}`)
+      }
+    }
+    expect(unpinned).toEqual([])
+  })
+})
+
+describe("images", () => {
+  test("every Containerfile base image is pinned to a digest", async () => {
+    const unpinned: Array<string> = []
+    for await (const path of new Glob("**/Containerfile").scan({ cwd: root })) {
+      if (path.includes("node_modules/")) continue
+      for (const from of (await read(path)).matchAll(/^FROM\s+(\S+)/gm)) {
+        if (!/@sha256:[0-9a-f]{64}$/.test(from[1] ?? "")) unpinned.push(`${path} ${from[1]}`)
       }
     }
     expect(unpinned).toEqual([])
