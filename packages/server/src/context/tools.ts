@@ -18,6 +18,9 @@ export const CLEARED_CONTEXT_TOOLS: ReadonlyArray<string> = [
 /** The permission `context_ask_question` calls are decided under, and withheld by. */
 export const ASK_PERMISSION = "context_ask_question"
 
+/** The names of the `context` tools, whose results no clearing replaces. */
+export const CONTEXT_TOOLS: ReadonlySet<string> = new Set(["context_append", "context_get_open_items", "context_ask_question"])
+
 const APPEND_DESCRIPTION = `Appends 1 to 16 entries to this session's primary timeline. The timelines carry your work into later checkpoint windows; most else in this checkpoint window will be gone from your context. Record entries as you work, without waiting to be asked.
 
 - \`open\` (\`Text\`): work that remains, such as a step you will take later or a follow-up a finding calls for.

@@ -153,6 +153,17 @@ least 100,000 tokens. The check covers every configured model with every
 agent and with the implicit agent, and a pair below the margin stops the
 process, naming the model, the agent, and the margin.
 
+### Auxiliary models
+
+The auxiliary models name the model of each auxiliary task: `compaction`
+and `research`, which summarize conversation and research files into
+timeline entries, and `handoff`, which summarizes a checkpoint window
+that filled up. Each is optional and must be registered; a task without
+one runs on the model of the session's latest turn. An auxiliary call
+uses its model's own settings, and the latest turn's effort selection
+only when it runs on that turn's model.
+[Model context](model-context.md) explains the tasks.
+
 The model and graph libraries' own process variables, such as
 `OPENAI_BASE_URL` or `LANGSMITH_TRACING`, configure nothing: `serve`
 removes them, as [model context](model-context.md) explains.

@@ -299,7 +299,16 @@ describe("the agent loop", () => {
       expect(items.map((item) => item.type)).toEqual(["message", "function_call", "function_call_output"])
       expect(items[1]).toMatchObject({ name: "echo", arguments: '{"text":"a"}' })
       expect(items[2]).toMatchObject({ output: "echoed a" })
-      expect(h.model.last().tools.map((tool) => tool.name)).toEqual(["echo", "wait", "refuse", "touch", "pair"])
+      expect(h.model.last().tools.map((tool) => tool.name)).toEqual([
+        "echo",
+        "wait",
+        "refuse",
+        "touch",
+        "pair",
+        "context_append",
+        "context_get_open_items",
+        "context_ask_question",
+      ])
       expect(h.model.last().tools[0]!.parameters).toMatchObject({ type: "object", required: ["text"] })
       expect(h.model.calls).toHaveLength(2)
       const owned = h.hub.store.conversation.turnItems(id, runIds(h, id)[0]!)

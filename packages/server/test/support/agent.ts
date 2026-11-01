@@ -9,7 +9,7 @@ import { Effect, Schema } from "effect"
 import type { ModelCall, ModelPort } from "../../src/agent/model.ts"
 import { agentRunner } from "../../src/agent/runner.ts"
 import { builtinTool, type Tool } from "../../src/agent/tools.ts"
-import type { ModelOverrides, Permission } from "../../src/inputs/shapes.ts"
+import type { AuxiliaryModels, ModelOverrides, Permission } from "../../src/inputs/shapes.ts"
 import type { ConfiguredModel } from "../../src/models/registry.ts"
 import { permissionPath } from "../../src/permissions/paths.ts"
 import { SessionHub, type SessionSetup } from "../../src/sessions/hub.ts"
@@ -227,6 +227,8 @@ export class AgentHarness {
       readonly userTimeZone?: string
       /** The clock; the system's by default. */
       readonly now?: () => number
+      /** The model of each auxiliary task; the latest turn's model by default. */
+      readonly auxiliaryModels?: AuxiliaryModels
     } = {},
   ) {
     this.db = openDatabase(join(this.dir, "ashe-agent.db"))
@@ -242,6 +244,8 @@ export class AgentHarness {
     const hub: SessionHub = new SessionHub(new SessionStore(this.db, join(this.dir, "sessions")), {
       files: this.files,
       models,
+      port: this.options.port ?? this.model,
+      ...(this.options.auxiliaryModels === undefined ? {} : { auxiliaryModels: this.options.auxiliaryModels }),
       defaultModel: models[0]!.id,
       setup: this.options.setup ?? noAgents,
       tools: typeof tools === "function" ? tools : () => tools,

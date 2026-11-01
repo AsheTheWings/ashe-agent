@@ -1,3 +1,4 @@
+import { parseFrontmatter } from "../agents/frontmatter.ts"
 import { APPEND_MAX_ENTRIES, ENTRY_FIELD_MAX_LENGTH, RESEARCH_SUMMARY_MAX_LENGTH, RESOLVES_MAX_ENTRIES } from "./constants.ts"
 
 /** What an entry records. The agent appends the first four kinds; the harness writes the rest. */
@@ -67,6 +68,8 @@ type Lookup = (number: number) => Pick<Entry, "kind" | "fields"> | undefined
  * its text, with every text line that reads as a header escaped by a
  * leading backslash. A done entry restates each entry it resolves, as
  * `lookup` gives it, as `Resolves: #<n> [<KIND>] <text>`.
+ * Blank lines that would end the block are left out, so a block reads
+ * back from a timeline file exactly as it renders.
  */
 export const renderEntry = (entry: Pick<Entry, "number" | "kind" | "fields" | "resolves">, lookup: Lookup): string => {
   const lines = [entryHeader(entry.kind, entry.number)]
@@ -82,7 +85,9 @@ export const renderEntry = (entry: Pick<Entry, "number" | "kind" | "fields" | "r
     const target = lookup(number)
     lines.push(`Resolves: #${number} [${(target?.kind ?? "open").toUpperCase()}] ${target?.fields.Text ?? ""}`)
   }
-  return lines.join("\n")
+  const rendered = lines.join("\n").split("\n")
+  while (rendered.at(-1)!.trim() === "") rendered.pop()
+  return rendered.join("\n")
 }
 
 /** Renders entries against the stored entries `all`, which every resolved entry is among. */
@@ -173,19 +178,18 @@ export const researchSummary = (output: string): string | null => {
 export const clipMiddle = (text: string, keep: number) =>
   text.length <= keep * 2 ? text : `${text.slice(0, keep)}[… ${text.length - keep * 2} characters cut …]${text.slice(-keep)}`
 
-/** The `description:` of a Markdown file's YAML frontmatter, or null when it has none. */
+/**
+ * The string `description` of a Markdown file's YAML frontmatter, or null
+ * when it has none, and the index of the body's first line; null when the
+ * frontmatter cannot be read.
+ */
 export const frontmatterDescription = (text: string): { readonly description: string | null; readonly bodyLine: number } | null => {
-  const lines = text.split("\n")
-  if (lines[0] !== "---") return null
-  const end = lines.indexOf("---", 1)
-  if (end === -1) return null
-  let description: string | null = null
-  for (const line of lines.slice(1, end)) {
-    const match = /^description:\s*(.*)$/.exec(line)
-    if (match === null) continue
-    const value = match[1]!.trim()
-    const quoted = /^(["'])(.*)\1$/.exec(value)
-    description = quoted === null ? value : quoted[2]!
+  const parsed = parseFrontmatter(text)
+  if (!parsed.ok) return null
+  const description = parsed.data.description
+  const head = text.slice(0, text.length - parsed.body.length)
+  return {
+    description: typeof description === "string" ? description : null,
+    bodyLine: head.split("\n").length - (head === "" || head.endsWith("\n") ? 1 : 0),
   }
-  return { description, bodyLine: end + 1 }
 }

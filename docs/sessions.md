@@ -27,7 +27,8 @@ order.
 
 The history is a sequence of turns. A turn starts from waiting input:
 user messages, notification components, or both. Its `RUN_STARTED` event
-gives its cause, `user` when its starting input holds a user message, else
+gives its cause, `continuation` when it is a continuation turn, else
+`user` when its starting input holds a user message, else
 `notification`, and the ids of those user messages. A turn runs until it
 finishes, fails, is cancelled, or is interrupted by a server stop, and it
 keeps running when its client, or every client, disconnects.
@@ -65,6 +66,16 @@ directly after that rewind's or fork's component, and places its state
 components before its first user message. Each delivered developer
 message has a `DEVELOPER_MESSAGE` event; [model context](model-context.md)
 explains the components.
+
+During a context turn, user messages and notification components wait
+for its continuation turn, which takes all of them with the continuation
+component; only memory restored components join the context turn. When
+a context turn ends without a continuation turn, the held input starts a
+turn as queued input does. A steered message also ends a waiting
+`context_ask_question` call; a queued one leaves it waiting.
+`session.answerQuestion` answers a question set, and only the first
+answer counts; [model context](model-context.md#questions) explains
+questions.
 
 `session.cancel` ends the running turn with a `RUN_FINISHED` event whose
 outcome is `cancelled`. It aborts the running model call and tool call,
@@ -112,12 +123,15 @@ with new ids, emitting their `INPUT_WAITING` events after its
 `SESSION_REWOUND` event, which names the first removed number. A client
 drops its events from that number on. A failure leaves the history as it
 was; once the rewind commits, its input starts the rerun turn, after a
-restart too. A rewind keeps every session grant.
+restart too. A rewound continuation turn's continuation component waits
+again before that input, so its rerun is a continuation turn in the same
+checkpoint window. A rewind keeps every session grant.
 
 ## Restart
 
 Sessions, their events, and their session grants survive a server
-restart. On start, the server
+restart. On start, the server first settles the memory draft of each
+context turn a stop left running, then
 ends each turn a stopped server left running: it withdraws the turn's
 unanswered permission requests with `PERMISSION_WITHDRAWN` events, gives
 each of its tool calls without a result an `interrupted` result saying

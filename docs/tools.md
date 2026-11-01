@@ -17,7 +17,14 @@ without running.
 | `web_fetch` | `web` | each URL |
 | `skill` | `skill` | the skill's name; [agents and skills](agents-and-skills.md) describes it |
 | `execute` | `execute` | `*`; [code mode](code-mode.md) describes the calls a program makes |
+| `context_append` | none, never checked | none |
+| `context_get_open_items` | none, never checked | none |
+| `context_ask_question` | `context_ask_question` | `*` |
 | `<server>_<tool>` | its registered name | `*` |
+
+The `context` tools record and read the session's timelines and ask the
+user questions; [model context](model-context.md#timelines) explains
+them.
 
 [Permissions](permissions.md) explains how subjects are resolved and
 decided. A tool resolves its paths once, when the call is checked, and

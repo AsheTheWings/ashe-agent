@@ -5,6 +5,7 @@ import { Deferred, Effect, Exit, Layer, ManagedRuntime } from "effect"
 import { createApiToken } from "../../src/auth/credentials.ts"
 import type { Permission } from "../../src/inputs/shapes.ts"
 import { ProtocolServer } from "../../src/server/serve.ts"
+import type { ModelPort } from "../../src/agent/model.ts"
 import { Sessions, type TurnRunner } from "../../src/sessions/hub.ts"
 import { noAgents } from "../../src/sessions/setup.ts"
 import { openDatabase, Store } from "../../src/store/database.ts"
@@ -13,6 +14,13 @@ import { applyMigrations, discoverMigrations } from "../../src/store/migrations.
 import { removeTree } from "../../src/sessions/files.ts"
 import { configuredModel } from "./agent.ts"
 import { Client, waitFor } from "./cli.ts"
+
+/** The model port of servers whose turns a script runs: no auxiliary call reaches a model. */
+const noAuxiliaryModel: ModelPort = {
+  stream: () => {
+    throw new Error("no model serves auxiliary calls in this test")
+  },
+}
 
 export const models = [
   configuredModel("test/first", { contextLimit: 400_000, efforts: ["low", "high"], settings: { reasoningEffort: "low" } }),
@@ -135,6 +143,7 @@ export class TestServer {
           models,
           defaultModel: models[0]!.id,
           runner: this.script.runner,
+          port: noAuxiliaryModel,
           setup: noAgents,
           permission: this.permission,
           home: this.dir,

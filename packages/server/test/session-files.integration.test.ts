@@ -23,10 +23,18 @@ import { join } from "node:path"
 import type { SessionEvent } from "@ashe-agent/protocol"
 import { SCRATCH_FORK_MAX_BYTES } from "../src/context/constants.ts"
 import { removeTree, sha256 } from "../src/sessions/files.ts"
-import { AgentHarness, hold, messageText, say, type Reply } from "./support/agent.ts"
+import { AgentHarness, callTools, hold, messageText, say, type Reply } from "./support/agent.ts"
+import { waitFor } from "./support/cli.ts"
+import { contextHarness, windowModel } from "./support/context.ts"
 
+/** A checkpoint window of 120,000 tokens: a context turn starts past 80,000. */
+const mid = windowModel("test/mid", 120_000)
+
+const blob = (tokens: number) => callTools([{ name: "blob", args: { tokens } }])
+
+/** A harness whose sessions run on `mid`, with the `blob` tool and auxiliary calls answered by default. */
 const withHarness = async (body: (h: AgentHarness) => Promise<void>) => {
-  const h = new AgentHarness()
+  const { h } = contextHarness({ models: [mid] })
   try {
     await body(h)
   } finally {
@@ -278,6 +286,9 @@ describe("snapshots and restores", () => {
       await turn(h, restoring, "t1")
       await turn(h, restoring, "t2")
       const running = h.create()
+      h.model.next(blob(76_000), say("filled"))
+      h.input(running, "fill")
+      await h.turnsEnded(running, 1)
       const mismatched = h.create()
       await turn(h, mismatched, "m1")
       publishMemory(h, mismatched, { "timeline.md": "T" })
@@ -285,8 +296,12 @@ describe("snapshots and restores", () => {
       const repair = breakMemoryDir(h, restoring)
       h.hub.rewind(restoring, runIds(h, restoring)[1]!, undefined, h.sender)
       repair()
-      h.model.next(hold(new Promise(() => {})))
+      // A context turn whose draft holds a new secondary timeline is left running.
+      const draft = join(h.sessionDir(running), "memory-draft", "notes.md")
+      h.model.next(blob(5_000), hold(new Promise(() => {})))
       h.input(running, "long")
+      await waitFor("the context turn", () => (ofType(h.events(running), "CONTEXT_TURN_STARTED").length > 0 ? true : undefined))
+      writeFileSync(draft, "---\ndescription: Notes\n---\n")
       expect(h.hub.isRunning(running)).toBe(true)
       h.input(running, "after restart", "queue")
       const generation = join(h.files.memoryDir, mismatched, String(h.hub.store.files.generations(mismatched).memory))
@@ -294,10 +309,12 @@ describe("snapshots and restores", () => {
       writeFileSync(join(generation, "stray.md"), "stray")
       chmodSync(generation, 0o555)
 
-      h.model.next(say("rerun"), say("after"), say("restored"))
+      // The held input's turn is a context turn too, since the window is still full; its continuation follows.
+      h.model.next(say("rerun"), say("after"), say("restored"), say("continued"))
       await h.restart()
+      expect(readFileSync(join(h.sessionDir(running), "memory", "notes.md"), "utf8")).toBe("---\ndescription: Notes\n---\n")
       await h.turnsEnded(restoring, 2)
-      await h.turnsEnded(running, 1)
+      await h.turnsEnded(running, 3)
       await h.turnsEnded(mismatched, 2)
       const types = h.types(running)
       expect(types.indexOf("RUN_STARTED", types.indexOf("RUN_INTERRUPTED"))).toBeGreaterThan(types.indexOf("RUN_INTERRUPTED"))
@@ -311,6 +328,35 @@ describe("snapshots and restores", () => {
 })
 
 describe("memory generations", () => {
+  test("a context turn whose validation passes publishes its draft as the next read-only generation", async () => {
+    await withHarness(async (h) => {
+      const id = h.create()
+      publishMemory(h, id, { "old.md": "---\ndescription: Old\n---\n" })
+      const before = h.hub.store.files.generations(id).memory
+      h.model.next(blob(76_000), say("filled"))
+      h.input(id, "fill")
+      await h.turnsEnded(id, 1)
+      const draft = join(h.sessionDir(id), "memory-draft")
+      const edit = () => {
+        expect(readdirSync(draft).sort()).toEqual(["old.md"])
+        rmSync(join(draft, "old.md"))
+        writeFileSync(join(draft, "new.md"), "---\ndescription: New\n---\n")
+      }
+      h.model.next(blob(5_000), doing(edit, "in order"), say("continued"))
+      h.input(id, "go")
+      await h.turnsEnded(id, 3)
+      const generation = h.hub.store.files.generations(id).memory
+      expect(generation).toBe(before + 1)
+      const memory = join(h.sessionDir(id), "memory")
+      expect(readlinkSync(memory)).toBe(join(h.files.memoryDir, id, String(generation)))
+      expect(readdirSync(memory)).toEqual(["new.md"])
+      expect(lstatSync(join(memory, "new.md")).mode & 0o777).toBe(0o444)
+      expect(existsSync(draft)).toBe(false)
+      expect(readdirSync(join(h.files.memoryDir, id))).toEqual([String(generation)])
+      expect(lastText(h)).not.toContain("# Memory Restored")
+    })
+  })
+
   test("memory is read-only, and a changed, added, or relinked file is republished with a memory restored component", async () => {
     await withHarness(async (h) => {
       const id = h.create()

@@ -11,6 +11,11 @@ states how far that reach goes and what limits it.
   again; the check of the command that started the process covers it.
 - `web_search` sends its queries, and `web_fetch` the URLs it fetches, to
   Exa.
+- `context_append` and `context_get_open_items` are never
+  permission-checked; they only record and read the session's timeline
+  entries. The user's answers to `context_ask_question` are recorded as
+  entries in the timelines, so they reach later checkpoint windows and
+  `memory/`.
 - Rewind and fork restore a session's research and memory files to the
   turn they return to, and change nothing else: other files the removed
   turns wrote, `scratch/`, commands they ran, and every other effect stay

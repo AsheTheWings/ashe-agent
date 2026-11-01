@@ -15,6 +15,7 @@ import {
   type InstructionsState,
 } from "./components.ts"
 import {
+  CHECKPOINT_ALLOWANCE,
   CODE_MODE_CATALOG_ALLOWANCE,
   estimateTokens,
   HARNESS_INSTRUCTIONS_ALLOWANCE,
@@ -42,6 +43,7 @@ const allowances: Readonly<Record<string, { readonly what: string; readonly allo
   code_mode_catalog: { what: "the code mode catalog component", allowance: CODE_MODE_CATALOG_ALLOWANCE },
   code_mode_catalog_changed: { what: "the code mode catalog", allowance: CODE_MODE_CATALOG_ALLOWANCE },
   session_facts: { what: "the session facts component", allowance: SESSION_FACTS_ALLOWANCE },
+  session_checkpoint: { what: "the session checkpoint component", allowance: CHECKPOINT_ALLOWANCE },
 }
 
 /** The allowance issue of a component over its allowance, if it has one. */
@@ -75,13 +77,16 @@ export interface SeedSources {
   readonly dates: Dates
   readonly scratchGeneration: number
   readonly memoryRestoreGeneration: number
-  readonly tools: ReadonlyArray<ToolSpec>
+  /** The session checkpoint, which every checkpoint window after the first ends its seed with. */
+  readonly checkpoint?: Component
+  /** The tool definitions to check, or null when the construction leaves them to each model call. */
+  readonly tools: ReadonlyArray<ToolSpec> | null
 }
 
 /**
- * The seed components of a checkpoint window in their order, or the first
- * issue of the harness instructions, a component, or the tool definitions
- * over its allowance.
+ * The seed components of a checkpoint window in their order, the session
+ * checkpoint last when given, or the first issue of the harness
+ * instructions, a component, or the tool definitions over its allowance.
  */
 export const renderSeed = (
   sources: SeedSources,
@@ -102,12 +107,13 @@ export const renderSeed = (
       scratchGeneration: sources.scratchGeneration,
       memoryRestoreGeneration: sources.memoryRestoreGeneration,
     }),
+    sources.checkpoint ?? null,
   ].filter((component) => component !== null)
   for (const component of components) {
     const issue = componentIssue(component)
     if (issue !== null) return { ok: false, issue }
   }
-  const tools = toolDefinitionsIssue(sources.tools)
+  const tools = sources.tools === null ? null : toolDefinitionsIssue(sources.tools)
   if (tools !== null) return { ok: false, issue: tools }
   return { ok: true, components }
 }
