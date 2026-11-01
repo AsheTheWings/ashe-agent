@@ -49,7 +49,10 @@ const testSeed = (): string => {
 }
 
 /** Suites a test class leaves out because a task of their own runs them over what it fetches or builds. */
-const ownTaskSuites = ["packages/codemode/test/test262.integration.test.ts", "packages/web/test/image.qualification.test.ts"]
+const ownTaskSuites = [
+  "packages/codemode/test/test262.integration.test.ts",
+  "packages/web/test/image.qualification.test.ts",
+]
 
 const test = async (testClass: TestClass, inputs: Record<string, string> = {}, only?: string) => {
   const seed = testSeed()
@@ -191,50 +194,62 @@ const qualification = async () => {
   return await test("qualification", { ASHE_AGENT_QUALIFICATION_BUNDLE: path })
 }
 
-const qualifyWebImage = (layout: string, revision: string) =>
+/** The repository's container images and the qualification suite of each. */
+const images = {
+  web: "packages/web/test/image.qualification.test.ts",
+} as const
+type Image = keyof typeof images
+
+const qualifyImage = (image: Image, layout: string, revision: string) =>
   test(
     "qualification",
-    { ASHE_AGENT_QUALIFICATION_WEB_IMAGE: layout, ASHE_AGENT_QUALIFICATION_REVISION: revision },
-    "packages/web/test/image.qualification.test.ts",
+    { ASHE_AGENT_QUALIFICATION_IMAGE: layout, ASHE_AGENT_QUALIFICATION_REVISION: revision },
+    images[image],
   )
 
-/** Qualifies the web image in the given OCI layout as the build of the given revision. */
-const webImageQualification = async () => {
+/** Qualifies the image in the given OCI layout as the build of the given revision. */
+const imageQualification = (image: Image) => async () => {
   const [given, revision] = process.argv.slice(3)
   if (given === undefined || revision === undefined || !/^[0-9a-f]{40}$/.test(revision)) {
-    process.stderr.write("usage: bun run test:web-image <oci-layout-dir> <40-character commit revision>\n")
+    process.stderr.write(`usage: bun run test:${image}-image <oci-layout-dir> <40-character commit revision>\n`)
     return 1
   }
-  return await qualifyWebImage(isAbsolute(given) ? given : join(process.cwd(), given), revision)
+  return await qualifyImage(image, isAbsolute(given) ? given : join(process.cwd(), given), revision)
 }
 
-const webImageLayout = join(dist, "web-image")
+const imageLayout = (image: Image) => join(dist, `${image}-image`)
 
 /**
- * Builds the web client and its image from the checked-out commit and
- * annotates it into the OCI layout `dist/web-image`, as CI does; `ORAS`
- * names the oras executable.
+ * Builds the image from the checked-out commit, the web client first for
+ * the web image, and annotates it into the OCI layout `dist/<image>-image`,
+ * as CI does; `ORAS` names the oras executable.
  */
-const webImage = async () => {
-  const built = await buildWeb()
-  if (built !== 0) return built
-  process.stdout.write("\n== web image ==\n")
+const buildImage = (image: Image) => async () => {
+  if (image === "web") {
+    const built = await buildWeb()
+    if (built !== 0) return built
+  }
+  process.stdout.write(`\n== ${image} image ==\n`)
   if (process.env.ORAS === undefined) {
     process.stderr.write("ORAS must name the oras executable\n")
     return 1
   }
   const revision = git("rev-parse", "HEAD")
   const created = new Date(Number(git("log", "-1", "--format=%ct")) * 1000).toISOString().replace(".000Z", "Z")
-  rmSync(webImageLayout, { recursive: true, force: true })
-  const build = join(dist, "web-image-build")
+  rmSync(imageLayout(image), { recursive: true, force: true })
+  const build = join(dist, `${image}-image-build`)
   rmSync(build, { recursive: true, force: true })
   mkdirSync(dist, { recursive: true })
-  const script = join(root, "scripts/web-image.sh")
-  const code = await run([script, "build", build, revision, created])
+  const script = join(root, "scripts/image.sh")
+  const code = await run([script, "build", image, build, revision, created])
   if (code !== 0) return code
   const source = "https://github.com/AsheTheWings/ashe-agent"
-  return await run([script, "push", build, revision, created, source, "local", "--oci-layout", webImageLayout])
+  return await run([script, "push", build, revision, created, source, "local", "--oci-layout", imageLayout(image)])
 }
+
+/** Builds the image and qualifies the built layout. */
+const imageGate = (image: Image) => () =>
+  steps([buildImage(image), () => qualifyImage(image, imageLayout(image), git("rev-parse", "HEAD"))])
 
 const steps = async (all: ReadonlyArray<() => Promise<number>>) => {
   for (const step of all) {
@@ -259,13 +274,12 @@ const tasks: Record<string, () => Promise<number>> = {
   "build:binary": buildBinary,
   bundle,
   "test:qualification": qualification,
-  "test:web-image": webImageQualification,
-  "web-image": webImage,
+  "test:web-image": imageQualification("web"),
+  "web-image": buildImage("web"),
   generate: () => run([process.execPath, join(root, "scripts/generate.ts")]),
   gate,
   /** The gate a release needs: the fast gate, then the bundle and the web image built and qualified. */
-  "release-gate": () =>
-    steps([gate, bundle, qualification, webImage, () => qualifyWebImage(webImageLayout, git("rev-parse", "HEAD"))]),
+  "release-gate": () => steps([gate, bundle, qualification, imageGate("web")]),
 }
 
 const name = process.argv[2] ?? ""

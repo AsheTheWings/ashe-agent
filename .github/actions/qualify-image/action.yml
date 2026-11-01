@@ -1,8 +1,13 @@
-name: Build and qualify the web image
+name: Build and qualify an image
 description: >-
-  Run the fast gate, build the web client and its image from the checked-out
-  commit, annotate the image into an OCI layout, and qualify that exact
+  Run the fast gate, build one of the repository's images from the
+  checked-out commit, annotate it into an OCI layout, and qualify that exact
   layout in the calling job.
+
+inputs:
+  image:
+    description: The image to build: web
+    required: true
 
 outputs:
   digest:
@@ -36,12 +41,13 @@ runs:
       shell: bash
       env:
         ORAS: ${{ runner.temp }}/oras/oras
+        IMAGE: ${{ inputs.image }}
       run: |
         set -euo pipefail
-        bun run build:web
+        if [ "$IMAGE" = web ]; then bun run build:web; fi
         created="$(TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ "$GITHUB_SHA")"
-        scripts/web-image.sh build "$RUNNER_TEMP/image-build" "$GITHUB_SHA" "$created"
-        digest="$(scripts/web-image.sh push "$RUNNER_TEMP/image-build" "$GITHUB_SHA" "$created" \
+        scripts/image.sh build "$IMAGE" "$RUNNER_TEMP/image-build" "$GITHUB_SHA" "$created"
+        digest="$(scripts/image.sh push "$RUNNER_TEMP/image-build" "$GITHUB_SHA" "$created" \
           "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
           "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" \
           --oci-layout "$RUNNER_TEMP/image")"
@@ -50,4 +56,6 @@ runs:
         echo "Built image $digest"
     - name: Qualify the image
       shell: bash
-      run: bun run test:web-image "$RUNNER_TEMP/image" "$GITHUB_SHA"
+      env:
+        IMAGE: ${{ inputs.image }}
+      run: bun run "test:$IMAGE-image" "$RUNNER_TEMP/image" "$GITHUB_SHA"

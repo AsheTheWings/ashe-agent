@@ -1,4 +1,4 @@
-# The web client's static files behind Caddy. scripts/web-image.sh builds it
+# The web client's static files behind Caddy. scripts/image.sh builds it
 # from a context holding the client's production build in site/ and this
 # directory's caddy.json.
 FROM docker.io/library/caddy:2.11.7@sha256:04913b1da43339a40ad1ea87827d70a576ac5aa6cf674c6e24fdca675887533a

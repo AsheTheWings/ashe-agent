@@ -11,10 +11,10 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
  * console output.
  */
 
-const layout = process.env.ASHE_AGENT_QUALIFICATION_WEB_IMAGE
+const layout = process.env.ASHE_AGENT_QUALIFICATION_IMAGE
 const revision = process.env.ASHE_AGENT_QUALIFICATION_REVISION
 if (layout === undefined || revision === undefined) {
-  throw new Error("ASHE_AGENT_QUALIFICATION_WEB_IMAGE and _REVISION name no image; run bun run test:web-image")
+  throw new Error("ASHE_AGENT_QUALIFICATION_IMAGE and _REVISION name no image; run bun run test:web-image")
 }
 
 const layoutTag = "qualified"

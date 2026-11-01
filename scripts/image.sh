@@ -1,13 +1,13 @@
 #!/bin/sh
-# Builds the web client's container image and publishes it with its OCI annotations.
+# Builds one of the repository's container images and publishes it with its OCI annotations.
 #
-# usage: scripts/web-image.sh build <layout-dir> <revision> <created>
-#        scripts/web-image.sh push <layout-dir> <revision> <created> <source> <run-url> (--oci-layout <dir> | <reference>)
+# usage: scripts/image.sh build web <layout-dir> <revision> <created>
+#        scripts/image.sh push <layout-dir> <revision> <created> <source> <run-url> (--oci-layout <dir> | <reference>)
 #
-# build packages the client's production build in packages/web/dist, which
-# must hold the revision's revision.txt, into an image from
-# packages/web/image and writes it to an OCI layout directory with podman.
-# It refuses a worktree with changes or one not checked out at the revision.
+# build writes the image to an OCI layout directory with podman: web
+# packages the client's production build in packages/web/dist, which must
+# hold the revision's revision.txt, with packages/web/image. It refuses a
+# worktree with changes or one not checked out at the revision.
 # push writes that image's config and layers, annotated with the revision,
 # source, run URL, creation time, and version, as one manifest: to another
 # OCI layout with --oci-layout, or to a registry reference, reading the
@@ -35,6 +35,11 @@ absolute() {
 [ "$#" -ge 1 ] || usage
 command=$1
 shift
+if [ "$command" = build ]; then
+	[ "$#" -ge 1 ] || usage
+	image=$1
+	shift
+fi
 [ "$#" -ge 1 ] || usage
 layout=$(absolute "$1")
 shift
@@ -48,16 +53,23 @@ build)
 		echo "the image is built from a worktree without changes, checked out at $revision" >&2
 		exit 1
 	fi
-	if [ "$(cat packages/web/dist/revision.txt 2>/dev/null)" != "$revision" ]; then
-		echo "packages/web/dist is not the web build of $revision; run bun run build:web" >&2
-		exit 1
-	fi
 	epoch=$(date -u -d "$created" +%s)
 	context=$(mktemp -d)
 	trap 'rm -r "$context"' EXIT
-	cp packages/web/image/Containerfile packages/web/image/caddy.json "$context/"
-	cp -R packages/web/dist "$context/site"
-	tag="localhost/ashe-agent-web-build:$revision"
+	case "$image" in
+	web)
+		if [ "$(cat packages/web/dist/revision.txt 2>/dev/null)" != "$revision" ]; then
+			echo "packages/web/dist is not the web build of $revision; run bun run build:web" >&2
+			exit 1
+		fi
+		cp packages/web/image/Containerfile packages/web/image/caddy.json "$context/"
+		cp -R packages/web/dist "$context/site"
+		;;
+	*)
+		usage
+		;;
+	esac
+	tag="localhost/ashe-agent-$image-build:$revision"
 	podman build --format oci --timestamp "$epoch" -t "$tag" "$context"
 	podman save --format oci-dir -o "$layout" "$tag" >/dev/null
 	podman rmi "$tag" >/dev/null
