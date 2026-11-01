@@ -322,7 +322,7 @@ export class SessionClient {
     await this.subscribe(connection, sessionId)
   }
 
-  async createSession(options: { readonly model?: string; readonly agent?: string }) {
+  async createSession(options: { readonly model?: string; readonly agent?: string; readonly reasoningEffort?: string }) {
     const { session } = await this.call("session.create", options)
     this.upsert(session)
     await this.open(session.id)
@@ -339,8 +339,15 @@ export class SessionClient {
     await this.call("session.cancel", { sessionId: this.activeId() })
   }
 
-  async setModel(model: string) {
-    await this.call("session.setModel", { sessionId: this.activeId(), model })
+  /** Selects the open session's model and reasoning effort; without an effort, the model's default applies. */
+  async setModel(model: string, reasoningEffort?: string) {
+    const sessionId = this.activeId()
+    await this.call("session.setModel", reasoningEffort === undefined ? { sessionId, model } : { sessionId, model, reasoningEffort })
+  }
+
+  /** Answers the open session's question set; a question without a selection or note is skipped. */
+  async answerQuestion(questionSetId: string, answers: ReadonlyArray<{ readonly id: string; readonly selection?: string; readonly note?: string }>) {
+    await this.call("session.answerQuestion", { sessionId: this.activeId(), questionSetId, answers: [...answers] })
   }
 
   /** Answers a permission request; a message goes only with a rejection, as the call's result. */

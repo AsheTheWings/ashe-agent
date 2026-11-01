@@ -24,8 +24,8 @@ export const SignIn = () => {
     <main className="flex min-h-svh items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle>ashe-agent</CardTitle>
-          <CardDescription>Sign in to an ashe-agent server as its owner.</CardDescription>
+          <CardTitle>AsheAgent</CardTitle>
+          <CardDescription>Sign in to an AsheAgent server as its owner.</CardDescription>
         </CardHeader>
         <CardContent>
           <form className="flex flex-col gap-4" onSubmit={submit}>

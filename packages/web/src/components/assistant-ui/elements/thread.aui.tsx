@@ -39,11 +39,13 @@ import {
 export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart;
 
 /**
- * Slots the application fills: actions on each user message, controls in
- * the composer's action row, and content above the composer.
+ * Slots the application fills: actions on each user message, the content
+ * of each system message, controls in the composer's action row, and
+ * content above the composer.
  */
 export type ThreadComponents = {
   UserActions?: ComponentType | undefined;
+  SystemItem?: ComponentType | undefined;
   ComposerExtra?: ComponentType | undefined;
   BeforeComposer?: ComponentType | undefined;
 };
@@ -306,13 +308,15 @@ const UserMessage: FC = () => {
 };
 
 const SystemMessage: FC = () => {
+  const { SystemItem } = useContext(ThreadComponentsContext);
+
   return (
     <MessagePrimitive.Root
       data-slot="aui_system-message-root"
       data-role="system"
       className="text-muted-foreground px-2 text-center text-xs"
     >
-      <MessagePrimitive.Parts />
+      {SystemItem ? <SystemItem /> : <MessagePrimitive.Parts />}
     </MessagePrimitive.Root>
   );
 };

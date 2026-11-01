@@ -7,11 +7,13 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { useSessionRuntime } from "@/chat/use-session-runtime.ts"
+import { agentNamed, defaultEffort } from "@/session/efforts.ts"
 import { useClient, useClientState } from "./client-context.tsx"
 import { PermissionQueue } from "./permission-queue.tsx"
+import { PendingInputs, SystemItem } from "./session-items.tsx"
 import { UserActions } from "./user-actions.tsx"
 
-/** The session's selected model, switchable to any model from `models.list`. */
+/** The session's selected model, switchable to any model from `models.list`, which starts at its default effort. */
 const ModelSwitch = () => {
   const client = useClient()
   const models = useClientState((state) => state.models)
@@ -39,6 +41,37 @@ const ModelSwitch = () => {
   )
 }
 
+/** The session's selected reasoning effort among its model's, the default one marked. */
+const EffortSwitch = () => {
+  const client = useClient()
+  const models = useClientState((state) => state.models)
+  const agents = useClientState((state) => state.agents)
+  const view = useClientState((state) => (state.activeSessionId === null ? undefined : state.views[state.activeSessionId]))
+  const model = models.find((candidate) => candidate.id === view?.model)
+  if (view === undefined || model === undefined || model.reasoningEfforts.length === 0) return null
+  const fallback = defaultEffort(model, agentNamed(agents, view.agent))
+  const selected = view.reasoningEffort ?? fallback
+  return (
+    <Select
+      value={selected}
+      onValueChange={(value) => {
+        if (typeof value === "string" && value !== selected) void client.setModel(model.id, value).catch(() => {})
+      }}
+    >
+      <SelectTrigger size="sm" aria-label="Reasoning effort">
+        <SelectValue placeholder="Effort" />
+      </SelectTrigger>
+      <SelectContent>
+        {model.reasoningEfforts.map((effort) => (
+          <SelectItem key={effort} value={effort}>
+            {effort === fallback ? `${effort} (default)` : effort}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
+
 const QueueSwitch = ({ queued, onChange }: { queued: boolean; onChange: (queued: boolean) => void }) => (
   <div className="flex items-center gap-2 px-1">
     <Switch id="queue-input" checked={queued} onCheckedChange={onChange} />
@@ -58,7 +91,12 @@ export const SessionPane = () => {
   const mode: InputMode | undefined = queued ? "queue" : undefined
   const runtime = useSessionRuntime(client, mode)
   const components = useMemo(
-    () => ({ UserActions, ComposerExtra: () => <QueueSwitch queued={queued} onChange={setQueued} /> }),
+    () => ({
+      UserActions,
+      SystemItem,
+      BeforeComposer: PendingInputs,
+      ComposerExtra: () => <QueueSwitch queued={queued} onChange={setQueued} />,
+    }),
     [queued],
   )
 
@@ -72,6 +110,7 @@ export const SessionPane = () => {
           {view?.sessionDir}
         </span>
         <ModelSwitch />
+        <EffortSwitch />
       </header>
       <PermissionQueue />
       <div className="min-h-0 flex-1">

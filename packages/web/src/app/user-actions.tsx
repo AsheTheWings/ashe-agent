@@ -15,7 +15,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { useClient } from "./client-context.tsx"
 
 export const REWIND_WARNING =
-  "This turn and every later turn are removed from the session. Files and other effects of those turns stay as they are."
+  "This turn and every later turn are removed from the session. Research and memory files return to their state when this turn started; scratch, other files, and other effects of the removed turns stay as they are."
 
 type Rewinding = { readonly edit: boolean } | null
 
