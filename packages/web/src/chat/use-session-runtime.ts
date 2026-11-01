@@ -68,7 +68,8 @@ const partOf = (part: AssistantPart, pending: Pending) => {
 /**
  * One conversation item as an assistant-ui message: a user message carries
  * the turn it started, and a tool call waiting on a permission carries it
- * as its approval.
+ * as its approval. Every other item is a system message carrying the item
+ * itself, which the thread's system item slot renders.
  */
 const convertItem = (item: Item, pending: Pending): ThreadMessageLike => {
   switch (item.kind) {
@@ -88,7 +89,13 @@ const convertItem = (item: Item, pending: Pending): ThreadMessageLike => {
         metadata: { runId: item.runId },
       }
     case "notice":
-      return { role: "system", id: item.id, content: [{ type: "text", text: item.text }] }
+    case "error":
+      return { role: "system", id: item.id, content: [{ type: "text", text: item.text }], metadata: { custom: { item } } }
+    case "entry":
+    case "developer":
+    case "mark":
+    case "questions":
+      return { role: "system", id: item.id, content: [{ type: "text", text: item.kind }], metadata: { custom: { item } } }
   }
 }
 

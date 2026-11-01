@@ -88,6 +88,8 @@ class FakeServer {
         return { result: { sessions: [summary] } }
       case "session.subscribe":
         return { result: { session: summary } }
+      case "session.answerQuestion":
+        return { result: {} }
       default:
         return { error: { code: ErrorCode.methodNotFound, message: `unscripted ${request.method}` } }
     }
@@ -189,13 +191,25 @@ const permission: SessionEventBody = {
 }
 
 const texts = (current: SessionView) =>
-  current.items.map((item) =>
-    item.kind === "user"
-      ? `user:${item.text}`
-      : item.kind === "assistant"
-        ? `assistant:${item.parts.map((part) => (part.type === "tool" ? part.name : part.text)).join("|")}:${item.status}`
-        : `notice:${item.text}`,
-  )
+  current.items.map((item) => {
+    switch (item.kind) {
+      case "user":
+        return `user:${item.text}`
+      case "assistant":
+        return `assistant:${item.parts.map((part) => (part.type === "tool" ? part.name : part.text)).join("|")}:${item.status}`
+      case "notice":
+      case "error":
+        return `${item.kind}:${item.text}`
+      case "entry":
+        return `entry:#${item.entry.number} ${item.entry.kind}${item.resolvedBy === null ? "" : ` resolved by #${item.resolvedBy}`}`
+      case "developer":
+        return `developer:${item.components.map((component) => component.heading).join(",")}`
+      case "mark":
+        return `mark:${item.mark}`
+      case "questions":
+        return `questions:${item.open ? "open" : item.answers === null ? "ended" : "answered"}`
+    }
+  })
 
 describe("session client", () => {
   test("sign-in keeps the refresh token, remembers the server, and takes model choices from models.list", async () => {
@@ -317,5 +331,113 @@ describe("session client", () => {
     expect(storage.entries.has(storageKeys.refreshToken)).toBe(false)
     expect(timers()).toBe(0)
     expect(client.store.getState().status).toBe("signedOut")
+  })
+
+  test("context events build entries, marks, windows, questions, errors, and pending messages that rewinds keep exact", async () => {
+    const { server, client } = await signedIn()
+    await client.open(SESSION)
+    const socket = server.last()
+    const developer = (runId: string, heading: string) => ({
+      type: "DEVELOPER_MESSAGE" as const,
+      runId,
+      components: [{ type: "notification" as const, heading, text: `# ${heading}\n\nText.` }],
+    })
+    const entry = (number: number, kind: "open" | "done" | "compaction" | "answer", fields: Record<string, string>, resolves: Array<number> = []) => ({
+      type: "TIMELINE_ENTRY" as const,
+      runId: "r1",
+      entry: { number, kind, fields, resolves },
+    })
+    const question = { id: "q1", header: "Store", question: "Where?", options: [{ label: "SQLite", description: "a file" }, { label: "Files", description: "plain" }] }
+    const pending = () => view(client).pending.map((input) => input.text)
+    const events: Array<SessionEventBody> = [
+      created,
+      { type: "CHECKPOINT_WINDOW_SEEDED", runId: null, window: 1, components: [] },
+      { type: "INPUT_RECEIVED", inputId: "i1", text: "start", mode: "steer", sender },
+      { type: "RUN_STARTED", threadId: SESSION, runId: "r1", model: "alpha", cause: "user", userMessageIds: ["i1"] },
+      entry(1, "open", { Text: "Write the parser" }),
+      entry(2, "compaction", { Text: "Requests:\n- old" }),
+      { type: "TIMELINE_ENTRY_REPLACED", runId: "r1", number: 2, text: "Requests:\n- new" },
+      { type: "TOOL_CALL_START", toolCallId: "tq", toolCallName: "context_ask_question" },
+      { type: "QUESTIONS_ASKED", runId: "r1", toolCallId: "tq", questionSetId: "qs1", feedback: "Noted.", questions: [question] },
+    ]
+    events.forEach((event, index) => socket.push(index + 1, event))
+    expect(texts(view(client))).toEqual(["user:start", "entry:#1 open", "entry:#2 compaction", "assistant:context_ask_question:running", "questions:open"])
+    expect(view(client).items.find((item) => item.kind === "entry" && item.entry.number === 2)).toMatchObject({ entry: { fields: { Text: "Requests:\n- new" } } })
+    expect(view(client).items.at(-1)).toMatchObject({ kind: "questions", feedback: "Noted.", questions: [question] })
+
+    await client.answerQuestion("qs1", [{ id: "q1", selection: "SQLite", note: "Keep it local." }])
+    expect(socket.requests.at(-1)).toMatchObject({
+      method: "session.answerQuestion",
+      params: { sessionId: SESSION, questionSetId: "qs1", answers: [{ id: "q1", selection: "SQLite", note: "Keep it local." }] },
+    })
+    const later: Array<SessionEventBody> = [
+      { type: "QUESTIONS_ANSWERED", questionSetId: "qs1", answers: [{ id: "q1", selection: "SQLite", note: "Keep it local." }], sender },
+      entry(3, "answer", { Question: "Where?", Selection: "SQLite: a file", UserNote: "Keep it local." }),
+      { type: "TOOL_CALL_RESULT", messageId: "rq", toolCallId: "tq", content: "[ANSWER #3]", role: "tool", outcome: "success" },
+      entry(4, "done", { Text: "Parser written" }, [1]),
+      { type: "SESSION_ERROR", code: "user_instructions_unreadable", message: "AGENTS.md cannot be read; the known user instructions stay", runId: "r1" },
+      { type: "INPUT_WAITING", inputId: "i2", text: "held one", mode: "steer", sender },
+      { type: "CONTEXT_TURN_STARTED", runId: "r1", trigger: "threshold" },
+      developer("r1", "Context Turn"),
+      { type: "TOOL_RESULTS_CLEARED", runId: "r1", attempt: 1, tokensFreed: 5_000 },
+      { type: "INPUT_WAITING", inputId: "i3", text: "held two", mode: "steer", sender },
+    ]
+    later.forEach((event, index) => socket.push(events.length + index + 1, event))
+    expect(view(client).items.find((item) => item.kind === "questions")).toMatchObject({ open: false, answers: [{ id: "q1", selection: "SQLite" }] })
+    expect(pending()).toEqual(["held one", "held two"])
+    expect(texts(view(client))).toEqual([
+      "user:start",
+      "entry:#1 open resolved by #4",
+      "entry:#2 compaction",
+      "assistant:context_ask_question:running",
+      "questions:answered",
+      "entry:#3 answer",
+      "entry:#4 done",
+      "error:AGENTS.md cannot be read; the known user instructions stay",
+      "mark:context_turn",
+      "developer:Context Turn",
+      "mark:clearing",
+    ])
+
+    // The context turn builds the next checkpoint window; its continuation turn takes both held messages.
+    let seq = events.length + later.length
+    const push = (...bodies: Array<SessionEventBody>) => {
+      for (const body of bodies) socket.push(++seq, body)
+    }
+    push(
+      { type: "CHECKPOINT_WINDOW_SEEDED", runId: "r1", window: 2, components: [] },
+      { type: "RUN_FINISHED", threadId: SESSION, runId: "r1", outcome: { type: "success" } },
+    )
+    const continuationStart = seq + 1
+    push(
+      developer("r2", "Continuation"),
+      { type: "INPUT_RECEIVED", inputId: "i2", text: "held one", mode: "steer", sender },
+      { type: "INPUT_RECEIVED", inputId: "i3", text: "held two", mode: "steer", sender },
+      { type: "RUN_STARTED", threadId: SESSION, runId: "r2", model: "alpha", cause: "continuation", userMessageIds: ["i2", "i3"] },
+      { type: "RUN_FINISHED", threadId: SESSION, runId: "r2", outcome: { type: "success" } },
+    )
+    expect(pending()).toEqual([])
+    expect(texts(view(client)).slice(11)).toEqual(["mark:window", "developer:Continuation", "user:held one", "user:held two", "mark:continuation"])
+
+    // A rerun without an edit holds both messages again, under new ids, until both are received.
+    push({ type: "SESSION_REWOUND", runId: "r2", firstRemovedSeq: continuationStart })
+    push({ type: "INPUT_WAITING", inputId: "i4", text: "held one", mode: "steer", sender }, { type: "INPUT_WAITING", inputId: "i5", text: "held two", mode: "steer", sender })
+    expect(view(client).pending.map((input) => input.inputId)).toEqual(["i4", "i5"])
+    expect(texts(view(client)).slice(11)).toEqual(["mark:window"])
+    const rerunStart = seq + 1
+    push({ type: "INPUT_RECEIVED", inputId: "i4", text: "held one", mode: "steer", sender })
+    expect(view(client).pending.map((input) => input.inputId)).toEqual(["i5"])
+    push(
+      { type: "INPUT_RECEIVED", inputId: "i5", text: "held two", mode: "steer", sender },
+      { type: "RUN_STARTED", threadId: SESSION, runId: "r3", model: "alpha", cause: "continuation", userMessageIds: ["i4", "i5"] },
+      { type: "RUN_FINISHED", threadId: SESSION, runId: "r3", outcome: { type: "success" } },
+    )
+    expect(pending()).toEqual([])
+
+    // An edit at the continuation turn leaves only the edit pending, and no message an earlier rewind removed returns.
+    push({ type: "SESSION_REWOUND", runId: "r3", firstRemovedSeq: rerunStart })
+    push({ type: "INPUT_WAITING", inputId: "i6", text: "edited", mode: "steer", sender })
+    expect(view(client).pending.map((input) => input.inputId)).toEqual(["i6"])
+    expect(texts(view(client)).slice(0, 11).at(-1)).toBe("mark:clearing")
   })
 })
