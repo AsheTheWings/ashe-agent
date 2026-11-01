@@ -287,3 +287,112 @@ export const currentDates = (now: number, userZone: string, serverZone = Intl.Da
 /** Whether two date states name the same days in the same zones. */
 export const sameDates = (a: Dates, b: Dates) =>
   a.serverDate === b.serverDate && a.serverZone === b.serverZone && a.userDate === b.userDate && a.userZone === b.userZone
+
+/** What started a context turn: the reserve running short, or the context limit. */
+export type ContextTrigger = "threshold" | "limit"
+
+/** A list item of `lines` under a bullet, indented one level. */
+const subList = (lines: ReadonlyArray<string>) => lines.map((line) => `  - ${line}`).join("\n")
+
+/**
+ * The context turn notification component: what makes the rest of the turn
+ * a context turn, the state to record, the research and memory violations
+ * found at its start, a draft over the file limit, and how the context
+ * turn ends.
+ */
+export const contextTurnComponent = (options: {
+  readonly trigger: ContextTrigger
+  readonly reserve: number
+  readonly violations: ReadonlyArray<string>
+  readonly count: number
+  readonly maxFiles: number
+}): Component => {
+  const opening =
+    options.trigger === "threshold"
+      ? `Less than ${options.reserve.toLocaleString("en-US")} tokens are left in this checkpoint window, so the rest of this turn is a context turn. Leave the task until the next checkpoint window and put your context in order:`
+      : "This checkpoint window reached its limit, so the harness replaced the oldest tool results with placeholders, and the rest of this turn is a context turn. Only `context_append`, `context_get_open_items`, `shell_exec_command`, `shell_write_stdin`, `file_read`, and `file_patch` remain. If the checkpoint window fills up twice more, the harness summarizes it into a handoff entry and ends this turn, so organize first and inspect only what you need."
+  const steps = [
+    "- Record your current state in the primary timeline with `context_append`: `done` entries resolving what you finished, `open` entries for what remains, and what the checkpoint will not show.",
+    "- Make any change to the secondary timelines in `memory-draft/`, a writable copy of `memory/` that replaces it once the check passes.",
+    ...(options.violations.length === 0 ? [] : [`- Fix these problems in \`research/\` and \`memory-draft/\`:\n${subList(options.violations.map(escapeTags))}`]),
+    ...(options.count > options.maxFiles ? [`- \`memory-draft/\` holds ${options.count} files; merge them into at most ${options.maxFiles}.`] : []),
+  ]
+  return component(
+    "notification",
+    "context_turn",
+    "Context Turn",
+    `${opening}\n\n${steps.join("\n")}\n\n## Ending the Context Turn\n\nWhen the work is done, reply in one line without calling a tool. If the primary timeline is then over its allowance, the harness trims its oldest entries and asks you to file them. Otherwise it checks \`research/\` and \`memory-draft/\`; when something is wrong, a component lists it and the context turn continues, for at most three checks. Messages that arrive meanwhile wait for the next checkpoint window.`,
+  )
+}
+
+const SECONDARY_TIMELINE_FORMAT = `## Secondary Timelines
+
+A secondary timeline is a file in \`memory-draft/\` grouping related entries, such as the work on one component:
+
+\`\`\`markdown
+---
+description: Parser rewrite, its decisions and steps
+---
+
+[DECISION #14]
+Decision: Parse with a hand-written lexer
+Rationale: The grammar needs context the generator cannot express
+
+[DONE #17]
+Text: Lexer passes the fixture suite
+Resolves: #15 [OPEN] Make the lexer pass the fixture suite
+\`\`\`
+
+Its body holds only entries copied exactly as recorded, in ascending number order, separated by blank lines. Each trimmed entry is in exactly one file. Its \`description:\` says what its entries cover. The path and the description hold at most 120 characters each. Create, merge, split, rename, and delete files freely while these rules hold, and keep at most 64 files. \`research/\` and \`memory-draft/\` hold only Markdown files directly inside them, no subdirectories and no symlinks, and each research file has a \`description:\` of at most 120 characters too.`
+
+/**
+ * The timelines trimmed notification component: the range an idle trimmed,
+ * the stored text of trimmed entries the checkpoint window cannot show,
+ * and the secondary timeline format and its rules.
+ */
+export const timelinesTrimmed = (first: number, last: number, entries: ReadonlyArray<string>): Component =>
+  component(
+    "notification",
+    "timelines_trimmed",
+    "Timelines Trimmed",
+    `The primary timeline is over its allowance, so the harness trimmed entries #${first} to #${last} from it. Copy each into exactly one secondary timeline in \`memory-draft/\`, then reply in one line without calling a tool.${
+      entries.length === 0
+        ? ""
+        : `\n\nThese trimmed entries were written after this checkpoint window began, so nothing above shows them as stored; copy them from here:\n\n${entries.map(escapeTags).join("\n\n")}`
+    }\n\n${SECONDARY_TIMELINE_FORMAT}`,
+  )
+
+/** The failed validation notification component: the check's attempt and every violation. */
+export const validationFailed = (attempt: number, attempts: number, violations: ReadonlyArray<string>): Component =>
+  component(
+    "notification",
+    "validation_failed",
+    "Context Check Failed",
+    `\`research/\` and \`memory-draft/\` failed check ${attempt} of ${attempts}, so the context turn continues. Fix each problem, then reply in one line without calling a tool:\n\n${violations.map((line) => `- ${escapeTags(line)}`).join("\n")}\n\nAfter a third failed check, \`memory-draft/\` replaces \`memory/\` if its secondary timelines pass; otherwise \`memory/\` stays as it was when this context turn started, with the trimmed entries added in one unsorted file. Problems left in \`research/\` wait for a later context turn.`,
+  )
+
+/**
+ * The continuation notification component, which starts the continuation
+ * turn after the seed: after a handoff it names the handoff entry, and
+ * after the fallback it names the unsorted file.
+ */
+export const continuationComponent = (options: {
+  readonly handoff?: number
+  readonly unsorted?: { readonly first: number; readonly last: number; readonly path: string }
+}): Component =>
+  component(
+    "notification",
+    "continuation",
+    "Continuation",
+    [
+      "This checkpoint window continues the session after a context turn. Continue the task from the checkpoint, or tell the user it is done.",
+      ...(options.handoff === undefined
+        ? []
+        : [`The previous checkpoint window filled up before its context turn finished; \`[HANDOFF #${options.handoff}]\` summarizes it.`]),
+      ...(options.unsorted === undefined
+        ? []
+        : [
+            `The secondary timelines failed three checks, so \`memory/\` kept its earlier state, with entries #${options.unsorted.first} to #${options.unsorted.last} added in \`${escapeTags(options.unsorted.path)}\`. Sort them into secondary timelines in a later context turn.`,
+          ]),
+    ].join("\n\n"),
+  )

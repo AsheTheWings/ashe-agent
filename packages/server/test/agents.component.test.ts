@@ -89,7 +89,7 @@ describe("instructions and skills", () => {
         expect(results[1]).toMatchObject({ outcome: "failed", content: "There is no skill named nope." })
         expect(results[2]).toMatchObject({ outcome: "failed", content: expect.stringContaining("denied by configuration") })
         // The rules wholly deny edit, so the skill's allowed-tools cannot bring touch back.
-        expect(results[3]).toMatchObject({ outcome: "failed", content: "There is no tool named touch." })
+        expect(results[3]).toMatchObject({ outcome: "failed", content: expect.stringMatching(/^`touch` is not offered in this request, so the call did not run\.\nOffered tools: .*skill/) })
       },
       { skill: { "*": "allow", secret: "deny" }, edit: "deny" },
     )

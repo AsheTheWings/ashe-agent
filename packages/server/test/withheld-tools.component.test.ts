@@ -96,4 +96,19 @@ describe("withheld tools", () => {
       expect(first).not.toContain("lookup")
     })
   })
+
+  test("a rule denying everything keeps context_append and context_get_open_items, and a denied context_ask_question is absent", async () => {
+    await withTools({ "*": "deny" }, async (h) => {
+      const { tools } = await firstCall(h)
+      expect(tools).toEqual(["context_append", "context_get_open_items"])
+    })
+    await withTools({ context_ask_question: "deny" }, async (h) => {
+      const { tools } = await firstCall(h)
+      expect(tools).toEqual(expect.arrayContaining(["context_append", "context_get_open_items", "file_read"]))
+      expect(tools).not.toContain("context_ask_question")
+    })
+    await withTools({}, async (h) => {
+      expect((await firstCall(h)).tools).toContain("context_ask_question")
+    })
+  })
 })

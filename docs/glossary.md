@@ -34,10 +34,59 @@ The terms these docs use, with the meaning they have in AsheAgent.
   running turn at its next step boundary.
 - **Queued input**: a user message held until the running turn ends,
   which then starts the next turn.
-- **Checkpoint window**: a session's model context from one checkpoint to
-  the next: its harness instructions and its items, the developer
+- **Checkpoint window**: one instance of a session's model context, from
+  one checkpoint window construction to the next, the first starting at
+  session creation: its harness instructions and its items, the developer
   components, user messages, assistant messages, and tool results every
   model call sends.
+- **Checkpoint window size**: the most estimated tokens a model call of a
+  checkpoint window may send, per model and agent.
+- **Context window**: the model's own capacity, which its provider
+  enforces.
+- **Harness seed**: the harness instructions and the seed components that
+  open a checkpoint window.
+- **Working margin**: what a checkpoint window size leaves after the
+  harness seed's allowance, the tool definitions allowance, and the
+  reserve.
+- **Checkpoint window construction**: building a checkpoint window's
+  harness seed, at session creation or at the end of a context turn.
+- **Context turn**: the rest of a turn after its checkpoint window ran
+  short, in which the agent puts its context in order before the next
+  checkpoint window.
+- **Continuation turn**: the turn that starts a checkpoint window after a
+  context turn, with the continuation component and the input held for
+  it.
+- **Context limit**: a model call's estimated input reaching the
+  checkpoint window size, or the provider refusing it as over the context
+  window.
+- **Clearing**: replacing the oldest tool results of a checkpoint window
+  with a placeholder at the context limit.
+- **Primary timeline**: a session's numbered entries not trimmed from it;
+  **secondary timeline**: a file in `memory/` holding entries trimmed
+  from it; **timelines**: both.
+- **Open item**: an `open` or `problem` entry no `done` entry resolves.
+- **Chat boundary**: a stretch of the conversation from a user message
+  until its size reaches 60,000 tokens, which one compaction entry
+  summarizes.
+- **Compaction entry**, **research entry**, **answer entry**, and
+  **handoff entry**: the entries the harness writes, summarizing a chat
+  boundary, a research file's change, a user's answer to a question, and a
+  checkpoint window that filled up.
+- **Research baseline**: the research files a checkpoint window's
+  research entries are measured against.
+- **Checkpoint**: the session checkpoint component, the last seed
+  component of a later checkpoint window, holding the timelines and the
+  recent transcript.
+- **Recent transcript**: the latest items before a context turn that a
+  checkpoint carries verbatim.
+- **Session directory**: a session's own directory, its starting working
+  directory, holding `research/`, `memory`, `scratch`, and during a
+  context turn `memory-draft/`.
+- **Memory generation**: one read-only published version of a session's
+  memory files, which `memory` points to.
+- **Memory draft**: `memory-draft/`, the writable copy of the memory
+  generation a context turn edits.
+- **Scratch**: a session's disposable files, outside the state directory.
 - **Developer component**: one unit of harness content under its own `#`
   heading, such as the user instructions or a catalog.
 - **Developer message**: the `<developer>` block of adjoining developer

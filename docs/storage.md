@@ -12,16 +12,25 @@ copy a consistent dump instead.
 
 A session's conversation state is rows of its own: its checkpoint
 windows, each window's items, the developer component each component item
-holds, and its waiting input. The content store keeps text that
-components refer to by SHA-256, such as each version of the user
-instructions. Every row a turn makes names that turn and references its
+holds, and its waiting input; its tool result clearings; its timeline
+entries, their trims, and each text of a compaction entry, the newest
+kept one current; its chat boundaries and their closings; and each
+checkpoint window's research baseline versions, the newest kept one
+current. The content store keeps text that components refer to by
+SHA-256, such as each version of the user instructions and of each
+research file a baseline names. A turn records the position of its
+context turn component and what started the context turn. Every row a
+turn makes names that turn and references its
 `turns` row with a cascading foreign key; rows made at session creation,
 such as the first window and its seed, name no turn.
 
 A rewind deletes the removed turns' rows, and the foreign keys delete
 every row they own with them, so the conversation is again what the kept
-turns and creation made. A fork copies the rows that no turn owns and
-those of the turns it copies into the new session.
+turns and creation made: a removed context turn's checkpoint window,
+clearings, trims, and compaction texts go, so the kept results are
+uncleared and each compaction entry has its earlier text again. A fork
+copies the rows that no turn owns and those of the turns it copies into
+the new session.
 
 ## Session files
 
@@ -43,6 +52,11 @@ A session's directory, `<state-dir>/sessions/<session-id>/`, holds:
   `<scratch-root>/<session-id>/`, for disposable files. A missing target
   is recreated empty at the next turn start or step boundary, which tells
   the model with a scratch lost component.
+- `memory-draft/`: during a context turn, a writable copy of the current
+  memory generation, which replaces it when validation passes. A context
+  turn that ends early settles it, and a server start settles the draft
+  of a context turn a stop left running and removes every other draft;
+  [model context](model-context.md#context-turns) explains how.
 
 Creating or forking a session records it only after its directory,
 first memory generation, and scratch target exist; a failure removes

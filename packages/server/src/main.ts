@@ -127,6 +127,12 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
     const endProcesses = () => processes.stopAll()
     process.on("exit", endProcesses)
     const builtin = builtinTools(inputs, processes)
+    const port = responsesModelPort((id) => {
+      const model = models.find((candidate) => candidate.id === id)
+      const key = model === undefined ? undefined : apiKeys.get(model.provider)
+      if (model === undefined || key === undefined) return undefined
+      return { baseURL: inputs.providers[model.provider]!.baseURL, apiKey: Redacted.value(key), upstream: model.upstream }
+    })
     // MCP servers connect in the background; each server's tools appear once it has listed them.
     const mcp = new McpRegistry(inputs.mcpServers, {
       env: commandEnv,
@@ -159,15 +165,9 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
           permission: inputs.permission,
           home: sources.dirs.home,
           userTimeZone: inputs.userTimeZone,
-          runner: agentRunner({
-            port: responsesModelPort((id) => {
-              const model = models.find((candidate) => candidate.id === id)
-              const key = model === undefined ? undefined : apiKeys.get(model.provider)
-              if (model === undefined || key === undefined) return undefined
-              return { baseURL: inputs.providers[model.provider]!.baseURL, apiKey: Redacted.value(key), upstream: model.upstream }
-            }),
-            models,
-          }),
+          port,
+          auxiliaryModels: inputs.auxiliaryModels,
+          runner: agentRunner({ port, models }),
         }),
       ),
       Layer.provide(Store.layer(databasePath(inputs.stateDir))),

@@ -122,12 +122,19 @@ describe("MCP servers", () => {
         h.model.next(callTools([{ name: "local_quit", args: {} }]), say("quit"))
         h.input(id, "stop it")
         await h.turnsEnded(id, 1)
-        expect(h.model.calls[0]!.call.tools.map((spec) => spec.name).sort()).toEqual(["local_echo", "local_quit", "other_echo"])
+        expect(h.model.calls[0]!.call.tools.map((spec) => spec.name).sort()).toEqual([
+          "context_append",
+          "context_ask_question",
+          "context_get_open_items",
+          "local_echo",
+          "local_quit",
+          "other_echo",
+        ])
         await waitFor("the stopped server's tools to leave", () => (names(registry.tools(true)).length === 1 ? true : undefined))
         h.model.next(say("after"))
         h.input(id, "next")
         await h.turnsEnded(id, 2)
-        expect(h.model.last().tools.map((spec) => spec.name)).toEqual(["other_echo"])
+        expect(h.model.last().tools.map((spec) => spec.name)).toEqual(["other_echo", "context_append", "context_get_open_items", "context_ask_question"])
       } finally {
         await h.cleanup()
       }
@@ -241,7 +248,7 @@ describe("MCP servers", () => {
       h.model.next(say("after"))
       h.input(id, "next")
       await h.turnsEnded(id, 2)
-      expect(h.model.last().tools.map((spec) => spec.name)).toEqual(["local_echo"])
+      expect(h.model.last().tools.map((spec) => spec.name)).toEqual(["local_echo", "context_append", "context_get_open_items", "context_ask_question"])
     } finally {
       await h.cleanup()
       await registry.stop()

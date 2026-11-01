@@ -50,6 +50,12 @@ leaves out each tool the rules wholly deny. The developer message's
 Skills section leaves out each skill denied under the `skill`
 permission.
 
+`context_append` and `context_get_open_items` are never
+permission-checked, so they are offered under any rules, a deny for
+everything included. `context_ask_question` asks under its own
+permission, `context_ask_question`, so denying it keeps an agent from
+asking the user questions.
+
 ## Subjects
 
 Each tool names the permission it asks under and the subjects of a call,

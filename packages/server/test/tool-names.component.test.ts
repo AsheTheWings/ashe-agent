@@ -76,6 +76,9 @@ describe("tool names", () => {
         "web_search",
         "web_fetch",
         "execute",
+        "context_append",
+        "context_get_open_items",
+        "context_ask_question",
       ])
     } finally {
       await h.cleanup()

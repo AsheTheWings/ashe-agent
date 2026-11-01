@@ -2,29 +2,21 @@ import { AIMessage, type AIMessageChunk } from "@langchain/core/messages"
 import type { SessionEventBody } from "@ashe-agent/protocol"
 import { context as otelContext } from "@opentelemetry/api"
 import { Effect } from "effect"
+import { RESERVE } from "../context/constants.ts"
 import { allowanceMessage, toolDefinitionsIssue } from "../context/seed.ts"
 import { callSettings, type ConfiguredModel } from "../models/registry.ts"
 import type { TurnContext, TurnOutcome, TurnRunner } from "../sessions/hub.ts"
 import { endSpan, recordDuration, startSpan, withSpan, type ErrorClass } from "../telemetry/signals.ts"
 import { REQUEST_INSTRUCTIONS } from "./blocks.ts"
+import { TurnFailure } from "./failure.ts"
 import { ModelCallError, type ModelPort } from "./model.ts"
 import { unfinishedResult } from "./notes.ts"
 import { failedResult, type Tool, type ToolResult } from "./tools.ts"
-import { renderWindow, toolContentText, type ToolContent, type ToolOutcome } from "./window.ts"
+import { estimateCall, renderWindow, toolContentText, type ToolContent, type ToolOutcome } from "./window.ts"
 
 export interface AgentOptions {
   readonly port: ModelPort
   readonly models: ReadonlyArray<ConfiguredModel>
-}
-
-/** A turn that cannot go on; its message becomes the turn's error event. */
-class TurnFailure extends Error {
-  constructor(
-    message: string,
-    readonly code: string,
-  ) {
-    super(message)
-  }
 }
 
 interface Call {
@@ -287,15 +279,20 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
     if (issue !== null) throw new TurnFailure(`the model call was not sent: ${allowanceMessage(issue)}`, "tool_definitions_over_allowance")
 
     const window = context.window()
+    const messages = renderWindow(window.harness, window.items, turn.model, model.imageInput)
+    // The context limit, checked before each model call: an estimate reaching the checkpoint window size.
+    const estimate = estimateCall(REQUEST_INSTRUCTIONS, messages, specs)
+    if (estimate >= context.checkpointWindowSize) {
+      if ((await context.limitReached(signal)) === "ended") return { status: "finished" }
+      continue
+    }
+    if (!context.isContextTurn() && context.checkpointWindowSize - estimate < RESERVE) {
+      context.reserveReached(signal)
+      continue
+    }
     const chunks: Array<AIMessageChunk> = []
     try {
-      const call = {
-        model: turn.model,
-        instructions: REQUEST_INSTRUCTIONS,
-        messages: renderWindow(window.harness, window.items, turn.model, model.imageInput),
-        tools: specs,
-        ...settings,
-      }
+      const call = { model: turn.model, instructions: REQUEST_INSTRUCTIONS, messages, tools: specs, ...settings }
       for await (const chunk of port.stream(call, signal)) {
         chunks.push(chunk)
         events.chunk(chunk)
@@ -303,7 +300,10 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
     } catch (error) {
       if (signal.aborted) throw error
       if (error instanceof ModelCallError && error.overflow) {
-        throw new TurnFailure("the conversation exceeds the model's context window", "context_overflow")
+        // A provider failing the call as over its context window is the context limit too.
+        events.settle("failed")
+        if ((await context.limitReached(signal)) === "ended") return { status: "finished" }
+        continue
       }
       throw new TurnFailure(`the model call failed: ${error instanceof Error ? error.message : String(error)}`, "model_failed")
     }
@@ -313,8 +313,10 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
 
     const calls = (message.tool_calls ?? []).filter((call) => !invalid.has(call.id!))
     if (calls.length === 0 && invalid.size === 0) {
-      // A step boundary after a reply without tool calls: the turn ends unless input joins it.
-      if (!context.deliver()) return { status: "finished" }
+      // A step boundary after a reply without tool calls: the turn ends unless input joins it, or a context turn's idle goes on.
+      if (context.deliver()) continue
+      if (!context.isContextTurn()) return { status: "finished" }
+      if ((await context.idle()) === "ended") return { status: "finished" }
       continue
     }
     let stopped = false
@@ -324,7 +326,7 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
         events.result(callId, unfinishedResult("canceled", false), "canceled")
         continue
       }
-      const result = await runTool(tools.get(call.name), call.name, call.args, callId, context, events, signal, model.imageInput)
+      const result = await runTool(tools.get(call.name), call.name, call.args, callId, context, events, signal, model.imageInput, specs)
       signal.throwIfAborted()
       if (result.outcome === "declined" && result.endTurn) stopped = true
       events.result(callId, result.content, result.outcome)
@@ -344,6 +346,7 @@ const runTool = async (
   events: TurnEvents,
   signal: AbortSignal,
   imageInput: boolean,
+  offered: ReadonlyArray<{ readonly name: string }>,
 ): Promise<ToolResult> => {
   // A name no offered tool has is the model's text, so it is not recorded.
   const toolName = tool === undefined ? "unknown" : name
@@ -359,7 +362,10 @@ const runTool = async (
   }
   let result: ToolResult
   if (tool === undefined) {
-    result = { outcome: "failed", content: `There is no tool named ${name}.` }
+    result = {
+      outcome: "failed",
+      content: `\`${name}\` is not offered in this request, so the call did not run.\nOffered tools: ${offered.map((spec) => spec.name).join(", ")}.`,
+    }
   } else {
     try {
       result = await otelContext.with(withSpan(span, context.trace), () =>

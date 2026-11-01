@@ -81,6 +81,9 @@ describe("the Responses model port", () => {
           ["function", "refuse"],
           ["function", "touch"],
           ["function", "pair"],
+          ["function", "context_append"],
+          ["function", "context_get_open_items"],
+          ["function", "context_ask_question"],
         ])
       }
       const [first, second] = api.captured.map((request) => request.body.input as Array<Record<string, any>>)
