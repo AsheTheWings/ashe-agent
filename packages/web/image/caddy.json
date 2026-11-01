@@ -1,0 +1,48 @@
+{
+  "admin": { "disabled": true, "config": { "persist": false } },
+  "logging": { "logs": { "default": { "writer": { "output": "discard" } } } },
+  "apps": {
+    "http": {
+      "servers": {
+        "web": {
+          "listen": [":8080"],
+          "automatic_https": { "disable": true },
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "headers",
+                  "response": {
+                    "set": {
+                      "X-Content-Type-Options": ["nosniff"],
+                      "X-Frame-Options": ["DENY"],
+                      "Referrer-Policy": ["no-referrer"]
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "match": [{ "path": ["/assets/*"] }],
+              "handle": [
+                {
+                  "handler": "headers",
+                  "response": {
+                    "set": { "Cache-Control": ["public, max-age=31536000, immutable"] },
+                    "deferred": true,
+                    "require": { "status_code": [200] }
+                  }
+                }
+              ]
+            },
+            {
+              "match": [{ "not": [{ "path": ["/assets/*"] }] }],
+              "handle": [{ "handler": "headers", "response": { "set": { "Cache-Control": ["no-cache"] } } }]
+            },
+            { "handle": [{ "handler": "file_server", "root": "/srv/web" }] }
+          ]
+        }
+      }
+    }
+  }
+}

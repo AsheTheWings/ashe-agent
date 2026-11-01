@@ -55,7 +55,16 @@ migrates, sets a password, signs in over WebSocket, and runs a turn with
 a shell command and a `file_read` of a docx.
 
 `bun run release-gate` is the release gate: the fast gate, then the
-bundle built and qualified.
+bundle built and qualified, then the web image built with
+`bun run web-image` and qualified. It needs Podman and `ORAS`; see
+[web client](web-client.md#container-image).
+
+`bun run test:web-image <layout> <revision>` qualifies the
+[web image](web-client.md#container-image) in an OCI layout as the build
+of a commit: it checks the manifest's annotations, then runs the image
+read-only in a Podman store of its own run and checks that it serves
+that commit's client with its cache headers and writes no console
+output. It needs Podman.
 
 ## CI
 
@@ -75,3 +84,11 @@ job's OIDC token, of the bundle as the single layer of
 an OIDC token. It checks that the pushed layer is the qualified bundle
 and logs `SHA-256: <hex>` for the manifest digest. The `oras` it runs is
 a pinned release whose archive and binary SHA-256 it checks first.
+
+The `web-image` workflow runs the same way on the same events, as its own
+run: the fast gate, the web build, the image built and annotated into an
+OCI layout, and qualification of that layout. On a push or a manual
+dispatch the job that qualified it pushes the same manifest, checked
+against the qualified digest, to
+`ashe-agent/<area>:<commit>-<run id>-<run attempt>` and logs
+`SHA-256: <hex>` for it.
