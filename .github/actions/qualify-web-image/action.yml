@@ -1,0 +1,53 @@
+name: Build and qualify the web image
+description: >-
+  Run the fast gate, build the web client and its image from the checked-out
+  commit, annotate the image into an OCI layout, and qualify that exact
+  layout in the calling job.
+
+outputs:
+  digest:
+    description: Manifest digest of the qualified image
+    value: ${{ steps.image.outputs.digest }}
+  created:
+    description: Creation time annotated on the image, the commit time
+    value: ${{ steps.image.outputs.created }}
+
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      with:
+        bun-version-file: .bun-version
+    - shell: bash
+      run: bun install --frozen-lockfile
+    - shell: bash
+      run: bun run gate
+    - name: Fetch oras
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir "$RUNNER_TEMP/oras"
+        curl -fsSL -o "$RUNNER_TEMP/oras/oras.tar.gz" "$ORAS_URL"
+        echo "$ORAS_ARCHIVE_SHA256  $RUNNER_TEMP/oras/oras.tar.gz" | sha256sum -c -
+        tar -xzf "$RUNNER_TEMP/oras/oras.tar.gz" -C "$RUNNER_TEMP/oras" oras
+        echo "$ORAS_SHA256  $RUNNER_TEMP/oras/oras" | sha256sum -c -
+    - name: Build the image
+      id: image
+      shell: bash
+      env:
+        ORAS: ${{ runner.temp }}/oras/oras
+      run: |
+        set -euo pipefail
+        bun run build:web
+        created="$(TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ "$GITHUB_SHA")"
+        scripts/web-image.sh build "$RUNNER_TEMP/image-build" "$GITHUB_SHA" "$created"
+        digest="$(scripts/web-image.sh push "$RUNNER_TEMP/image-build" "$GITHUB_SHA" "$created" \
+          "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+          "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" \
+          --oci-layout "$RUNNER_TEMP/image")"
+        echo "digest=$digest" >> "$GITHUB_OUTPUT"
+        echo "created=$created" >> "$GITHUB_OUTPUT"
+        echo "Built image $digest"
+    - name: Qualify the image
+      shell: bash
+      run: bun run test:web-image "$RUNNER_TEMP/image" "$GITHUB_SHA"

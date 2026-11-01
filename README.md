@@ -41,6 +41,8 @@ executable, `bin/ashe-agent`, and the web client's static files under
 `web/`. `bun run release-gate` also tests and qualifies it; see
 [testing](docs/testing.md). CI builds the same bundle on every push and
 publishes it to the host's artifact registry.
+It also builds the web client into a container image, which it qualifies
+and publishes the same way; see [web client](docs/web-client.md).
 
 ## Use
 

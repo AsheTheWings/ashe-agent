@@ -21,6 +21,40 @@ client is served from; see [configuration](configuration.md).
 `revision.txt` at the build's root. It refuses a worktree with changes,
 since the build would hold code no commit has.
 
+## Container image
+
+The web image serves that build with Caddy, from a base image pinned by
+digest. `bun run web-image`, from a commit with no uncommitted changes
+and with `ORAS` naming an `oras` executable, builds the client and its
+image and writes the image, annotated, to the OCI layout
+`dist/web-image` under the tag `qualified`. It runs the two steps of
+`scripts/web-image.sh`: `build <layout> <revision> <created>` packages
+`packages/web/dist`, which must hold the revision's `revision.txt`, with
+`packages/web/image/` into an OCI layout, refusing a worktree with
+changes or not at the revision, and `push` writes that image, annotated
+with the `org.opencontainers.image` revision, source, run URL, creation
+time, and version, to another layout or to a registry. The container listens on
+port 8080 as UID 65532, needs a writable `/data` and `/config`, such as
+tmpfs mounts, and otherwise runs read-only. It serves the files under
+`/assets/` as immutable and every other file as `no-cache`, answers a
+missing file with 404 and no cache header, and writes no logs: Caddy's
+admin API, access logs, and console logs are off.
+
+[`compose.yaml`](../compose.yaml) is a reference deployment on
+`127.0.0.1:8080` of the image named `localhost/ashe-agent-web`. Give a
+built image that name before starting it:
+
+```sh
+podman pull oci:dist/web-image:qualified
+podman tag <image id it prints> localhost/ashe-agent-web
+podman compose up -d
+```
+
+The image's client connects to whichever server its user enters at
+sign-in, so serve it from an origin that server's `ASHE_AGENT_ORIGINS`
+lists, and run both from one commit, since the protocol may change at any
+revision.
+
 ## Signing in
 
 The sign-in page asks for the server's WebSocket URL, such as

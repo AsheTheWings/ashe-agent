@@ -48,21 +48,18 @@ const testSeed = (): string => {
   return given ?? String(Math.floor(Math.random() * 2 ** 31))
 }
 
-const test = async (testClass: TestClass, inputs: Record<string, string> = {}) => {
+/** Suites a test class leaves out because a task of their own runs them over what it fetches or builds. */
+const ownTaskSuites = ["packages/codemode/test/test262.integration.test.ts", "packages/web/test/image.qualification.test.ts"]
+
+const test = async (testClass: TestClass, inputs: Record<string, string> = {}, only?: string) => {
   const seed = testSeed()
   process.stdout.write(`\n== ${testClass} tests (seed ${seed}) ==\n`)
   const home = mkdtempSync(join(tmpdir(), "ashe-agent-test-home-"))
   try {
+    const ignored = ownTaskSuites.map((suite) => `--path-ignore-patterns=${suite}`)
+    const selection = only === undefined ? [...ignored, `.${testClass}.test.ts`] : [only]
     return await run(
-      [
-        process.execPath,
-        "test",
-        "--define",
-        `ASHE_AGENT_TEST_SEED=${JSON.stringify(seed)}`,
-        // test:test262 runs it over the corpus it fetches.
-        "--path-ignore-patterns=packages/codemode/test/test262.integration.test.ts",
-        `.${testClass}.test.ts`,
-      ],
+      [process.execPath, "test", "--define", `ASHE_AGENT_TEST_SEED=${JSON.stringify(seed)}`, ...selection],
       { ...testEnvironment(home), ...inputs },
     )
   } finally {
@@ -194,6 +191,51 @@ const qualification = async () => {
   return await test("qualification", { ASHE_AGENT_QUALIFICATION_BUNDLE: path })
 }
 
+const qualifyWebImage = (layout: string, revision: string) =>
+  test(
+    "qualification",
+    { ASHE_AGENT_QUALIFICATION_WEB_IMAGE: layout, ASHE_AGENT_QUALIFICATION_REVISION: revision },
+    "packages/web/test/image.qualification.test.ts",
+  )
+
+/** Qualifies the web image in the given OCI layout as the build of the given revision. */
+const webImageQualification = async () => {
+  const [given, revision] = process.argv.slice(3)
+  if (given === undefined || revision === undefined || !/^[0-9a-f]{40}$/.test(revision)) {
+    process.stderr.write("usage: bun run test:web-image <oci-layout-dir> <40-character commit revision>\n")
+    return 1
+  }
+  return await qualifyWebImage(isAbsolute(given) ? given : join(process.cwd(), given), revision)
+}
+
+const webImageLayout = join(dist, "web-image")
+
+/**
+ * Builds the web client and its image from the checked-out commit and
+ * annotates it into the OCI layout `dist/web-image`, as CI does; `ORAS`
+ * names the oras executable.
+ */
+const webImage = async () => {
+  const built = await buildWeb()
+  if (built !== 0) return built
+  process.stdout.write("\n== web image ==\n")
+  if (process.env.ORAS === undefined) {
+    process.stderr.write("ORAS must name the oras executable\n")
+    return 1
+  }
+  const revision = git("rev-parse", "HEAD")
+  const created = new Date(Number(git("log", "-1", "--format=%ct")) * 1000).toISOString().replace(".000Z", "Z")
+  rmSync(webImageLayout, { recursive: true, force: true })
+  const build = join(dist, "web-image-build")
+  rmSync(build, { recursive: true, force: true })
+  mkdirSync(dist, { recursive: true })
+  const script = join(root, "scripts/web-image.sh")
+  const code = await run([script, "build", build, revision, created])
+  if (code !== 0) return code
+  const source = "https://github.com/AsheTheWings/ashe-agent"
+  return await run([script, "push", build, revision, created, source, "local", "--oci-layout", webImageLayout])
+}
+
 const steps = async (all: ReadonlyArray<() => Promise<number>>) => {
   for (const step of all) {
     const code = await step()
@@ -217,10 +259,13 @@ const tasks: Record<string, () => Promise<number>> = {
   "build:binary": buildBinary,
   bundle,
   "test:qualification": qualification,
+  "test:web-image": webImageQualification,
+  "web-image": webImage,
   generate: () => run([process.execPath, join(root, "scripts/generate.ts")]),
   gate,
-  /** The gate a release needs: the fast gate, then the bundle built and qualified. */
-  "release-gate": () => steps([gate, bundle, qualification]),
+  /** The gate a release needs: the fast gate, then the bundle and the web image built and qualified. */
+  "release-gate": () =>
+    steps([gate, bundle, qualification, webImage, () => qualifyWebImage(webImageLayout, git("rev-parse", "HEAD"))]),
 }
 
 const name = process.argv[2] ?? ""
