@@ -6,7 +6,7 @@ import { logs, SeverityNumber } from "@opentelemetry/api-logs"
  * with its attributes, units, and error classes. Bump the version whenever
  * a name, attribute, unit, or error class changes.
  */
-export const SIGNAL_CATALOG_VERSION = 2
+export const SIGNAL_CATALOG_VERSION = 3
 
 /** The instrumentation scope of every signal. */
 export const SCOPE = "ashe-agent"
@@ -33,12 +33,28 @@ export const ERROR_CLASSES = [
   "mcp_connect_failed",
   "mcp_disconnected",
   "mcp_not_answering",
+  "compaction_failed",
+  "research_failed",
+  "handoff_failed",
+  "checkpoint_window_failed",
+  "memory_check_failed",
+  "memory_publish_failed",
+  "snapshot_failed",
+  "restore_failed",
+  "user_instructions_unreadable",
 ] as const
 
 export type ErrorClass = (typeof ERROR_CLASSES)[number]
 
+/** Whether `code`, such as a turn failure's code, is one of the stable error classes. */
+export const isErrorClass = (code: string): code is ErrorClass => (ERROR_CLASSES as ReadonlyArray<string>).includes(code)
+
 export const TURN_STATUSES = ["finished", "failed", "canceled", "interrupted"] as const
 export const TOOL_OUTCOMES = ["success", "failed", "canceled", "declined", "interrupted"] as const
+export const CONTEXT_TRIGGERS = ["threshold", "limit"] as const
+export const VALIDATION_RESULTS = ["passed", "failed"] as const
+export const QUESTION_OUTCOMES = ["answered", "message", "canceled"] as const
+export const CHECKPOINT_WINDOW_CAUSES = ["creation", "context_turn"] as const
 
 /** Every attribute a signal may carry, with its type and, when bounded by a list, its values. */
 export const ATTRIBUTES = {
@@ -55,9 +71,30 @@ export const ATTRIBUTES = {
     description: "The configured MCP server of each colliding tool, in the order of `ashe_agent.mcp.collision.tools`.",
   },
   "ashe_agent.mcp.collision.tools": { type: "string[]", description: "The colliding tools' names as their MCP servers list them." },
+  "ashe_agent.context_turn.trigger": {
+    type: "string",
+    values: CONTEXT_TRIGGERS,
+    description: "What started a context turn: the reserve running short, or the context limit.",
+  },
+  "ashe_agent.context_turn.constructed": { type: "boolean", description: "Whether a context turn built the next checkpoint window." },
+  "ashe_agent.clearing.attempt": { type: "int", description: "Which of a context turn's three clearings ran, from 1." },
+  "ashe_agent.validation.attempt": { type: "int", description: "Which of a context turn's validations ran, from 1." },
+  "ashe_agent.validation.result": { type: "string", values: VALIDATION_RESULTS, description: "Whether a validation passed." },
+  "ashe_agent.question.outcome": {
+    type: "string",
+    values: QUESTION_OUTCOMES,
+    description: "How a question wait ended: answered, ended by a steered user message, or canceled with its turn.",
+  },
+  "ashe_agent.checkpoint_window.cause": {
+    type: "string",
+    values: CHECKPOINT_WINDOW_CAUSES,
+    description: "Why a checkpoint window was built: session creation or a context turn.",
+  },
 } as const
 
 export type AttributeName = keyof typeof ATTRIBUTES
+type AttributeValue = string | boolean | number
+type SignalAttributes = Partial<Record<AttributeName, AttributeValue>>
 
 export const SPANS = {
   "ashe_agent.request": { description: "One protocol request, authentication included.", attributes: ["rpc.method", "error.type"] },
@@ -67,6 +104,34 @@ export const SPANS = {
     description: "One tool call, a code mode program's calls included as children of their execute call.",
     attributes: ["ashe_agent.tool", "ashe_agent.tool.outcome", "ashe_agent.tool.in_program"],
   },
+  "ashe_agent.context_turn": {
+    description: "One context turn, from its context turn component to the end of its turn.",
+    attributes: ["ashe_agent.context_turn.trigger", "ashe_agent.context_turn.constructed"],
+  },
+  "ashe_agent.clearing": { description: "One tool result clearing of a context turn.", attributes: ["ashe_agent.clearing.attempt"] },
+  "ashe_agent.compaction_call": { description: "One compaction call for a chat boundary.", attributes: ["ashe_agent.model", "error.type"] },
+  "ashe_agent.research_call": { description: "One research call for a research file.", attributes: ["ashe_agent.model", "error.type"] },
+  "ashe_agent.handoff_call": { description: "One handoff call of a context turn.", attributes: ["ashe_agent.model", "error.type"] },
+  "ashe_agent.question_wait": {
+    description: "One `context_ask_question` call waiting for its answer.",
+    attributes: ["ashe_agent.question.outcome"],
+  },
+  "ashe_agent.checkpoint_window_construction": {
+    description: "Building one checkpoint window's harness seed.",
+    attributes: ["ashe_agent.checkpoint_window.cause", "error.type"],
+  },
+  "ashe_agent.reconciliation": {
+    description: "Comparing a delivery's sources with what the checkpoint window knows.",
+    attributes: ["error.type"],
+  },
+  "ashe_agent.validation": {
+    description: "One validation of a context turn's research files and memory draft.",
+    attributes: ["ashe_agent.validation.attempt", "ashe_agent.validation.result"],
+  },
+  "ashe_agent.memory_check": { description: "Checking a session's memory against its current generation.", attributes: ["error.type"] },
+  "ashe_agent.memory_publish": { description: "Publishing a session's next memory generation.", attributes: ["error.type"] },
+  "ashe_agent.snapshot": { description: "Reading a session's research and memory files for a turn's snapshot.", attributes: ["error.type"] },
+  "ashe_agent.restore": { description: "Completing a rewind's pending restore of research and memory files.", attributes: ["error.type"] },
 } as const satisfies Record<string, { description: string; attributes: ReadonlyArray<AttributeName> }>
 
 export const METRICS = {
@@ -78,7 +143,25 @@ export const METRICS = {
     description: "Tool call duration.",
     attributes: ["ashe_agent.tool", "ashe_agent.tool.outcome", "ashe_agent.tool.in_program"],
   },
-} as const satisfies Record<string, { kind: "histogram"; unit: string; description: string; attributes: ReadonlyArray<AttributeName> }>
+  "ashe_agent.clearing.freed": {
+    kind: "histogram",
+    unit: "{token}",
+    description: "Estimated tokens one clearing freed.",
+    attributes: ["ashe_agent.clearing.attempt"],
+  },
+  "ashe_agent.checkpoint_window.size": {
+    kind: "histogram",
+    unit: "{token}",
+    description: "Estimated size of each built checkpoint window: its harness instructions and seed.",
+    attributes: ["ashe_agent.checkpoint_window.cause"],
+  },
+  "ashe_agent.validation.failures": {
+    kind: "counter",
+    unit: "{validation}",
+    description: "Failed validations of context turns.",
+    attributes: ["ashe_agent.validation.attempt"],
+  },
+} as const satisfies Record<string, { kind: "histogram" | "counter"; unit: string; description: string; attributes: ReadonlyArray<AttributeName> }>
 
 export const LOGS = {
   "ashe_agent.request.internal_error": { severity: "ERROR", description: "A protocol request failed with an internal error.", attributes: ["rpc.method", "error.type"] },
@@ -92,12 +175,14 @@ export const LOGS = {
 
 export type SpanName = keyof typeof SPANS
 type MetricName = keyof typeof METRICS
+type HistogramName = { [Name in MetricName]: (typeof METRICS)[Name]["kind"] extends "histogram" ? Name : never }[MetricName]
+type CounterName = { [Name in MetricName]: (typeof METRICS)[Name]["kind"] extends "counter" ? Name : never }[MetricName]
 type LogName = keyof typeof LOGS
 
 const tracer = () => trace.getTracer(SCOPE)
 
-const histograms = new Map<MetricName, ReturnType<ReturnType<typeof metrics.getMeter>["createHistogram"]>>()
-const histogram = (name: MetricName) => {
+const histograms = new Map<HistogramName, ReturnType<ReturnType<typeof metrics.getMeter>["createHistogram"]>>()
+const histogram = (name: HistogramName) => {
   let instrument = histograms.get(name)
   if (instrument === undefined) {
     instrument = metrics.getMeter(SCOPE).createHistogram(name, { unit: METRICS[name].unit, description: METRICS[name].description })
@@ -106,19 +191,34 @@ const histogram = (name: MetricName) => {
   return instrument
 }
 
-/** Drops the cached instruments, so the next records use the meter provider registered now. */
-export const resetInstruments = () => histograms.clear()
+const counters = new Map<CounterName, ReturnType<ReturnType<typeof metrics.getMeter>["createCounter"]>>()
+const counter = (name: CounterName) => {
+  let instrument = counters.get(name)
+  if (instrument === undefined) {
+    instrument = metrics.getMeter(SCOPE).createCounter(name, { unit: METRICS[name].unit, description: METRICS[name].description })
+    counters.set(name, instrument)
+  }
+  return instrument
+}
 
-/** Records `seconds` on the duration histogram `name`. */
-export const recordDuration = (name: MetricName, seconds: number, attributes: Partial<Record<AttributeName, string | boolean>>) =>
-  histogram(name).record(seconds, attributes as Attributes)
+/** Drops the cached instruments, so the next records use the meter provider registered now. */
+export const resetInstruments = () => {
+  histograms.clear()
+  counters.clear()
+}
+
+/** Records `value`, such as a duration in seconds, on the histogram `name`. */
+export const recordDuration = (name: HistogramName, value: number, attributes: SignalAttributes) => histogram(name).record(value, attributes as Attributes)
+
+/** Adds one to the counter `name`. */
+export const countOne = (name: CounterName, attributes: SignalAttributes) => counter(name).add(1, attributes as Attributes)
 
 /** Starts the span `name`, a child of `parent` or of the active context. */
-export const startSpan = (name: SpanName, attributes: Partial<Record<AttributeName, string | boolean>>, parent: Context = context.active()): Span =>
+export const startSpan = (name: SpanName, attributes: SignalAttributes, parent: Context = context.active()): Span =>
   tracer().startSpan(name, { attributes: attributes as Attributes }, parent)
 
 /** Ends `span`, marking it failed with `errorClass` when one is given. */
-export const endSpan = (span: Span, attributes: Partial<Record<AttributeName, string | boolean>> = {}, errorClass?: ErrorClass) => {
+export const endSpan = (span: Span, attributes: SignalAttributes = {}, errorClass?: ErrorClass) => {
   span.setAttributes(attributes as Attributes)
   if (errorClass !== undefined) {
     span.setAttribute("error.type", errorClass)
@@ -126,6 +226,76 @@ export const endSpan = (span: Span, attributes: Partial<Record<AttributeName, st
   }
   span.end()
 }
+
+/** What a traced operation may add to its span before it ends. */
+export interface SpanNotes {
+  readonly set: (attributes: SignalAttributes) => void
+  /** Marks the span failed with `errorClass`, though the operation goes on. */
+  readonly fail: (errorClass: ErrorClass) => void
+}
+
+const notesOf = (span: Span) => {
+  let failed: ErrorClass | undefined
+  const notes: SpanNotes = { set: (attributes) => span.setAttributes(attributes as Attributes), fail: (errorClass) => (failed = errorClass) }
+  return { notes, failed: () => failed }
+}
+
+/**
+ * Runs `work` inside the span `name`, a child of `parent`. A throw ends the
+ * span as `failure`, or the class `failure` gives the thrown error, or as
+ * `canceled` when `signal`, or the abort `work` threw, says the work was
+ * canceled, and rethrows.
+ */
+export const traced = <A>(
+  name: SpanName,
+  attributes: SignalAttributes,
+  parent: Context,
+  failure: Failure,
+  work: (notes: SpanNotes) => A,
+  signal?: AbortSignal,
+): A => {
+  const span = startSpan(name, attributes, parent)
+  const { notes, failed } = notesOf(span)
+  try {
+    const result = otelContextWith(span, parent, () => work(notes))
+    endSpan(span, {}, failed())
+    return result
+  } catch (error) {
+    endSpan(span, {}, canceled(error, signal) ? "canceled" : classOf(failure, error))
+    throw error
+  }
+}
+
+/** `traced` for asynchronous work. */
+export const tracedAsync = async <A>(
+  name: SpanName,
+  attributes: SignalAttributes,
+  parent: Context,
+  failure: Failure,
+  work: (notes: SpanNotes) => Promise<A>,
+  signal?: AbortSignal,
+): Promise<A> => {
+  const span = startSpan(name, attributes, parent)
+  const { notes, failed } = notesOf(span)
+  try {
+    const result = await otelContextWith(span, parent, () => work(notes))
+    endSpan(span, {}, failed())
+    return result
+  } catch (error) {
+    endSpan(span, {}, canceled(error, signal) ? "canceled" : classOf(failure, error))
+    throw error
+  }
+}
+
+/** The error class of a traced operation's throw: one class, or one per thrown error. */
+export type Failure = ErrorClass | ((error: unknown) => ErrorClass)
+
+const classOf = (failure: Failure, error: unknown) => (typeof failure === "function" ? failure(error) : failure)
+
+const otelContextWith = <A>(span: Span, parent: Context, work: () => A): A => context.with(trace.setSpan(parent, span), work)
+
+const canceled = (error: unknown, signal: AbortSignal | undefined) =>
+  signal?.aborted === true || (error instanceof DOMException && error.name === "AbortError")
 
 /** The context with `span` active under `parent`. */
 export const withSpan = (span: Span, parent: Context = context.active()) => trace.setSpan(parent, span)

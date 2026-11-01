@@ -118,6 +118,10 @@ export const renderSeed = (
   return { ok: true, components }
 }
 
+/** A built checkpoint window's estimated size: its harness instructions and seed components. */
+export const seedTokens = (harness: string, components: ReadonlyArray<Component>) =>
+  components.reduce((sum, component) => sum + estimateTokens(component.text), estimateTokens(harness))
+
 /** One unified diff from `before` to `after` of the file at `path`. */
 export const unifiedDiff = (path: string, before: string, after: string) =>
   createTwoFilesPatch(path, path, before, after, undefined, undefined, { headerOptions: FILE_HEADERS_ONLY })
