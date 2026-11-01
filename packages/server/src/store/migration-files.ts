@@ -21,6 +21,8 @@ import m0020 from "../../migrations/0020_timeline_entries.sql" with { type: "tex
 import m0021 from "../../migrations/0021_chat_boundaries.sql" with { type: "text" }
 import m0022 from "../../migrations/0022_context_turns.sql" with { type: "text" }
 import m0023 from "../../migrations/0023_research_baseline_versions.sql" with { type: "text" }
+import m0024 from "../../migrations/0024_password_removal.sql" with { type: "text" }
+import m0025 from "../../migrations/0025_github_logins.sql" with { type: "text" }
 
 /**
  * The migration directory `packages/server/migrations`, embedded so a
@@ -51,4 +53,6 @@ export const migrationFiles: ReadonlyArray<{ readonly file: string; readonly sql
   { file: "0021_chat_boundaries.sql", sql: m0021 },
   { file: "0022_context_turns.sql", sql: m0022 },
   { file: "0023_research_baseline_versions.sql", sql: m0023 },
+  { file: "0024_password_removal.sql", sql: m0024 },
+  { file: "0025_github_logins.sql", sql: m0025 },
 ]
