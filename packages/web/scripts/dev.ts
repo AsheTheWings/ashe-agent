@@ -9,6 +9,7 @@ export const createDevelopmentWebServer = async (root = new URL("..", import.met
   const { createServer } = await import("vite")
   return createServer({
     root,
+    define: { __ASHE_AGENT_DEV_SERVER_URL__: JSON.stringify(inputs.devWebServerUrl) },
     server: { host: "127.0.0.1", allowedHosts: [...inputs.devWebAllowedHosts], strictPort: true },
   })
 }

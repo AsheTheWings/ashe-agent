@@ -2,8 +2,9 @@
 
 `packages/web` is a static React application that works with a server's
 sessions from the browser. The server does not serve it; any static file
-host can, and the browser connects from there to the server's WebSocket
-endpoint.
+host can. A static build connects to `/v1/ws` on the page's own origin,
+using `wss:` for HTTPS and `ws:` for HTTP. Route `/v1/*` on that origin to
+the server so its WebSocket and GitHub sign-in endpoints are reachable.
 
 ## Run and build
 
@@ -14,10 +15,14 @@ bun run dev:web
 from the repository root selects the development profile, loads the `devWeb`
 process's inputs, and serves the client on `127.0.0.1`, on Vite's port.
 `devWebAllowedHosts` admits configured host names, and an occupied port
-fails the task. The development process excludes inherited dependency
-environment overrides after resolving its inputs. The server accepts a browser connection only from an origin that
-`ASHE_AGENT_ORIGINS` lists, so that input must name the origin the
-client is served from; see [configuration](configuration.md).
+fails the task. `devWebServerUrl` supplies the browser-accessible server
+endpoint for development, where the web client and server use separate
+ports. It is resolved through the input catalog and supplied to Vite as a
+public client constant; static builds use their own origin. The development
+process excludes inherited dependency environment overrides after resolving
+its inputs. The server accepts a browser connection only from an origin that
+`ASHE_AGENT_ORIGINS` lists, so that input must name the origin the client is
+served from; see [configuration](configuration.md).
 
 `bun run build:web`, from the repository root, builds the client into
 `packages/web/dist` and writes the commit it was built from to
@@ -53,16 +58,14 @@ podman tag <image id it prints> localhost/ashe-agent-web
 podman compose up -d
 ```
 
-The image's client connects to whichever server its user enters at
-sign-in, so serve it from an origin that server's `ASHE_AGENT_ORIGINS`
-lists, and run both from one commit, since the protocol may change at any
-revision.
+Serve the image from an origin the server's `ASHE_AGENT_ORIGINS` lists,
+with `/v1/*` routed to that server. Run both from one commit, since the
+protocol may change at any revision.
 
 ## Signing in
 
-The sign-in page asks for the server's WebSocket URL, such as
-`ws://host:port/v1/ws`, and offers **Continue with GitHub**. Register the
-OAuth app and callback as [setup](../README.md#use) describes. The tab keeps
+The sign-in page offers **Continue with GitHub** for its configured server.
+Register the OAuth app and callback as [setup](../README.md#use) describes. The tab keeps
 its verifier and server URL in `sessionStorage` while GitHub signs in the
 owner. On return it removes the URL fragment before connecting, exchanges
 the sign-in code with `auth.exchange`, and forgets the verifier regardless
@@ -70,10 +73,11 @@ of the result. A return without the stored verifier or server URL sends no
 exchange and asks the owner to start again. Denial, another GitHub account,
 a GitHub failure, and a failed code exchange each show an explanation.
 
-The browser remembers the server URL for the next visit. The client keeps the access token in memory and
-the refresh token in `localStorage`, and exchanges the refresh token for a
-new pair a minute before the access token expires, on a connection of
-its own. On a later visit, a stored refresh token signs the client in
+The client keeps the access token in memory and the refresh token in
+`localStorage`, under a key scoped to its server endpoint. A token for
+another endpoint is never used for this server. It exchanges the refresh
+token for a new pair a minute before the access token expires, on a connection
+of its own. On a later visit, a stored refresh token signs the client in
 without another GitHub sign-in. Signing out forgets the refresh token in this
 browser only; the login stays valid until it expires, is revoked, or its
 GitHub user ID differs from the configured owner.

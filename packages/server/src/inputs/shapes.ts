@@ -16,6 +16,17 @@ export const HttpUrl = Schema.String.check(
   }),
 )
 
+/** A WebSocket endpoint without credentials or a fragment. */
+export const WebSocketUrl = Schema.String.check(
+  Schema.isPattern(/^wss?:\/\//, { message: "must be a ws or wss URL" }),
+  Schema.makeFilter((value: string) => {
+    if (!URL.canParse(value)) return "must be a URL"
+    const url = new URL(value)
+    if (url.protocol !== "ws:" && url.protocol !== "wss:") return "must use ws or wss"
+    return (!url.username && !url.password && !url.href.includes("#")) || "must have no credentials or fragment"
+  }),
+)
+
 /** A browser origin such as `https://example.com:8443`, with no path. */
 export const Origin = Schema.String.check(
   Schema.isPattern(/^https?:\/\/[^/?#]+$/, { message: "must be an origin" }),

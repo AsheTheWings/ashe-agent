@@ -6,7 +6,8 @@ import { defineConfig } from "vite"
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
-  // The client reads no environment of its own; the server URL is entered at sign-in.
+  // Production uses the page's origin; the development entry point supplies its endpoint.
+  define: { __ASHE_AGENT_DEV_SERVER_URL__: "null" },
   envDir: false,
   envPrefix: [],
   server: { host: "127.0.0.1" },

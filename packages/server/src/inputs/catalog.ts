@@ -16,6 +16,7 @@ import {
   Profile,
   Providers,
   TimeZone,
+  WebSocketUrl,
 } from "./shapes.ts"
 
 /** The processes an entry point can start; each validates only its own inputs. */
@@ -211,6 +212,14 @@ export const catalog = {
     schema: Schema.Array(Schema.NonEmptyString),
     processes: ["devWeb"],
     defaults: both(() => []),
+  }),
+  devWebServerUrl: configuration({
+    description: "WebSocket endpoint the development web client connects to.",
+    env: "ASHE_AGENT_DEV_WEB_SERVER_URL",
+    codec: "string",
+    schema: WebSocketUrl,
+    processes: ["devWeb"],
+    defaults: { development: () => "ws://127.0.0.1:7420/v1/ws" },
   }),
   permission: configuration({
     description: "Permission rules in opencode's shape; a tool call no rule matches is allowed.",

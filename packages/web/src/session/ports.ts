@@ -24,6 +24,7 @@ export type KeyValueStorage = {
 }
 
 export type SessionClientPorts = {
+  readonly serverUrl: string
   readonly openSocket: (url: string, handlers: SocketHandlers) => Socket
   readonly storage: KeyValueStorage
   readonly signIn: {

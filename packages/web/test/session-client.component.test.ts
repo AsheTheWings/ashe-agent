@@ -9,6 +9,7 @@ import { splitPending } from "../src/chat/pending-permissions.ts"
 type Request = { readonly id: number; readonly method: string; readonly params: Record<string, unknown> }
 type Answer = { readonly result: unknown } | { readonly error: { code: number; message: string } }
 
+const SERVER_URL = "ws://server.test/v1/ws"
 const SESSION = "s1"
 const START = 1_800_000_000_000
 const models: Array<Model> = [
@@ -110,7 +111,7 @@ const memoryStorage = (): KeyValueStorage & { readonly entries: Map<string, stri
 }
 
 /** Ports over the fake server, with timers the test fires by hand. */
-const fakePorts = (server: FakeServer) => {
+const fakePorts = (server: FakeServer, serverUrl = SERVER_URL) => {
   const timers = new Map<number, { readonly callback: () => void; readonly delayMs: number }>()
   let nextTimer = 1
   const storage = memoryStorage()
@@ -118,6 +119,7 @@ const fakePorts = (server: FakeServer) => {
   let destination = ""
   const pending = memoryStorage()
   const ports: SessionClientPorts = {
+    serverUrl,
     openSocket: (url, handlers) => {
       const socket = new FakeSocket(url, handlers, server)
       server.sockets.push(socket)
@@ -162,7 +164,7 @@ const signedIn = async () => {
   const server = new FakeServer()
   const { ports, storage, fire, timers, pending, setFragment } = fakePorts(server)
   const client = new SessionClient(ports)
-  await client.signIn("ws://server.test/")
+  await client.signIn()
   setFragment("#signIn=code")
   client.resume()
   await until("models", () => client.store.getState().models.length > 0)
@@ -222,13 +224,13 @@ const texts = (current: SessionView) =>
   })
 
 describe("session client", () => {
-  test("sign-in keeps the refresh token, remembers the server, and takes model choices from models.list", async () => {
+  test("sign-in keeps the endpoint-bound refresh token and takes model choices from models.list", async () => {
     const { server, client, storage } = await signedIn()
     const state = client.store.getState()
     expect(state.status).toBe("connected")
     expect(state.models.map((model) => model.id)).toEqual(["alpha", "beta"])
-    expect(storage.entries.get(storageKeys.serverUrl)).toBe("ws://server.test/")
-    expect(storage.entries.get(storageKeys.refreshToken)).toBe("refresh-1")
+    expect(state.serverUrl).toBe(SERVER_URL)
+    expect(storage.entries.get(storageKeys.refreshToken(SERVER_URL))).toBe("refresh-1")
     expect([...storage.entries.values()]).not.toContain("access-1")
     expect(server.last().methods()).toEqual(["auth.exchange", "models.list", "agents.list", "session.list"])
   })
@@ -317,7 +319,7 @@ describe("session client", () => {
     const main = server.last()
     server.now += 15 * 60_000 - REFRESH_MARGIN_MS
     fire(15 * 60_000 - REFRESH_MARGIN_MS)
-    await until("the new refresh token", () => storage.entries.get(storageKeys.refreshToken) === "refresh-2")
+    await until("the new refresh token", () => storage.entries.get(storageKeys.refreshToken(SERVER_URL)) === "refresh-2")
     const side = server.last()
     expect(side).not.toBe(main)
     expect(side.requests).toMatchObject([{ method: "auth.refresh", params: { refreshToken: "refresh-1" } }])
@@ -338,7 +340,7 @@ describe("session client", () => {
     server.pending.shift()!()
     await until("the side connection to close", () => side.closed)
     for (let turn = 0; turn < 20; turn++) await null
-    expect(storage.entries.has(storageKeys.refreshToken)).toBe(false)
+    expect(storage.entries.has(storageKeys.refreshToken(SERVER_URL))).toBe(false)
     expect(timers()).toBe(0)
     expect(client.store.getState().status).toBe("signedOut")
   })
@@ -453,11 +455,50 @@ describe("session client", () => {
 })
 
 describe("GitHub browser sign-in", () => {
-  test("start keeps a tab verifier and callback removes its fragment before connecting and exchanging", async () => {
+  test("a later visit refreshes only the configured endpoint's token", async () => {
     const server = new FakeServer()
     const h = fakePorts(server)
+    h.storage.setItem(storageKeys.refreshToken(SERVER_URL), "matching-server-token")
+    h.storage.setItem(storageKeys.refreshToken("wss://another.example/v1/ws"), "another-server-token")
     const client = new SessionClient(h.ports)
-    await client.signIn("wss://server.test/v1/ws")
+    client.resume()
+    await until("resumed", () => client.store.getState().status === "connected")
+    expect(server.last().url).toBe(SERVER_URL)
+    expect(server.last().requests[0]).toMatchObject({ method: "auth.refresh", params: { refreshToken: "matching-server-token" } })
+    client.signOut()
+    expect(h.storage.getItem(storageKeys.refreshToken("wss://another.example/v1/ws"))).toBe("another-server-token")
+  })
+
+  test("a refresh token for another endpoint is never sent to the configured server", () => {
+    const server = new FakeServer()
+    const h = fakePorts(server)
+    h.storage.setItem(storageKeys.refreshToken("wss://another.example/v1/ws"), "another-server-token")
+    const client = new SessionClient(h.ports)
+    client.resume()
+    expect(client.store.getState().serverUrl).toBe(h.ports.serverUrl)
+    expect(client.store.getState().status).toBe("signedOut")
+    expect(server.sockets).toHaveLength(0)
+  })
+
+  test("a callback for another configured endpoint is discarded without exchanging", () => {
+    const server = new FakeServer()
+    const h = fakePorts(server)
+    h.pending.setItem(storageKeys.verifier, "verifier")
+    h.pending.setItem(storageKeys.signInServer, "wss://another.example/v1/ws")
+    h.setFragment("#signIn=once")
+    const client = new SessionClient(h.ports)
+    client.resume()
+    expect(h.fragment()).toBe("")
+    expect(h.pending.entries.size).toBe(0)
+    expect(server.sockets).toHaveLength(0)
+    expect(client.store.getState().error).toContain("no pending sign-in")
+  })
+
+  test("start keeps a tab verifier and callback removes its fragment before connecting and exchanging", async () => {
+    const server = new FakeServer()
+    const h = fakePorts(server, "wss://server.test/v1/ws")
+    const client = new SessionClient(h.ports)
+    await client.signIn()
     const verifier = h.pending.getItem(storageKeys.verifier)!
     expect(verifier).toMatch(/^[A-Za-z0-9_-]{43}$/)
     expect(h.pending.getItem(storageKeys.signInServer)).toBe("wss://server.test/v1/ws")
@@ -476,7 +517,7 @@ describe("GitHub browser sign-in", () => {
     returned.resume()
     await until("signed in", () => returned.store.getState().status === "connected")
     expect(server.last().requests[0]).toMatchObject({ method: "auth.exchange", params: { code: "once", verifier, protocolVersion: 1 } })
-    expect(h.storage.getItem(storageKeys.refreshToken)).toBe("refresh-1")
+    expect(h.storage.getItem(storageKeys.refreshToken("wss://server.test/v1/ws"))).toBe("refresh-1")
     expect(h.pending.getItem(storageKeys.signInServer)).toBeNull()
     returned.signOut()
   })
@@ -486,7 +527,7 @@ describe("GitHub browser sign-in", () => {
       const server = new FakeServer()
       const h = fakePorts(server)
       h.pending.setItem(storageKeys.verifier, "verifier")
-      h.pending.setItem(storageKeys.signInServer, "ws://server.test")
+      h.pending.setItem(storageKeys.signInServer, "ws://server.test/v1/ws")
       h.pending.removeItem(missing)
       h.setFragment("#signIn=once")
       const client = new SessionClient(h.ports)
@@ -502,7 +543,7 @@ describe("GitHub browser sign-in", () => {
       const server = new FakeServer()
       const h = fakePorts(server)
       h.pending.setItem(storageKeys.verifier, "verifier")
-      h.pending.setItem(storageKeys.signInServer, "ws://server.test")
+      h.pending.setItem(storageKeys.signInServer, "ws://server.test/v1/ws")
       h.setFragment(`#signInError=${error}`)
       const client = new SessionClient(h.ports)
       client.resume()
@@ -519,13 +560,13 @@ describe("GitHub browser sign-in", () => {
     const h = fakePorts(server)
     server.answer = () => ({ error: { code: ErrorCode.authenticationFailed, message: "invalid sign-in code" } })
     h.pending.setItem(storageKeys.verifier, "verifier")
-    h.pending.setItem(storageKeys.signInServer, "ws://server.test")
+    h.pending.setItem(storageKeys.signInServer, "ws://server.test/v1/ws")
     h.setFragment("#signIn=once")
     const client = new SessionClient(h.ports)
     client.resume()
     await until("failed exchange", () => client.store.getState().error !== null)
     expect(client.store.getState().error).toBe("invalid sign-in code")
     expect(h.pending.entries.size).toBe(0)
-    expect(h.storage.getItem(storageKeys.refreshToken)).toBeNull()
+    expect(h.storage.getItem(storageKeys.refreshToken(SERVER_URL))).toBeNull()
   })
 })

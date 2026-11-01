@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { runInNewContext } from "node:vm"
 import type { Subprocess } from "bun"
 
 const entry = join(import.meta.dir, "../scripts/dev.ts")
@@ -54,11 +55,16 @@ describe("development web input boundary", () => {
   test("catalog hosts are admitted and inherited Vite host and mode overrides are suppressed", async () => {
     const home = mkdtempSync(join(tmpdir(), "ashe-agent-dev-web-"))
     writeFileSync(join(home, "index.html"), "<!doctype html><title>Development web test</title>")
-    writeFileSync(join(home, "config.json"), JSON.stringify({ devWebAllowedHosts: ["configured.example"] }))
+    writeFileSync(join(home, "config.json"), JSON.stringify({ devWebAllowedHosts: ["configured.example"], devWebServerUrl: "ws://api.example:7420/v1/ws" }))
+    writeFileSync(join(home, "vite.config.js"), 'export default { define: { __ASHE_AGENT_DEV_SERVER_URL__: "null" }, envDir: false, envPrefix: [] }')
     const child = start(home, 0)
     const errors = new Response(child.stderr).text()
     try {
       const listening = await bounded("readiness", ready(child))
+      const source = await (await fetch(new URL("/@vite/env", listening.url))).text()
+      const browser: Record<string, unknown> = {}
+      runInNewContext(source, browser, { timeout: 1_000 })
+      expect(browser.__ASHE_AGENT_DEV_SERVER_URL__).toBe("ws://api.example:7420/v1/ws")
       expect(listening.strict).toBe(true)
       expect(listening.production).toBe(false)
       expect((await fetch(listening.url, { headers: { Host: "configured.example" } })).status).toBe(200)

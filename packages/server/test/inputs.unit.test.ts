@@ -306,8 +306,20 @@ describe("GitHub and development web inputs", () => {
   test("devWeb resolves only its own inputs and uses an empty allowed-host list by default", () => {
     const defaults = resolveInputs("devWeb", sources({}))
     expect(defaults.ok && defaults.inputs.devWebAllowedHosts).toEqual([])
+    expect(defaults.ok && defaults.inputs.devWebServerUrl).toBe("ws://127.0.0.1:7420/v1/ws")
     const configured = resolveInputs("devWeb", sources({ ASHE_AGENT_DEV_WEB_ALLOWED_HOSTS: '["dev.example"]' }))
     expect(configured.ok && configured.inputs.devWebAllowedHosts).toEqual(["dev.example"])
     expect(resolveInputs("token", sources({ ASHE_AGENT_DEV_WEB_ALLOWED_HOSTS: "invalid" })).ok).toBe(true)
+  })
+
+  test("the development endpoint accepts WebSocket URLs and refuses malformed or credential-bearing URLs", () => {
+    for (const url of ["ws://api.example:7420/v1/ws", "wss://api.example/v1/ws"]) {
+      const resolved = resolveInputs("devWeb", sources({ ASHE_AGENT_DEV_WEB_SERVER_URL: url }))
+      expect(resolved.ok && resolved.inputs.devWebServerUrl).toBe(url)
+    }
+    for (const url of ["", "/v1/ws", "https://api.example/v1/ws", "ws://", "ws://user:secret@api.example/v1/ws", "ws://api.example/v1/ws#fragment", "ws://api.example/v1/ws#"]) {
+      expect(issuesOf(resolveInputs("devWeb", sources({ ASHE_AGENT_DEV_WEB_SERVER_URL: url })))).toContain("ASHE_AGENT_DEV_WEB_SERVER_URL")
+    }
+    expect(resolveInputs("token", sources({ ASHE_AGENT_DEV_WEB_SERVER_URL: "invalid" })).ok).toBe(true)
   })
 })
