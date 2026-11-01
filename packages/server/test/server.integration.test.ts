@@ -60,6 +60,33 @@ describe("entry point and database", () => {
     )
   })
 
+  test("check validates serve's inputs without a database and prints the URL serve would listen on", async () => {
+    await withRun(
+      async (run) => {
+        const checked = await run.run(["check"], { env: { ASHE_AGENT_LISTEN_PORT: "7999" } })
+        expect(checked).toEqual({ code: 0, stdout: "ws://127.0.0.1:7999/v1/ws\n", stderr: "" })
+        expect(readdirSync(run.stateDir)).toEqual([])
+        const invalid = await run.run(["check"], { env: { ASHE_AGENT_DEFAULT_MODEL: "test/other" } })
+        expect(invalid.code).toBe(2)
+        expect(invalid.stderr).toContain("ASHE_AGENT_DEFAULT_MODEL")
+        const providers = JSON.parse(run.env.ASHE_AGENT_PROVIDERS!)
+        providers.test.apiKeyFile = join(run.dir, "absent-key")
+        const keyless = await run.run(["check"], { env: { ASHE_AGENT_PROVIDERS: JSON.stringify(providers) } })
+        expect(keyless.code).toBe(2)
+        expect(keyless.stdout).toBe("")
+        const headersFile = join(run.dir, "otlp-headers")
+        writeFileSync(headersFile, "api-key=secret-value\nnot a header line\n", { mode: 0o600 })
+        for (const command of ["check", "serve"]) {
+          const malformed = await run.run([command], { env: { ASHE_AGENT_OTLP_HEADERS_FILE: headersFile } })
+          expect(malformed.code).toBe(2)
+          expect(malformed.stderr).toContain("ASHE_AGENT_OTLP_HEADERS_FILE: line 2 is not name=value")
+          expect(malformed.stderr).not.toContain("secret-value")
+        }
+      },
+      { fresh: true, serve: false },
+    )
+  })
+
   test("migrate creates an absent state directory", async () => {
     await withRun(
       async (run) => {

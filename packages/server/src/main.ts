@@ -14,6 +14,7 @@ import { loadInputsOrExit, processSources, readDiskFile, removeDependencyVariabl
 import { readProviderKeys } from "./inputs/resolve.ts"
 import { catalog } from "./inputs/catalog.ts"
 import { ProtocolServer, serveProgram } from "./server/serve.ts"
+import { protocolUrl } from "./server/websocket.ts"
 import { Sessions } from "./sessions/hub.ts"
 import { AgentRegistry } from "./agents/agents.ts"
 import { fileSetup } from "./agents/setup.ts"
@@ -23,6 +24,7 @@ import { dumpDatabase } from "./store/dump.ts"
 import { migrationFiles } from "./store/migration-files.ts"
 import { applyMigrations, discoverMigrations, MigrationError, readMigrationStatus } from "./store/migrations.ts"
 import { mcpLogEvents } from "./telemetry/mcp-events.ts"
+import { parseOtlpHeaders } from "./telemetry/headers.ts"
 
 declare const ASHE_AGENT_REVISION: string | undefined
 
@@ -35,6 +37,7 @@ usage: ashe-agent <command>
 
 commands:
   serve                    run the server
+  check                    validate the server's inputs and print the URL it would serve
   migrate                  apply pending database migrations
   migrate status           list applied and pending migrations without writing
   db dump <path>           write a consistent copy of the database to <path>
@@ -70,17 +73,27 @@ const openCurrentDatabase = (stateDir: string) => {
 
 const formatTime = (ms: number | null) => (ms === null ? "never" : new Date(ms).toISOString())
 
+/**
+ * Serve's inputs, provider API keys, and OTLP export headers, validated
+ * before any other work; invalid ones exit with status 2.
+ */
+const serveInputs = () => {
+  const sources = processSources()
+  const { inputs } = loadInputsOrExit("serve", sources)
+  removeDependencyVariables(process.env)
+  const keys = readProviderKeys(inputs.providers, readDiskFile)
+  if (Result.isFailure(keys)) {
+    fail(`invalid inputs\n${keys.failure.map((issue) => `  ${issue.input}: ${issue.problem}`).join("\n")}`, 2)
+  }
+  const headers = inputs.otlpHeaders === null ? Result.succeed({}) : parseOtlpHeaders(Redacted.value(inputs.otlpHeaders))
+  if (Result.isFailure(headers)) fail(`invalid inputs\n  ${catalog.otlpHeadersFile.env}: ${headers.failure}`, 2)
+  return { sources, inputs, apiKeys: Result.getOrThrow(keys), otlpHeaders: Redacted.make(Result.getOrThrow(headers)) }
+}
+
 const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> = {
   async serve(args) {
     if (args.length > 0) usageError("serve takes no arguments")
-    const sources = processSources()
-    const { inputs } = loadInputsOrExit("serve", sources)
-    removeDependencyVariables(process.env)
-    const keys = readProviderKeys(inputs.providers, readDiskFile)
-    if (Result.isFailure(keys)) {
-      fail(`invalid inputs\n${keys.failure.map((issue) => `  ${issue.input}: ${issue.problem}`).join("\n")}`, 2)
-    }
-    const apiKeys = Result.getOrThrow(keys)
+    const { sources, inputs, apiKeys, otlpHeaders } = serveInputs()
     const models = configuredModels(inputs.providers)
     openCurrentDatabase(inputs.stateDir).close()
     // The agent loop's libraries load only for serve, so operator commands start quickly.
@@ -108,12 +121,11 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
       logs: inputs.logsExporter,
       endpoint: inputs.otlpEndpoint,
       protocol: inputs.otlpProtocol,
-      headers: inputs.otlpHeaders,
+      headers: otlpHeaders,
       serviceVersion: revision,
       deploymentEnvironment: inputs.deploymentEnvironment,
     })
-    if (Result.isFailure(telemetry)) fail(telemetry.failure)
-    const { effectLayer, shutdown: shutdownTelemetry } = Result.getOrThrow(telemetry)
+    const { effectLayer, shutdown: shutdownTelemetry } = telemetry
     // Commands run in the server user's login shell, without the server's own
     // input variables; every process ends with the server.
     const commandEnv: Record<string, string | undefined> = { ...process.env }
@@ -195,6 +207,12 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
     if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
       fail(`serve stopped: ${Cause.squash(exit.cause) instanceof Error ? (Cause.squash(exit.cause) as Error).message : Cause.pretty(exit.cause)}`)
     }
+  },
+
+  async check(args) {
+    if (args.length > 0) usageError("check takes no arguments")
+    const { inputs } = serveInputs()
+    process.stdout.write(`${protocolUrl(inputs.listenHost, inputs.listenPort)}\n`)
   },
 
   async migrate(args) {

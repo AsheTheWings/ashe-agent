@@ -9,6 +9,7 @@ with status 1.
 | Command | What it does |
 | --- | --- |
 | `serve` | Runs the server and prints its WebSocket URL on standard output once it listens. |
+| `check` | Validates `serve`'s inputs, reads its provider API key files, and parses its OTLP headers file, then prints the WebSocket URL `serve` would listen on, without opening the database or listening. With listen port 0 the URL carries port 0, since `serve` picks the port only when it listens. |
 | `migrate` | Creates the state directory and database when absent and applies pending migrations. |
 | `migrate status` | Lists applied and pending migrations without writing; drift fails it. |
 | `db dump <path>` | Writes a consistent copy of the live database to `<path>`. |
