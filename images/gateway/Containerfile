@@ -1,8 +1,0 @@
-# The sign-in gateway: oauth2-proxy, pinned by the digest of its v7.15.5
-# release index. scripts/image.sh builds it from this directory alone. The
-# image takes its whole configuration as arguments; docs/gateway.md
-# describes them.
-FROM quay.io/oauth2-proxy/oauth2-proxy:v7.15.5@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916
-
-USER 65532:65532
-EXPOSE 4180
