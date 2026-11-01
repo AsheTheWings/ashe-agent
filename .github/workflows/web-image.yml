@@ -29,7 +29,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/qualify-web-image
+      - uses: ./.github/actions/qualify-image
+        with:
+          image: web
 
   # Push and dispatch runs on the repository's branches publish the image this job qualified.
   publish:
@@ -44,7 +46,9 @@ jobs:
         with:
           persist-credentials: false
       - id: qualify
-        uses: ./.github/actions/qualify-web-image
+        uses: ./.github/actions/qualify-image
+        with:
+          image: web
       - name: Publish the qualified image
         env:
           ARTIFACT_REGISTRY: ${{ vars.ARTIFACT_REGISTRY }}
@@ -70,7 +74,7 @@ jobs:
           reference="$ARTIFACT_REGISTRY/${GITHUB_REPOSITORY#*/}/$area:$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           mkdir "$RUNNER_TEMP/oras-config"
           manifest="$(printf '%s' "$token" | ORAS_REGISTRY_CONFIG="$RUNNER_TEMP/oras-config/registry-config.json" \
-            scripts/web-image.sh push "$RUNNER_TEMP/image-build" "$GITHUB_SHA" "$CREATED" \
+            scripts/image.sh push "$RUNNER_TEMP/image-build" "$GITHUB_SHA" "$CREATED" \
             "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
             "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" \
             "$reference")"

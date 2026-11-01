@@ -28,7 +28,7 @@ digest. `bun run web-image`, from a commit with no uncommitted changes
 and with `ORAS` naming an `oras` executable, builds the client and its
 image and writes the image, annotated, to the OCI layout
 `dist/web-image` under the tag `qualified`. It runs the two steps of
-`scripts/web-image.sh`: `build <layout> <revision> <created>` packages
+`scripts/image.sh`: `build web <layout> <revision> <created>` packages
 `packages/web/dist`, which must hold the revision's `revision.txt`, with
 `packages/web/image/` into an OCI layout, refusing a worktree with
 changes or not at the revision, and `push` writes that image, annotated
