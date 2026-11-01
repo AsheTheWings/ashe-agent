@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "scope": "ashe-agent",
   "attributes": {
     "rpc.method": {
@@ -28,7 +28,16 @@
         "interrupted",
         "mcp_connect_failed",
         "mcp_disconnected",
-        "mcp_not_answering"
+        "mcp_not_answering",
+        "compaction_failed",
+        "research_failed",
+        "handoff_failed",
+        "checkpoint_window_failed",
+        "memory_check_failed",
+        "memory_publish_failed",
+        "snapshot_failed",
+        "restore_failed",
+        "user_instructions_unreadable"
       ],
       "description": "The error class of a failed operation."
     },
@@ -76,6 +85,51 @@
     "ashe_agent.mcp.collision.tools": {
       "type": "string[]",
       "description": "The colliding tools' names as their MCP servers list them."
+    },
+    "ashe_agent.context_turn.trigger": {
+      "type": "string",
+      "values": [
+        "threshold",
+        "limit"
+      ],
+      "description": "What started a context turn: the reserve running short, or the context limit."
+    },
+    "ashe_agent.context_turn.constructed": {
+      "type": "boolean",
+      "description": "Whether a context turn built the next checkpoint window."
+    },
+    "ashe_agent.clearing.attempt": {
+      "type": "int",
+      "description": "Which of a context turn's three clearings ran, from 1."
+    },
+    "ashe_agent.validation.attempt": {
+      "type": "int",
+      "description": "Which of a context turn's validations ran, from 1."
+    },
+    "ashe_agent.validation.result": {
+      "type": "string",
+      "values": [
+        "passed",
+        "failed"
+      ],
+      "description": "Whether a validation passed."
+    },
+    "ashe_agent.question.outcome": {
+      "type": "string",
+      "values": [
+        "answered",
+        "message",
+        "canceled"
+      ],
+      "description": "How a question wait ended: answered, ended by a steered user message, or canceled with its turn."
+    },
+    "ashe_agent.checkpoint_window.cause": {
+      "type": "string",
+      "values": [
+        "creation",
+        "context_turn"
+      ],
+      "description": "Why a checkpoint window was built: session creation or a context turn."
     }
   },
   "errorClasses": [
@@ -98,7 +152,16 @@
     "interrupted",
     "mcp_connect_failed",
     "mcp_disconnected",
-    "mcp_not_answering"
+    "mcp_not_answering",
+    "compaction_failed",
+    "research_failed",
+    "handoff_failed",
+    "checkpoint_window_failed",
+    "memory_check_failed",
+    "memory_publish_failed",
+    "snapshot_failed",
+    "restore_failed",
+    "user_instructions_unreadable"
   ],
   "spans": {
     "ashe_agent.request": {
@@ -130,6 +193,90 @@
         "ashe_agent.tool.outcome",
         "ashe_agent.tool.in_program"
       ]
+    },
+    "ashe_agent.context_turn": {
+      "description": "One context turn, from its context turn component to the end of its turn.",
+      "attributes": [
+        "ashe_agent.context_turn.trigger",
+        "ashe_agent.context_turn.constructed"
+      ]
+    },
+    "ashe_agent.clearing": {
+      "description": "One tool result clearing of a context turn.",
+      "attributes": [
+        "ashe_agent.clearing.attempt"
+      ]
+    },
+    "ashe_agent.compaction_call": {
+      "description": "One compaction call for a chat boundary.",
+      "attributes": [
+        "ashe_agent.model",
+        "error.type"
+      ]
+    },
+    "ashe_agent.research_call": {
+      "description": "One research call for a research file.",
+      "attributes": [
+        "ashe_agent.model",
+        "error.type"
+      ]
+    },
+    "ashe_agent.handoff_call": {
+      "description": "One handoff call of a context turn.",
+      "attributes": [
+        "ashe_agent.model",
+        "error.type"
+      ]
+    },
+    "ashe_agent.question_wait": {
+      "description": "One `context_ask_question` call waiting for its answer.",
+      "attributes": [
+        "ashe_agent.question.outcome"
+      ]
+    },
+    "ashe_agent.checkpoint_window_construction": {
+      "description": "Building one checkpoint window's harness seed.",
+      "attributes": [
+        "ashe_agent.checkpoint_window.cause",
+        "error.type"
+      ]
+    },
+    "ashe_agent.reconciliation": {
+      "description": "Comparing a delivery's sources with what the checkpoint window knows.",
+      "attributes": [
+        "error.type"
+      ]
+    },
+    "ashe_agent.validation": {
+      "description": "One validation of a context turn's research files and memory draft.",
+      "attributes": [
+        "ashe_agent.validation.attempt",
+        "ashe_agent.validation.result"
+      ]
+    },
+    "ashe_agent.memory_check": {
+      "description": "Checking a session's memory against its current generation.",
+      "attributes": [
+        "error.type"
+      ]
+    },
+    "ashe_agent.memory_publish": {
+      "description": "Publishing a session's next memory generation.",
+      "attributes": [
+        "error.type"
+      ]
+    },
+    "ashe_agent.snapshot": {
+      "description": "Reading a session's research and memory files for a turn's snapshot.",
+      "attributes": [
+        "error.type"
+      ]
+    },
+    "ashe_agent.restore": {
+      "description": "Completing a rewind's pending restore of research and memory files.",
+      "attributes": [
+        "error.type"
+      ]
     }
   },
   "metrics": {
@@ -159,6 +306,30 @@
         "ashe_agent.tool",
         "ashe_agent.tool.outcome",
         "ashe_agent.tool.in_program"
+      ]
+    },
+    "ashe_agent.clearing.freed": {
+      "kind": "histogram",
+      "unit": "{token}",
+      "description": "Estimated tokens one clearing freed.",
+      "attributes": [
+        "ashe_agent.clearing.attempt"
+      ]
+    },
+    "ashe_agent.checkpoint_window.size": {
+      "kind": "histogram",
+      "unit": "{token}",
+      "description": "Estimated size of each built checkpoint window: its harness instructions and seed.",
+      "attributes": [
+        "ashe_agent.checkpoint_window.cause"
+      ]
+    },
+    "ashe_agent.validation.failures": {
+      "kind": "counter",
+      "unit": "{validation}",
+      "description": "Failed validations of context turns.",
+      "attributes": [
+        "ashe_agent.validation.attempt"
       ]
     }
   },

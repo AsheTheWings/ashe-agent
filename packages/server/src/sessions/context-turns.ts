@@ -1,4 +1,5 @@
 import { ErrorCode, type Sender, type SessionEvent, type SessionEventBody } from "@ashe-agent/protocol"
+import { context as otelContext, type Context as TraceContext, type Span } from "@opentelemetry/api"
 import { TurnFailure } from "../agent/failure.ts"
 import type { ModelPort } from "../agent/model.ts"
 import type { Tool, ToolResult, ToolRun } from "../agent/tools.ts"
@@ -43,7 +44,7 @@ import {
   type Entry,
   type NewEntry,
 } from "../context/entries.ts"
-import { allowanceMessage, renderSeed, unifiedDiff, type SeedSources } from "../context/seed.ts"
+import { allowanceMessage, renderSeed, seedTokens, unifiedDiff, type SeedSources } from "../context/seed.ts"
 import { boundaryCloses, clearingPlan, countsInBoundary, resultTokens } from "../context/sizes.ts"
 import { answerEntries, questionProblems, type Answer } from "../context/questions.ts"
 import { CONTEXT_TOOLS, contextTools, type AskArgs } from "../context/tools.ts"
@@ -51,6 +52,7 @@ import { memoryViolations, overCount, validateFiles, violationCount, type AreaEn
 import type { AuxiliaryModels, AuxiliaryTask } from "../inputs/shapes.ts"
 import { callSettings, checkpointWindowSize, type CallSettings, type ConfiguredModel } from "../models/registry.ts"
 import { ProtocolError } from "../server/websocket.ts"
+import { countOne, endSpan, recordDuration, startSpan, traced, tracedAsync, withSpan, type SpanNotes } from "../telemetry/signals.ts"
 import type { Item } from "./conversation.ts"
 import { sha256, type SessionFiles, type StoredFile } from "./files.ts"
 import type { SessionRecord, SessionStore, TurnRecord } from "./store.ts"
@@ -79,6 +81,8 @@ export interface ContextHost {
     readonly sources: Omit<SeedSources, "tools" | "checkpoint">
     readonly errors: ReadonlyArray<{ readonly code: string; readonly message: string }>
   }
+  /** The trace context of the session's running turn, else the active one. */
+  readonly trace: (sessionId: string) => TraceContext
 }
 
 export interface ContextOptions {
@@ -113,6 +117,10 @@ interface ContextTurn {
   readonly research: Map<string, ResearchCall>
   /** Aborted when the context turn ends, discarding its research calls. */
   readonly controller: AbortController
+  /** The context turn's span, ended with its turn. */
+  readonly span: Span
+  /** The trace context holding the context turn's span, the parent of the spans of its work. */
+  readonly trace: TraceContext
 }
 
 /** A question set waiting for its answer, in memory only. */
@@ -211,9 +219,14 @@ export class ContextTurns {
     return this.turns.get(runId)?.clearings ?? 0
   }
 
-  /** Stops the compaction calls that run outside turns. */
+  /**
+   * Stops the compaction calls that run outside turns and ends the span of
+   * each context turn the stop interrupts; a server start settles their
+   * drafts.
+   */
   stop() {
     this.background.abort()
+    for (const state of this.turns.values()) endSpan(state.span, { "ashe_agent.context_turn.constructed": state.constructed }, "interrupted")
   }
 
   /** Discards the session's running summary calls, after a rewind or fork changed its history. */
@@ -292,9 +305,11 @@ export class ContextTurns {
         questions: args.questions.map((question) => ({ ...question, options: question.options.map((option) => ({ ...option })) })),
       }),
     )
+    const span = startSpan("ashe_agent.question_wait", {}, otelContext.active())
     return new Promise<ToolResult>((resolve, reject) => {
       const onAbort = () => {
         this.questions.delete(questionSetId)
+        endSpan(span, { "ashe_agent.question.outcome": "canceled" })
         reject(run.signal.reason)
       }
       run.signal.addEventListener("abort", onAbort, { once: true })
@@ -305,6 +320,7 @@ export class ContextTurns {
         settle: (outcome) => {
           run.signal.removeEventListener("abort", onAbort)
           this.questions.delete(questionSetId)
+          endSpan(span, { "ashe_agent.question.outcome": outcome.kind === "message" ? "message" : "answered" })
           if (outcome.kind === "message") {
             resolve({ outcome: "success", content: "The user replied with a message instead of answering; it follows." })
             return
@@ -467,10 +483,22 @@ export class ContextTurns {
         const entries = this.timeline.entries(sessionId)
         const render = this.render(entries)
         const timeline = entries.filter((entry) => !entry.trimmed).map(render)
-        const output = await auxiliaryCall(
-          this.options.port,
-          { model: model.id, settings, prompt: COMPACTION_PROMPT, input: compactionInput(timeline, messages), maxOutputTokens: SUMMARY_MAX_OUTPUT_TOKENS },
-          this.background.signal,
+        const signal = this.background.signal
+        const output = await tracedAsync(
+          "ashe_agent.compaction_call",
+          { "ashe_agent.model": model.id },
+          this.host.trace(sessionId),
+          "compaction_failed",
+          async (notes) => {
+            const output = await auxiliaryCall(
+              this.options.port,
+              { model: model.id, settings, prompt: COMPACTION_PROMPT, input: compactionInput(timeline, messages), maxOutputTokens: SUMMARY_MAX_OUTPUT_TOKENS },
+              signal,
+            )
+            if (output.text === "") notes.fail("compaction_failed")
+            return output
+          },
+          signal,
         )
         if (output.text === "" || this.version(sessionId) !== version || this.store.getSession(sessionId) === null) return false
         this.host.commit(sessionId, (append) => {
@@ -534,6 +562,18 @@ export class ContextTurns {
     return validateFiles(this.area(sessionId, "research"), this.area(sessionId, "memory-draft"), entries, this.render(entries))
   }
 
+  /** The context turn's validation `attempt`, traced, counting a failure. */
+  private validation(sessionId: string, state: ContextTurn, attempt: number) {
+    const attributes = { "ashe_agent.validation.attempt": attempt }
+    return traced("ashe_agent.validation", attributes, state.trace, "internal", (notes) => {
+      const violations = this.validate(sessionId)
+      const passed = violationCount(violations) === 0
+      notes.set({ "ashe_agent.validation.result": passed ? "passed" : "failed" })
+      if (!passed) countOne("ashe_agent.validation.failures", attributes)
+      return violations
+    })
+  }
+
   /** Delivers one of the context turn's own notification components into its turn, without state components. */
   private deliverOwn(sessionId: string, turn: TurnRecord, component: Component, also: (append: Append, position: number) => void = () => {}) {
     this.host.commit(sessionId, (append) => {
@@ -560,6 +600,8 @@ export class ContextTurns {
     const sessionId = session.id
     const controller = new AbortController()
     signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true })
+    const parent = this.host.trace(sessionId)
+    const span = startSpan("ashe_agent.context_turn", { "ashe_agent.context_turn.trigger": trigger }, parent)
     const state: ContextTurn = {
       sessionId,
       runId: turn.runId,
@@ -571,6 +613,8 @@ export class ContextTurns {
       constructed: false,
       research: new Map(),
       controller,
+      span,
+      trace: withSpan(span, parent),
     }
     this.turns.set(turn.runId, state)
     if (trigger === "limit") this.clear(turn)
@@ -603,18 +647,22 @@ export class ContextTurns {
     const state = this.state(turn.runId)
     const sessionId = state.sessionId
     const attempt = (state.clearings + 1) as 1 | 2 | 3
-    const window = this.conversation.currentWindow(sessionId)!
-    const clearable = this.conversation
-      .items(sessionId, window.position)
-      .flatMap((item) => (item.kind === "result" && item.cleared !== true && !CONTEXT_TOOLS.has(item.name) ? [item] : []))
-    if (attempt === 1) state.clearable = clearable.reduce((sum, item) => sum + resultTokens(item), 0)
-    const { positions, freed } = clearingPlan(clearable, attempt, state.clearable, state.freed)
-    state.freed += freed
-    this.host.commit(sessionId, (append) => {
-      this.conversation.clear(sessionId, turn.runId, attempt, positions)
-      append({ type: "TOOL_RESULTS_CLEARED", runId: turn.runId, attempt, tokensFreed: freed })
+    const attributes = { "ashe_agent.clearing.attempt": attempt }
+    traced("ashe_agent.clearing", attributes, state.trace, "internal", () => {
+      const window = this.conversation.currentWindow(sessionId)!
+      const clearable = this.conversation
+        .items(sessionId, window.position)
+        .flatMap((item) => (item.kind === "result" && item.cleared !== true && !CONTEXT_TOOLS.has(item.name) ? [item] : []))
+      if (attempt === 1) state.clearable = clearable.reduce((sum, item) => sum + resultTokens(item), 0)
+      const { positions, freed } = clearingPlan(clearable, attempt, state.clearable, state.freed)
+      state.freed += freed
+      this.host.commit(sessionId, (append) => {
+        this.conversation.clear(sessionId, turn.runId, attempt, positions)
+        append({ type: "TOOL_RESULTS_CLEARED", runId: turn.runId, attempt, tokensFreed: freed })
+      })
+      state.clearings = attempt
+      recordDuration("ashe_agent.clearing.freed", freed, attributes)
     })
-    state.clearings = attempt
   }
 
   /**
@@ -668,8 +716,20 @@ export class ContextTurns {
   private async research(session: SessionRecord, input: string, state: ContextTurn): Promise<string | null> {
     try {
       const { model, settings } = this.auxiliary("research", session)
-      const output = await auxiliaryCall(this.options.port, { model: model.id, settings, prompt: RESEARCH_PROMPT, input }, state.controller.signal)
-      return researchSummary(output.text)
+      const signal = state.controller.signal
+      return await tracedAsync(
+        "ashe_agent.research_call",
+        { "ashe_agent.model": model.id },
+        state.trace,
+        "research_failed",
+        async (notes) => {
+          const output = await auxiliaryCall(this.options.port, { model: model.id, settings, prompt: RESEARCH_PROMPT, input }, signal)
+          const summary = researchSummary(output.text)
+          if (summary === null) notes.fail("research_failed")
+          return summary
+        },
+        signal,
+      )
     } catch {
       return null
     }
@@ -771,7 +831,7 @@ export class ContextTurns {
       this.deliverOwn(sessionId, turn, timelinesTrimmed(trimmed[0]!.number, trimmed.at(-1)!.number, unseen.map(render)))
       return "continue"
     }
-    const violations = this.validate(sessionId)
+    const violations = this.validation(sessionId, state, state.validations + 1)
     if (violationCount(violations) === 0) {
       this.publishDraft(sessionId)
       this.construct(session, turn, state, {})
@@ -811,19 +871,30 @@ export class ContextTurns {
     const window = this.conversation.currentWindow(sessionId)!.position
     const transcript = handoffTranscript(this.conversation.items(sessionId, window).filter((item) => !seedComponent(item)), budget)
     if (transcript === null) throw new TurnFailure("the handoff transcript does not fit the handoff model even with user text only", "handoff_failed")
-    let output: { readonly text: string; readonly truncated: boolean }
-    try {
-      output = await auxiliaryCall(
-        this.options.port,
-        { model: model.id, settings, prompt: HANDOFF_PROMPT, input: handoffInput(timeline, transcript), maxOutputTokens: SUMMARY_MAX_OUTPUT_TOKENS },
-        state.controller.signal,
-      )
-    } catch (error) {
-      state.controller.signal.throwIfAborted()
-      throw new TurnFailure(`the handoff call failed: ${errorText(error)}`, "handoff_failed")
-    }
-    if (output.truncated) throw new TurnFailure("the handoff call stopped at its output limit", "handoff_failed")
-    if (output.text === "") throw new TurnFailure("the handoff call returned no text", "handoff_failed")
+    const signal = state.controller.signal
+    const output = await tracedAsync(
+      "ashe_agent.handoff_call",
+      { "ashe_agent.model": model.id },
+      state.trace,
+      "handoff_failed",
+      async () => {
+        let output: { readonly text: string; readonly truncated: boolean }
+        try {
+          output = await auxiliaryCall(
+            this.options.port,
+            { model: model.id, settings, prompt: HANDOFF_PROMPT, input: handoffInput(timeline, transcript), maxOutputTokens: SUMMARY_MAX_OUTPUT_TOKENS },
+            signal,
+          )
+        } catch (error) {
+          signal.throwIfAborted()
+          throw new TurnFailure(`the handoff call failed: ${errorText(error)}`, "handoff_failed")
+        }
+        if (output.truncated) throw new TurnFailure("the handoff call stopped at its output limit", "handoff_failed")
+        if (output.text === "") throw new TurnFailure("the handoff call returned no text", "handoff_failed")
+        return output
+      },
+      signal,
+    )
     const [handoff] = this.host.commit(sessionId, (append) =>
       this.record(sessionId, turn.runId, [{ kind: "handoff", fields: { Text: output.text } }], HANDOFF_PROMPT.revision, append),
     )
@@ -831,7 +902,7 @@ export class ContextTurns {
     await this.compactionStep(sessionId, state)
     state.controller.signal.throwIfAborted()
     this.trim(sessionId, turn.runId)
-    const violations = this.validate(sessionId)
+    const violations = this.validation(sessionId, state, 1)
     if (violationCount(violations) === 0) {
       this.publishDraft(sessionId)
       this.construct(session, turn, state, { handoff: handoff!.number })
@@ -920,6 +991,19 @@ export class ContextTurns {
     state: ContextTurn,
     extras: { readonly handoff?: number; readonly unsorted?: { readonly first: number; readonly last: number; readonly path: string } },
   ) {
+    const cause = { "ashe_agent.checkpoint_window.cause": "context_turn" } as const
+    traced("ashe_agent.checkpoint_window_construction", cause, state.trace, "checkpoint_window_failed", (notes) =>
+      this.constructWindow(session, turn, state, extras, notes),
+    )
+  }
+
+  private constructWindow(
+    session: SessionRecord,
+    turn: TurnRecord,
+    state: ContextTurn,
+    extras: { readonly handoff?: number; readonly unsorted?: { readonly first: number; readonly last: number; readonly path: string } },
+    notes: SpanNotes,
+  ) {
     const sessionId = session.id
     const old = this.conversation.currentWindow(sessionId)!
     const contextItem = this.store.getTurn(sessionId, turn.runId)!.contextItem ?? Number.POSITIVE_INFINITY
@@ -939,6 +1023,7 @@ export class ContextTurns {
     })
     const { sources, errors } = this.host.seedSources(session, old.position)
     if (errors.length > 0) {
+      if (errors.some((error) => error.code === "user_instructions_unreadable")) notes.fail("user_instructions_unreadable")
       this.host.commit(sessionId, (append) => {
         for (const error of errors) append({ type: "SESSION_ERROR", code: error.code, message: error.message, runId: turn.runId })
       })
@@ -963,6 +1048,7 @@ export class ContextTurns {
       append({ type: "CHECKPOINT_WINDOW_SEEDED", runId: turn.runId, window: window.position, components: seed.components.map(wire) })
     })
     state.constructed = true
+    recordDuration("ashe_agent.checkpoint_window.size", seedTokens(sources.harness, seed.components), { "ashe_agent.checkpoint_window.cause": "context_turn" })
   }
 
   /**
@@ -975,6 +1061,7 @@ export class ContextTurns {
     if (state === undefined) return
     this.turns.delete(runId)
     state.controller.abort()
+    endSpan(state.span, { "ashe_agent.context_turn.constructed": state.constructed })
     if (!state.constructed) this.settleDraft(sessionId, runId)
   }
 

@@ -1,17 +1,24 @@
-import { writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, describe, expect, test } from "bun:test"
 import { Redacted } from "effect"
+import { ModelCallError } from "../src/agent/model.ts"
 import type { Tool } from "../src/agent/tools.ts"
+import { AgentRegistry } from "../src/agents/agents.ts"
+import { fileSetup, InstructionsUnreadable } from "../src/agents/setup.ts"
 import { setOwnerPassword } from "../src/auth/credentials.ts"
+import type { UserInstructions } from "../src/sessions/hub.ts"
+import { noAgents } from "../src/sessions/setup.ts"
 import { openDatabase } from "../src/store/database.ts"
 import { mcpLogEvents } from "../src/telemetry/mcp-events.ts"
 import { builtinTools } from "../src/tools/builtin.ts"
 import { executeTool } from "../src/tools/codemode/execute.ts"
 import { McpRegistry } from "../src/tools/mcp/servers.ts"
 import { ShellProcesses } from "../src/tools/shell/index.ts"
-import { AgentHarness, callTools, say, testTools } from "./support/agent.ts"
-import { Client } from "./support/cli.ts"
+import { AgentHarness, callTools, failWith, hold, say, testTools, type Reply } from "./support/agent.ts"
+import { Client, waitFor } from "./support/cli.ts"
+import { contextHarness, publishMemory, windowModel } from "./support/context.ts"
 import { TestServer } from "./support/server.ts"
 import { exportedText, memoryTelemetry, offCatalog } from "./support/telemetry.ts"
 
@@ -185,5 +192,173 @@ describe("telemetry", () => {
       ],
     ])
     expect(await offCatalog(telemetry)).toEqual([])
+  })
+
+  test("context work is traced and measured, and no signal carries entries, files, prompts, questions, or answers", async () => {
+    const marker = {
+      entry: "ENTRY-MARKER-9c1e",
+      memory: "MEMORY-MARKER-9c1e",
+      research: "RESEARCH-MARKER-9c1e",
+      compaction: "COMPACTION-INPUT-MARKER-9c1e",
+      handoff: "HANDOFF-MARKER-9c1e",
+      title: "TITLE-MARKER-9c1e",
+      instructions: "INSTRUCTIONS-MARKER-9c1e",
+      question: "QUESTION-MARKER-9c1e",
+      note: "NOTE-MARKER-9c1e",
+      feedback: "FEEDBACK-MARKER-9c1e",
+    } as const
+    const before = new Set(telemetry.spans())
+    const mid = windowModel("test/mid", 120_000)
+    const config = mkdtempSync(join(tmpdir(), "ashe-agent-telemetry-"))
+    mkdirSync(join(config, "titles"))
+    writeFileSync(join(config, "titles", "helper.md"), `---\ndescription: Helps ${marker.title}\n---\n${marker.instructions}\n`)
+    const { h, aux } = contextHarness({
+      models: [mid],
+      setup: fileSetup({ agents: new AgentRegistry({ helper: { model: mid.id } }, null, join(config, "titles")), instructionsFile: join(config, "AGENTS.md"), skillRoots: [] }),
+    })
+    const blob = (tokens: number) => callTools([{ name: "blob", args: { tokens } }])
+    const option = (label: string) => ({ label, description: `${label} described` })
+    const ask = (extra: Record<string, unknown> = {}) =>
+      callTools([{ name: "context_ask_question", args: { questions: [{ id: "q", header: "Pick", question: marker.question, options: [option("A"), option("B")] }], ...extra } }])
+    const asked = (id: string, count: number) =>
+      waitFor(`${count} QUESTIONS_ASKED`, () => h.events(id).flatMap(({ event }) => (event.type === "QUESTIONS_ASKED" ? [event] : []))[count - 1], 10_000)
+    const ended = (id: string, type: string, count = 1) =>
+      waitFor(`${count} ${type}`, () => (h.types(id).filter((candidate) => candidate === type).length >= count ? true : undefined), 10_000)
+    const doing =
+      (act: () => void, then: Reply): Reply =>
+      (call, signal) => {
+        act()
+        return then(call, signal)
+      }
+    try {
+      // A session with questions, an entry, memory, research, a compaction call, and a context turn whose second validation passes.
+      const id = h.create({ agent: "helper" })
+      publishMemory(h, id, { "notes.md": `---\ndescription: Notes ${marker.memory}\n---\n` })
+      const research = join(h.sessionDir(id), "research", "topic.md")
+      writeFileSync(research, `# Topic\n\n${marker.research}\n`)
+      h.model.next(
+        callTools([{ name: "context_append", args: { entries: [{ kind: "open", Text: marker.entry }] } }]),
+        ask(),
+        ask({ feedback: marker.feedback }),
+        blob(76_000),
+        say("first done"),
+      )
+      h.input(id, marker.compaction)
+      const first = await asked(id, 1)
+      h.hub.answerQuestion(id, first.questionSetId, [{ id: "q", selection: "A", note: marker.note }], h.sender)
+      const second = await asked(id, 2)
+      h.hub.answerQuestion(id, second.questionSetId, [{ id: "q" }], h.sender)
+      await h.turnsEnded(id, 1)
+      await ended(id, "TIMELINE_ENTRY", 2)
+      const fix = () => writeFileSync(research, `---\ndescription: Topic\n---\n${marker.research}\n`)
+      h.model.next(blob(5_000), say("in order"), doing(fix, say("fixed")), say("continuing"))
+      h.input(id, "second")
+      await h.turnsEnded(id, 3)
+      expect(h.types(id).filter((type) => type === "VALIDATION_FAILED")).toHaveLength(1)
+      expect(h.types(id).filter((type) => type === "CHECKPOINT_WINDOW_SEEDED")).toHaveLength(2)
+
+      // A session that reaches the context limit three times and hands off, then a rewind that restores its files.
+      const limited = h.create({ agent: "helper" })
+      const overflow = () => failWith(new ModelCallError("context_length_exceeded", true))
+      h.model.next(blob(50_000), blob(70_000), overflow(), overflow(), overflow(), say("continued"))
+      h.input(limited, `go ${marker.handoff}`)
+      await h.turnsEnded(limited, 2)
+      expect(aux.calls("handoff")).toHaveLength(1)
+      const [rewound] = h.events(limited).flatMap(({ event }) => (event.type === "RUN_STARTED" ? [event.runId] : []))
+      h.model.next(say("again"))
+      h.hub.rewind(limited, rewound!, "again", h.sender)
+      await h.turnsEnded(limited, 1)
+    } finally {
+      await h.cleanup()
+      rmSync(config, { recursive: true, force: true })
+    }
+
+    const spans = telemetry.spans().filter((span) => !before.has(span))
+    const names = new Set(spans.map((span) => span.name))
+    for (const name of [
+      "ashe_agent.context_turn",
+      "ashe_agent.clearing",
+      "ashe_agent.compaction_call",
+      "ashe_agent.research_call",
+      "ashe_agent.handoff_call",
+      "ashe_agent.question_wait",
+      "ashe_agent.checkpoint_window_construction",
+      "ashe_agent.reconciliation",
+      "ashe_agent.validation",
+      "ashe_agent.memory_check",
+      "ashe_agent.memory_publish",
+      "ashe_agent.snapshot",
+      "ashe_agent.restore",
+    ]) {
+      expect(names).toContain(name)
+    }
+    const turns = new Set(spans.filter((span) => span.name === "ashe_agent.turn").map((span) => span.spanContext().spanId))
+    for (const span of spans.filter((candidate) => candidate.name === "ashe_agent.context_turn")) expect(turns).toContain(span.parentSpanContext!.spanId)
+    expect(spans.filter((span) => span.name === "ashe_agent.clearing").map((span) => span.attributes["ashe_agent.clearing.attempt"])).toEqual([1, 2, 3])
+    expect(spans.filter((span) => span.name === "ashe_agent.validation").map((span) => span.attributes["ashe_agent.validation.result"])).toEqual(
+      expect.arrayContaining(["failed", "passed"]),
+    )
+    expect(spans.filter((span) => span.name === "ashe_agent.question_wait").map((span) => span.attributes["ashe_agent.question.outcome"])).toEqual([
+      "answered",
+      "answered",
+    ])
+    const metrics = (await telemetry.metrics()).scopeMetrics.flatMap((scope) => scope.metrics.map((metric) => metric.descriptor.name))
+    expect(metrics).toEqual(expect.arrayContaining(["ashe_agent.clearing.freed", "ashe_agent.checkpoint_window.size", "ashe_agent.validation.failures"]))
+
+    expect(await offCatalog(telemetry)).toEqual([])
+    const exported = await exportedText(telemetry)
+    for (const value of Object.values(marker)) expect(exported).not.toContain(value)
+  }, 60_000)
+
+  test("a research call with no text is marked failed, and a context turn a restart interrupts still exports its span", async () => {
+    const before = new Set(telemetry.spans())
+    const fresh = () => telemetry.spans().filter((span) => !before.has(span))
+    const mid = windowModel("test/mid", 120_000)
+    const { h, aux } = contextHarness({ models: [mid] })
+    try {
+      const id = h.create({ model: mid.id })
+      writeFileSync(join(h.sessionDir(id), "research", "topic.md"), "---\ndescription: Topic\n---\nA finding.\n")
+      aux.next("research", say(""))
+      const blob = (tokens: number) => callTools([{ name: "blob", args: { tokens } }])
+      h.model.next(blob(76_000), say("first done"))
+      h.input(id, "first")
+      await h.turnsEnded(id, 1)
+      await waitFor("the compaction entry", () => (h.types(id).includes("TIMELINE_ENTRY") ? true : undefined), 10_000)
+      // The second turn's tool result passes the reserve, so its next model call is in a context turn.
+      h.model.next(blob(5_000), hold(new Promise(() => {})))
+      h.input(id, "second")
+      const research = await waitFor("a research call span", () => fresh().find((span) => span.name === "ashe_agent.research_call"), 10_000)
+      expect(research.attributes["error.type"]).toBe("research_failed")
+      await h.calls(4)
+      await h.restart()
+      const turn = await waitFor("the context turn span", () => fresh().find((span) => span.name === "ashe_agent.context_turn"), 10_000)
+      expect(turn.attributes["error.type"]).toBe("interrupted")
+      expect(turn.attributes["ashe_agent.context_turn.constructed"]).toBe(false)
+    } finally {
+      await h.cleanup()
+    }
+  }, 60_000)
+
+  test("a creation that cannot read the user instructions ends its construction span as unreadable instructions, and one over allowance as failed", async () => {
+    const before = new Set(telemetry.spans())
+    let read = (): UserInstructions => {
+      throw new InstructionsUnreadable("/config/AGENTS.md", "permission denied")
+    }
+    const h = new AgentHarness({ setup: { ...noAgents, userInstructions: () => read() } })
+    try {
+      expect(() => h.create()).toThrow("/config/AGENTS.md")
+      read = () => {
+        const text = "x".repeat(60_000)
+        return { source: "global", path: "/config/AGENTS.md", text, sha256: String(Bun.hash(text)), metadata: { dev: 0, ino: 0, size: text.length, mtimeMs: 0, ctimeMs: 0 } }
+      }
+      expect(() => h.create()).toThrow("cannot be built")
+    } finally {
+      await h.cleanup()
+    }
+    const classes = telemetry
+      .spans()
+      .filter((span) => !before.has(span) && span.name === "ashe_agent.checkpoint_window_construction")
+      .map((span) => span.attributes["error.type"])
+    expect(classes).toEqual(["user_instructions_unreadable", "checkpoint_window_failed"])
   })
 })

@@ -1,5 +1,5 @@
 import type { AIMessage } from "@langchain/core/messages"
-import type { Context as TraceContext, Span } from "@opentelemetry/api"
+import { context as otelContext, type Context as TraceContext, type Span } from "@opentelemetry/api"
 import { Context, Effect, Exit, Fiber, Layer } from "effect"
 import {
   type Agent,
@@ -31,7 +31,7 @@ import {
   type SourceStates,
 } from "../context/components.ts"
 import { SCRATCH_FORK_MAX_BYTES, SESSION_ID_LENGTH } from "../context/constants.ts"
-import { allowanceMessage, catalogChanges, instructionsChange, renderSeed } from "../context/seed.ts"
+import { allowanceMessage, catalogChanges, instructionsChange, renderSeed, seedTokens } from "../context/seed.ts"
 import { CLEARED_CONTEXT_TOOLS, UNCHECKED_CONTEXT_TOOLS } from "../context/tools.ts"
 import type { AuxiliaryModels, Permission } from "../inputs/shapes.ts"
 import { checkpointWindowSize, type ConfiguredModel } from "../models/registry.ts"
@@ -46,7 +46,7 @@ import {
 } from "../permissions/rules.ts"
 import { ProtocolError } from "../server/websocket.ts"
 import { Store } from "../store/database.ts"
-import { endSpan, recordDuration, startSpan, withSpan, type ErrorClass } from "../telemetry/signals.ts"
+import { endSpan, isErrorClass, recordDuration, startSpan, traced, withSpan, type ErrorClass } from "../telemetry/signals.ts"
 import { ContextTurns } from "./context-turns.ts"
 import type { Item, NewWaitingEntry, WaitingEntry } from "./conversation.ts"
 import type { FileRef } from "./file-state.ts"
@@ -248,6 +248,7 @@ export class SessionHub {
         commit: (sessionId, write) => this.commit(sessionId, write),
         publish: (sessionId, files) => this.publish(sessionId, files),
         seedSources: (session, window) => this.laterSeedSources(session, window),
+        trace: (sessionId) => this.traceOf(sessionId),
       },
       { port: options.port, models: options.models, auxiliaryModels: options.auxiliaryModels ?? {} },
     )
@@ -255,6 +256,12 @@ export class SessionHub {
 
   private get conversation() {
     return this.store.conversation
+  }
+
+  /** The trace context of the session's running turn, the parent of the spans of its work; else the active one. */
+  private traceOf(sessionId: string): TraceContext {
+    const live = this.states.get(sessionId)?.live
+    return live === null || live === undefined ? otelContext.active() : withSpan(live.span)
   }
 
   private get fileState() {
@@ -352,13 +359,15 @@ export class SessionHub {
    * session's other generation directories.
    */
   private publish(sessionId: string, files: ReadonlyArray<StoredFile>, also: () => void = () => {}) {
-    const next = this.fileState.generations(sessionId).memory + 1
-    const recorded = this.files.writeGeneration(sessionId, next, files)
-    this.store.db.transaction(() => {
-      this.fileState.recordGeneration(sessionId, next, recorded, this.now())
-      also()
-    })()
-    this.completePublish(sessionId)
+    traced("ashe_agent.memory_publish", {}, this.traceOf(sessionId), "memory_publish_failed", () => {
+      const next = this.fileState.generations(sessionId).memory + 1
+      const recorded = this.files.writeGeneration(sessionId, next, files)
+      this.store.db.transaction(() => {
+        this.fileState.recordGeneration(sessionId, next, recorded, this.now())
+        also()
+      })()
+      this.completePublish(sessionId)
+    })
   }
 
   /** Completes a publish a stop interrupted: points `memory` at the current generation and removes the others. */
@@ -382,14 +391,16 @@ export class SessionHub {
    * that differed.
    */
   private checkMemory(sessionId: string) {
-    const generations = this.fileState.generations(sessionId)
-    const recorded = this.fileState.generationFiles(sessionId, generations.memory)
-    const check = this.files.checkMemory(sessionId, generations.memory, recorded)
-    if (check.ok) return
-    const restore = generations.memoryRestore + 1
-    this.publish(sessionId, this.fileState.files(recorded), () => {
-      this.fileState.setGenerations(sessionId, { memoryRestore: restore })
-      this.queue(sessionId, memoryRestored(restore, check.paths))
+    traced("ashe_agent.memory_check", {}, this.traceOf(sessionId), "memory_check_failed", () => {
+      const generations = this.fileState.generations(sessionId)
+      const recorded = this.fileState.generationFiles(sessionId, generations.memory)
+      const check = this.files.checkMemory(sessionId, generations.memory, recorded)
+      if (check.ok) return
+      const restore = generations.memoryRestore + 1
+      this.publish(sessionId, this.fileState.files(recorded), () => {
+        this.fileState.setGenerations(sessionId, { memoryRestore: restore })
+        this.queue(sessionId, memoryRestored(restore, check.paths))
+      })
     })
   }
 
@@ -429,13 +440,15 @@ export class SessionHub {
     const refs = this.fileState.pendingRestore(sessionId)
     if (refs === null) return true
     try {
-      this.files.writeResearch(sessionId, this.fileState.files(refs.filter((ref) => ref.area === "research")))
-      this.publish(sessionId, this.fileState.files(refs.filter((ref) => ref.area === "memory")))
-      // Only a complete publish drops the restore; one that failed after its commit is redone.
-      this.store.db.transaction(() => {
-        this.fileState.deletePendingRestore(sessionId)
-        this.fileState.deleteUnreferencedContents()
-      })()
+      traced("ashe_agent.restore", {}, this.traceOf(sessionId), "restore_failed", () => {
+        this.files.writeResearch(sessionId, this.fileState.files(refs.filter((ref) => ref.area === "research")))
+        this.publish(sessionId, this.fileState.files(refs.filter((ref) => ref.area === "memory")))
+        // Only a complete publish drops the restore; one that failed after its commit is redone.
+        this.store.db.transaction(() => {
+          this.fileState.deletePendingRestore(sessionId)
+          this.fileState.deleteUnreferencedContents()
+        })()
+      })
       return true
     } catch (error) {
       const message = `the rewind's restore of research and memory files failed and stays pending: ${error instanceof Error ? error.message : String(error)}`
@@ -450,15 +463,17 @@ export class SessionHub {
 
   /** The research files of the session now and the files of its current memory generation, as a snapshot records them. */
   private currentFiles(sessionId: string): { readonly research: ReadonlyArray<StoredFile>; readonly refs: ReadonlyArray<FileRef> } {
-    const research = this.files.readResearch(sessionId)
-    const memory = this.fileState.generationFiles(sessionId, this.fileState.generations(sessionId).memory)
-    return {
-      research,
-      refs: [
-        ...research.map((file) => ({ area: "research" as const, name: file.name, sha256: file.sha256 })),
-        ...memory.map((file) => ({ area: "memory" as const, name: file.name, sha256: file.sha256 })),
-      ],
-    }
+    return traced("ashe_agent.snapshot", {}, this.traceOf(sessionId), "snapshot_failed", () => {
+      const research = this.files.readResearch(sessionId)
+      const memory = this.fileState.generationFiles(sessionId, this.fileState.generations(sessionId).memory)
+      return {
+        research,
+        refs: [
+          ...research.map((file) => ({ area: "research" as const, name: file.name, sha256: file.sha256 })),
+          ...memory.map((file) => ({ area: "memory" as const, name: file.name, sha256: file.sha256 })),
+        ],
+      }
+    })
   }
 
   /**
@@ -758,28 +773,35 @@ export class SessionHub {
     const agent = this.options.setup.resolve(params.agent ?? null)
     const model = this.model(agent.model ?? params.model ?? this.options.defaultModel)
     const reasoningEffort = this.effort(model, params.reasoningEffort)
-    let instructions: UserInstructions | null
-    try {
-      const read = this.options.setup.userInstructions(agent)
-      instructions = read === "unchanged" ? null : read
-    } catch (error) {
-      throw invalid(error instanceof Error ? error.message : String(error))
-    }
     const id = this.newSessionId()
     const rules = this.rulesOf(agent.permission, [])
     const harness = harnessInstructions(this.store.sessionsDir)
-    const seed = renderSeed({
-      harness,
-      instructions,
-      title: agent.key === null ? null : displayTitle(agent.key),
-      catalogs: this.options.setup.catalogs(rules),
-      sessionId: id,
-      dates: this.dates(),
-      scratchGeneration: 0,
-      memoryRestoreGeneration: 0,
-      tools: this.offeredTools(rules).map((tool) => tool.spec),
+    const cause = { "ashe_agent.checkpoint_window.cause": "creation" } as const
+    let unreadable: unknown = null
+    const failure = (error: unknown) => (error === unreadable ? "user_instructions_unreadable" : "checkpoint_window_failed")
+    const { instructions, seed } = traced("ashe_agent.checkpoint_window_construction", cause, otelContext.active(), failure, () => {
+      let instructions: UserInstructions | null
+      try {
+        const read = this.options.setup.userInstructions(agent)
+        instructions = read === "unchanged" ? null : read
+      } catch (error) {
+        unreadable = invalid(error instanceof Error ? error.message : String(error))
+        throw unreadable
+      }
+      const seed = renderSeed({
+        harness,
+        instructions,
+        title: agent.key === null ? null : displayTitle(agent.key),
+        catalogs: this.options.setup.catalogs(rules),
+        sessionId: id,
+        dates: this.dates(),
+        scratchGeneration: 0,
+        memoryRestoreGeneration: 0,
+        tools: this.offeredTools(rules).map((tool) => tool.spec),
+      })
+      if (!seed.ok) throw invalid(`the session's first checkpoint window cannot be built: ${allowanceMessage(seed.issue)}`)
+      return { instructions, seed }
     })
-    if (!seed.ok) throw invalid(`the session's first checkpoint window cannot be built: ${allowanceMessage(seed.issue)}`)
     const createdAt = this.now()
     this.withSessionFiles(id, () => {
       const memory = this.options.files.writeGeneration(id, 1, [])
@@ -800,6 +822,7 @@ export class SessionHub {
         )
       })()
     })
+    recordDuration("ashe_agent.checkpoint_window.size", seedTokens(harness, seed.components), cause)
     return this.summary(id)
   }
 
@@ -934,6 +957,14 @@ export class SessionHub {
    * and the errors of sources that cannot be read or are over allowance.
    */
   private reconcile(session: SessionRecord, known: SourceStates) {
+    return traced("ashe_agent.reconciliation", {}, this.traceOf(session.id), "internal", (notes) => {
+      const reconciled = this.reconcileSources(session, known)
+      if (reconciled.errors.some((error) => error.code === "user_instructions_unreadable")) notes.fail("user_instructions_unreadable")
+      return reconciled
+    })
+  }
+
+  private reconcileSources(session: SessionRecord, known: SourceStates) {
     const components: Array<Component> = []
     const errors: Array<{ readonly code: string; readonly message: string }> = []
     const title = session.agent === null ? null : displayTitle(session.agent)
@@ -1150,7 +1181,7 @@ export class SessionHub {
       Exit.isSuccess(exit)
         ? exit.value.status === "finished"
           ? ["finished", undefined]
-          : ["failed", "turn_failed"]
+          : ["failed", exit.value.code !== undefined && isErrorClass(exit.value.code) ? exit.value.code : "turn_failed"]
         : live.cancelled
           ? ["canceled", undefined]
           : this.stopping
