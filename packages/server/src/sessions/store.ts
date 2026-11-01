@@ -4,6 +4,7 @@ import type { SessionEvent, SessionEventBody, SessionSummary } from "@ashe-agent
 import type { ModelOverrides, Permission } from "../inputs/shapes.ts"
 import { Conversation } from "./conversation.ts"
 import { FileState } from "./file-state.ts"
+import { Timeline } from "./timeline.ts"
 
 export type TurnStatus = "running" | "finished" | "cancelled" | "failed" | "interrupted"
 
@@ -45,6 +46,10 @@ export interface TurnRecord {
   readonly status: TurnStatus
   /** The number of the turn's first event, where a rewind of it starts removing. */
   readonly firstSeq: number
+  /** The item position of the turn's context turn component, or null for a turn that never became a context turn. */
+  readonly contextItem: number | null
+  /** What started the turn's context turn: the reserve running short, or the context limit. */
+  readonly contextTrigger: "threshold" | "limit" | null
 }
 
 interface SessionRow {
@@ -79,6 +84,8 @@ interface TurnRow {
   reasoning_effort: string | null
   status: TurnStatus
   first_seq: number
+  context_item: number | null
+  context_trigger: "threshold" | "limit" | null
 }
 
 const toTurn = (row: TurnRow): TurnRecord => ({
@@ -90,14 +97,17 @@ const toTurn = (row: TurnRow): TurnRecord => ({
   reasoningEffort: row.reasoning_effort,
   status: row.status,
   firstSeq: row.first_seq,
+  contextItem: row.context_item,
+  contextTrigger: row.context_trigger,
 })
 
-const turnColumns = "run_id, position, cause, user_message_ids, model, reasoning_effort, status, first_seq"
+const turnColumns = "run_id, position, cause, user_message_ids, model, reasoning_effort, status, first_seq, context_item, context_trigger"
 
 /** Session, event, and turn persistence. Every write that numbers an event takes the session's counter. */
 export class SessionStore {
   readonly conversation: Conversation
   readonly files: FileState
+  readonly timeline: Timeline
 
   /** `sessionsDir` holds each session's directory, named by its id. */
   constructor(
@@ -106,6 +116,7 @@ export class SessionStore {
   ) {
     this.conversation = new Conversation(db)
     this.files = new FileState(db, this.conversation)
+    this.timeline = new Timeline(db)
   }
 
   /** Every session, oldest first. */
@@ -246,7 +257,11 @@ export class SessionStore {
     return row === null ? null : toTurn(row)
   }
 
-  insertTurn(sessionId: string, turn: Omit<TurnRecord, "position" | "status">, startedAt: number): TurnRecord {
+  insertTurn(
+    sessionId: string,
+    turn: Omit<TurnRecord, "position" | "status" | "contextItem" | "contextTrigger">,
+    startedAt: number,
+  ): TurnRecord {
     const position =
       (this.db.query<{ p: number | null }, [string]>("SELECT max(position) AS p FROM turns WHERE session_id = ?").get(sessionId)
         ?.p ?? 0) + 1
@@ -267,7 +282,21 @@ export class SessionStore {
         turn.firstSeq,
         startedAt,
       )
-    return { ...turn, position, status: "running" }
+    return { ...turn, position, status: "running", contextItem: null, contextTrigger: null }
+  }
+
+  /** Records that the turn `runId` became a context turn at the item `item`. */
+  markContextTurn(sessionId: string, runId: string, item: number, trigger: "threshold" | "limit") {
+    this.db.query("UPDATE turns SET context_item = ?, context_trigger = ? WHERE session_id = ? AND run_id = ?").run(item, trigger, sessionId, runId)
+  }
+
+  /** Whether the session's kept events hold one of `type`. */
+  hasEvent(sessionId: string, type: SessionEventBody["type"]): boolean {
+    return (
+      this.db
+        .query("SELECT 1 FROM events WHERE session_id = ? AND json_extract(body, '$.type') = ? LIMIT 1")
+        .get(sessionId, type) !== null
+    )
   }
 
   endTurn(sessionId: string, runId: string, status: Exclude<TurnStatus, "running">, endedAt: number) {
@@ -357,13 +386,16 @@ export class SessionStore {
       this.db
         .query(
           `INSERT INTO turns
-            (session_id, run_id, position, cause, user_message_ids, model, reasoning_effort, status, first_seq, started_at, ended_at)
-            SELECT ?, run_id, position, cause, user_message_ids, model, reasoning_effort, status, first_seq, started_at, ended_at
+            (session_id, run_id, position, cause, user_message_ids, model, reasoning_effort, status, first_seq, started_at, ended_at,
+             context_item, context_trigger)
+            SELECT ?, run_id, position, cause, user_message_ids, model, reasoning_effort, status, first_seq, started_at, ended_at,
+              context_item, context_trigger
             FROM turns WHERE session_id = ? AND first_seq < ?`,
         )
         .run(target.id, source.id, cutoff)
       const kept = turns.filter((turn) => turn.firstSeq < cutoff).map((turn) => turn.runId)
       this.conversation.copy(source.id, target.id, kept)
+      this.timeline.copy(source.id, target.id, kept)
       this.db
         .query(
           `INSERT INTO session_grants (session_id, position, permission, pattern)
