@@ -5,6 +5,10 @@
 import { sha256 } from "@noble/hashes/sha2.js"
 import {
   ErrorCode,
+  PERMISSION_ACTION,
+  PermissionActionArgs,
+  QUESTIONS_ACTION,
+  QuestionsActionArgs,
   PROTOCOL_VERSION,
   type Agent,
   type InputMode,
@@ -17,6 +21,7 @@ import {
   type SessionEvent,
   type SessionSummary,
 } from "@ashe-agent/protocol"
+import { Schema } from "effect"
 import { createStore, type StoreApi } from "zustand/vanilla"
 import { Connection, ConnectionClosed, ProtocolError } from "./connection.ts"
 import type { SessionClientPorts } from "./ports.ts"
@@ -36,6 +41,8 @@ export type ClientState = {
   readonly sessions: ReadonlyArray<SessionSummary>
   readonly activeSessionId: string | null
   readonly views: Readonly<Record<string, SessionView>>
+  /** Question set and permission request ids whose live action this connection owns. */
+  readonly owned: { readonly questions: ReadonlyArray<string>; readonly permissions: ReadonlyArray<string> }
 }
 
 export const storageKeys = {
@@ -55,6 +62,12 @@ const REFRESH_LOCK = "ashe-agent.refresh"
 
 type Tokens = ResultOf<"auth.exchange">
 type SignInExchange = { readonly code: string; readonly verifier: string }
+type PendingAction = {
+  readonly actionId: string
+  readonly sessionId: string
+  readonly name: string
+  readonly subjectId: string
+}
 
 const base64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
 
@@ -80,6 +93,8 @@ export class SessionClient {
   private side: Connection | null = null
   private reconnectTimer: unknown = null
   private reconnectDelay = RECONNECT_FIRST_DELAY_MS
+  /** Live actions assigned to this connection, keyed by their session, name, and subject. */
+  private readonly pendingActions = new Map<string, PendingAction>()
   /** Bumped on sign-in and sign-out, so work of an earlier connection ends quietly. */
   private generation = 0
 
@@ -95,6 +110,7 @@ export class SessionClient {
       sessions: [],
       activeSessionId: null,
       views: {},
+      owned: { questions: [], permissions: [] },
     }))
   }
 
@@ -169,7 +185,7 @@ export class SessionClient {
   signOut() {
     this.disconnect()
     this.ports.storage.removeItem(storageKeys.refreshToken(this.state.serverUrl))
-    this.set({ status: "signedOut", principal: null, activeSessionId: null, views: {}, sessions: [] })
+    this.set({ status: "signedOut", principal: null, activeSessionId: null, views: {}, sessions: [], owned: { questions: [], permissions: [] } })
   }
 
   private disconnect() {
@@ -179,6 +195,8 @@ export class SessionClient {
     this.refreshTimer = null
     this.reconnectTimer = null
     this.access = null
+    this.pendingActions.clear()
+    this.set({ owned: { questions: [], permissions: [] } })
     const connection = this.connection
     this.connection = null
     connection?.close()
@@ -194,6 +212,12 @@ export class SessionClient {
     const connection = new Connection(url, this.ports, {
       onEvent: (event) => {
         if (current()) this.apply(event)
+      },
+      onActionExecute: (action) => {
+        if (current()) this.receiveAction(action)
+      },
+      onActionCancel: (action) => {
+        if (current()) this.cancelAction(action.actionId)
       },
       onClose: () => {
         // A sign-in that fails reports it; every other dropped connection reconnects.
@@ -274,7 +298,12 @@ export class SessionClient {
   /** Refreshes the tokens on a connection of its own, which closes once it has them. */
   private async refresh(generation: number) {
     const url = this.state.serverUrl
-    const side = new Connection(url, this.ports, { onEvent: () => {}, onClose: () => {} })
+    const side = new Connection(url, this.ports, {
+      onEvent: () => {},
+      onActionExecute: () => {},
+      onActionCancel: () => {},
+      onClose: () => {},
+    })
     this.side = side
     try {
       await this.refreshOn(side, generation)
@@ -295,7 +324,8 @@ export class SessionClient {
   /** The connection dropped: reconnect after a growing delay and resubscribe. */
   private lost() {
     this.connection = null
-    this.set({ status: "reconnecting" })
+    this.pendingActions.clear()
+    this.set({ status: "reconnecting", owned: { questions: [], permissions: [] } })
     const url = this.state.serverUrl
     const generation = this.generation
     const delay = this.reconnectDelay
@@ -313,6 +343,11 @@ export class SessionClient {
       connection.request("session.list", {}),
     ])
     this.set({ models, agents, sessions })
+    const { actions } = await connection.request("actions.list", {})
+    const supported = actions
+      .map((action) => action.name)
+      .filter((name) => name === QUESTIONS_ACTION || name === PERMISSION_ACTION)
+    await connection.request("client.setActions", { actions: supported })
     const active = this.state.activeSessionId
     if (active !== null) await this.subscribe(connection, active)
   }
@@ -334,6 +369,50 @@ export class SessionClient {
     const view = views[event.sessionId] ?? emptyView(event.sessionId)
     const next = applyEvent(view, event)
     if (next !== view) this.set({ views: { ...views, [event.sessionId]: next } })
+  }
+
+  /** Records a declared action so the UI's answer can complete this exact assignment. */
+  private receiveAction(action: { actionId: string; sessionId: string; name: string; arguments: unknown }) {
+    let subjectId: string
+    if (action.name === QUESTIONS_ACTION) {
+      const decoded = Schema.decodeUnknownResult(QuestionsActionArgs)(action.arguments)
+      if (decoded._tag === "Failure") return
+      subjectId = decoded.success.questionSetId
+    } else if (action.name === PERMISSION_ACTION) {
+      const decoded = Schema.decodeUnknownResult(PermissionActionArgs)(action.arguments)
+      if (decoded._tag === "Failure") return
+      subjectId = decoded.success.requestId
+    } else return
+    this.pendingActions.set(`${action.sessionId}:${action.name}:${subjectId}`, { ...action, subjectId })
+    const questions =
+      action.name === QUESTIONS_ACTION
+        ? [...this.state.owned.questions.filter((id) => id !== subjectId), subjectId]
+        : this.state.owned.questions
+    const permissions =
+      action.name === PERMISSION_ACTION
+        ? [...this.state.owned.permissions.filter((id) => id !== subjectId), subjectId]
+        : this.state.owned.permissions
+    this.set({ owned: { questions, permissions } })
+  }
+
+  private cancelAction(actionId: string) {
+    for (const [key, action] of this.pendingActions) {
+      if (action.actionId !== actionId) continue
+      this.pendingActions.delete(key)
+      const field = action.name === QUESTIONS_ACTION ? "questions" : "permissions"
+      this.set({ owned: { ...this.state.owned, [field]: this.state.owned[field].filter((id) => id !== action.subjectId) } })
+    }
+  }
+
+  private async completeAction(action: PendingAction, result: unknown) {
+    try {
+      await this.call("action.complete", { sessionId: action.sessionId, actionId: action.actionId, result })
+    } finally {
+      const key = `${action.sessionId}:${action.name}:${action.subjectId}`
+      if (this.pendingActions.get(key)?.actionId === action.actionId) this.pendingActions.delete(key)
+      const field = action.name === QUESTIONS_ACTION ? "questions" : "permissions"
+      this.set({ owned: { ...this.state.owned, [field]: this.state.owned[field].filter((id) => id !== action.subjectId) } })
+    }
   }
 
   private async call<M extends MethodName>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>> {
@@ -376,14 +455,25 @@ export class SessionClient {
     return session
   }
 
-  /** Sends input to the open session: it steers a running turn or starts one, unless queued. */
+  /** Sends input to the open session as steering unless queued. */
   async send(text: string, mode?: InputMode) {
     const sessionId = this.activeId()
+    const question = [...this.pendingActions.values()].find(
+      (action) => action.sessionId === sessionId && action.name === QUESTIONS_ACTION,
+    )
     await this.call("session.input", mode === undefined ? { sessionId, text } : { sessionId, text, mode })
+    if (question !== undefined && mode !== "queue") {
+      await this.completeAction(question, { kind: "repliedByMessage" }).catch(() => {})
+    }
   }
 
   async cancel() {
     await this.call("session.cancel", { sessionId: this.activeId() })
+  }
+
+  /** Resumes the open session with continuation content; the server refuses while it is active. */
+  async resumeSession() {
+    await this.call("session.resume", { sessionId: this.activeId() })
   }
 
   /** Selects the open session's model and reasoning effort; without an effort, the model's default applies. */
@@ -394,17 +484,19 @@ export class SessionClient {
 
   /** Answers the open session's question set; a question without a selection or note is skipped. */
   async answerQuestion(questionSetId: string, answers: ReadonlyArray<{ readonly id: string; readonly selection?: string; readonly note?: string }>) {
-    await this.call("session.answerQuestion", { sessionId: this.activeId(), questionSetId, answers: [...answers] })
+    const sessionId = this.activeId()
+    const action = this.pendingActions.get(`${sessionId}:${QUESTIONS_ACTION}:${questionSetId}`)
+    if (action === undefined) throw new Error("the question set is no longer waiting for an answer")
+    await this.completeAction(action, { kind: "answered", answers: [...answers] })
   }
 
   /** Answers a permission request; a message goes only with a rejection, as the call's result. */
   async answerPermission(requestId: string, answer: PermissionAnswer, message?: string) {
     const sessionId = this.activeId()
     const trimmed = answer === "reject" ? (message?.trim() ?? "") : ""
-    await this.call(
-      "permission.answer",
-      trimmed === "" ? { sessionId, requestId, answer } : { sessionId, requestId, answer, message: trimmed },
-    )
+    const action = this.pendingActions.get(`${sessionId}:${PERMISSION_ACTION}:${requestId}`)
+    if (action === undefined) throw new Error("the permission request is no longer waiting for an answer")
+    await this.completeAction(action, trimmed === "" ? { answer } : { answer, message: trimmed })
   }
 
   /** Removes the turn `runId` and every later one, then reruns its input, or `text` instead. */

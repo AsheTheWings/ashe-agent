@@ -84,27 +84,33 @@ describe("conversation state rows on a real SQLite database", () => {
       expect(rows(h, id, "compaction_texts")).toBe(3)
 
       // A fork through the third turn copies its rows and none of the later turns'.
-      const [, , third, , , sixth] = runIds(h, id)
-      const fork = h.hub.fork(id, third!).id
-      expect(rows(h, fork, "checkpoint_windows")).toBe(2)
+      const runOf = (text: string) => {
+        const input = ofType(h, id, "INPUT_RECEIVED").find((event) => event.text === text)!
+        return ofType(h, id, "RUN_STARTED").find((event) => event.userMessageIds.includes(input.inputId))!.runId
+      }
+      const fork = h.hub.fork(id, runOf("three")).id
+      expect(rows(h, fork, "checkpoint_windows")).toBe(1)
       expect(rows(h, fork, "tool_result_clearings")).toBe(0)
       expect(rows(h, fork, "timeline_trims")).toBe(0)
-      expect(rows(h, fork, "compaction_texts")).toBe(2)
+      expect(rows(h, fork, "compaction_texts")).toBe(1)
       expect(h.hub.store.timeline.entries(fork).map((entry) => [entry.number, entry.fields.Text])).toEqual([
         [1, "Requests:\n- one and two"],
-        [2, "Requests:\n- three"],
       ])
 
       // A rewind past the sixth turn deletes its rows, and the rerun sees the fifth turn's result uncleared and the earlier text.
+      const callsBefore = h.model.calls.length
       h.model.next(say("rerun"))
-      h.hub.rewind(id, sixth!, undefined, h.sender)
+      h.hub.rewind(id, runOf("six"), undefined, h.sender)
       await h.turnsEnded(id, 6)
       expect(rows(h, id, "checkpoint_windows")).toBe(2)
       expect(rows(h, id, "tool_result_clearings")).toBe(0)
       expect(rows(h, id, "timeline_trims")).toBe(0)
       expect(rows(h, id, "compaction_texts")).toBe(2)
       expect(h.hub.store.timeline.entries(id).map((entry) => entry.fields.Text)).toEqual(["Requests:\n- one and two", "Requests:\n- three"])
-      const rerun = callText(h.model.last())
+      const rerun = h.model.calls
+        .slice(callsBefore)
+        .map(({ call }) => callText(call))
+        .find((text) => text.includes("<user>\nsix\n</user>"))!
       expect(rerun).toContain(filler(40_000, "f"))
       expect(rerun).not.toContain("[Result cleared")
       expect(rerun).toContain("Requests:\n- three")
@@ -123,7 +129,7 @@ describe("conversation state rows on a real SQLite database", () => {
       await h.turnsEnded(id, 3)
       const waitingTexts = () => ofType(h, id, "INPUT_WAITING").map((event) => event.text)
       const held = ofType(h, id, "INPUT_WAITING").filter((event) => event.text.startsWith("held"))
-      const continuation = ofType(h, id, "RUN_STARTED")[2]
+      const continuation = ofType(h, id, "RUN_STARTED").find((event) => event.cause === "continuation")!
       expect(continuation.userMessageIds).toEqual(held.map((event) => event.inputId))
 
       h.model.next(say("rerun reply"))
@@ -135,7 +141,7 @@ describe("conversation state rows on a real SQLite database", () => {
       expect(after.map((event) => event.text)).toEqual(["held one", "held two"])
       expect(waitingTexts()).toEqual(["first", "second", "held one", "held two"])
       expect(after.map((event) => event.inputId)).not.toEqual(held.map((event) => event.inputId))
-      const rerun = ofType(h, id, "RUN_STARTED")[2]
+      const rerun = ofType(h, id, "RUN_STARTED").filter((event) => event.cause === "continuation").at(-1)!
       expect(rerun.userMessageIds).toEqual(after.map((event) => event.inputId))
       expect(ofType(h, id, "INPUT_RECEIVED").slice(-2).map((event) => event.inputId)).toEqual(after.map((event) => event.inputId))
 

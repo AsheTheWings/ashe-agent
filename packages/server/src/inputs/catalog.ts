@@ -16,6 +16,7 @@ import {
   Profile,
   Providers,
   TimeZone,
+  ToolTimeoutOverrides,
   WebSocketUrl,
 } from "./shapes.ts"
 
@@ -326,10 +327,26 @@ export const catalog = {
     defaults: both(() => ({})),
   }),
   codeModeLimits: configuration({
-    description: "Optional limits on a code mode program's time, tool calls, and output bytes.",
+    description: "Optional limits on a code mode program's tool calls and output bytes.",
     env: "ASHE_AGENT_CODE_MODE_LIMITS",
     codec: "json",
     schema: CodeModeLimits,
+    processes: serve,
+    defaults: both(() => ({})),
+  }),
+  toolTimeoutMs: configuration({
+    description: "Elapsed milliseconds one tool invocation may take, including validation, permission waits, and effects.",
+    env: "ASHE_AGENT_TOOL_TIMEOUT_MS",
+    codec: "json",
+    schema: PositiveInt,
+    processes: serve,
+    defaults: both(() => 300_000),
+  }),
+  toolTimeoutOverrides: configuration({
+    description: "Elapsed-time limits by exact registered tool name; null disables a tool's local limit.",
+    env: "ASHE_AGENT_TOOL_TIMEOUT_OVERRIDES",
+    codec: "json",
+    schema: ToolTimeoutOverrides,
     processes: serve,
     defaults: both(() => ({})),
   }),

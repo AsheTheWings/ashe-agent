@@ -388,7 +388,7 @@ describe("the agent loop", () => {
 })
 
 describe("input during turns", () => {
-  test("steered input reaches the model at the next step boundary, and late steered input starts the next turn", async () => {
+  test("steered input reaches the model at the next step boundary, and input already waiting joins the same batch", async () => {
     let late = true
     await withHarness(
       async (h) => {
@@ -404,16 +404,16 @@ describe("input during turns", () => {
         await h.turnsEnded(id, 2)
         const second = h.model.calls[1]!.call
         expect(responsesInput(second).map((item) => item.type)).toEqual(["message", "function_call", "function_call_output", "message"])
-        expect(texts(second).at(-1)).toBe("<user>\nsteer one\n</user>")
+        expect(texts(second).at(-1)).toContain("<user>\nsteer one\n</user>")
+        expect(texts(second).at(-1)).toContain("<user>\nlate\n</user>")
         const types = h.types(id)
         const steered = h.events(id).findIndex(({ event }) => event.type === "INPUT_WAITING" && event.text === "steer one")
         expect(steered).toBeLessThan(types.indexOf("TOOL_CALL_RESULT"))
         expect(types.indexOf("INPUT_RECEIVED", types.indexOf("TOOL_CALL_RESULT"))).toBeGreaterThan(0)
         // A steered message joining a running turn makes no rewind point.
-        expect(h.hub.store.turns(id).map((turn) => turn.userMessageIds.length)).toEqual([1, 1])
+        expect(h.hub.store.turns(id).map((turn) => turn.userMessageIds.length)).toEqual([1, 2])
         expect(inputs(h, id)).toEqual(["start", "steer one", "late"])
         expect(runIds(h, id)).toHaveLength(2)
-        expect(texts(h.model.calls[2]!.call).at(-1)).toBe("<user>\nlate\n</user>")
       },
       {
         afterLoop: (hub, id) => {
@@ -435,19 +435,19 @@ describe("input during turns", () => {
       h.input(id, "queued one", "queue")
       h.input(id, "queued two", "queue")
       open.open()
-      await h.turnsEnded(id, 3)
+      await h.turnsEnded(id, 2)
       expect(inputs(h, id)).toEqual(["first", "queued one", "queued two"])
 
       h.model.next(hold(new Promise(() => {})))
       h.input(id, "cancel me")
-      await h.calls(4)
-      const { signal } = h.model.calls[3]!
+      await h.calls(3)
+      const { signal } = h.model.calls[2]!
       h.hub.cancel(id)
-      await h.turnsEnded(id, 4)
+      await h.turnsEnded(id, 3)
       expect(signal.aborted).toBe(true)
       expect(ofType(h.events(id), "RUN_FINISHED").at(-1).outcome).toEqual({ type: "cancelled" })
       expect(h.hub.store.turns(id).at(-1)!.status).toBe("cancelled")
-      expect(h.model.calls).toHaveLength(4)
+      expect(h.model.calls).toHaveLength(3)
     })
   })
 
@@ -470,7 +470,7 @@ describe("input during turns", () => {
       expect(resultItems.map((item) => [item.outcome, item.content])).toEqual(canceled)
       h.model.next(say("next"))
       h.input(id, "after cancel")
-      await h.turnsEnded(id, 2)
+      await h.turnsEnded(id, 1)
       expectOneResultPerCall(responsesInput(h.model.last()))
 
       const before = h.model.calls.length
@@ -528,7 +528,7 @@ describe("input during turns", () => {
       await h.hub.stop()
       h.model.next(say("one"), say("two"))
       await h.restart()
-      await h.turnsEnded(id, 2)
+      await h.turnsEnded(id, 1)
       expect(inputs(h, id)).toEqual(["first", "queued one", "queued two"])
       expect(ofType(h.events(id), "RUN_INTERRUPTED")).toHaveLength(1)
       expect(h.hub.store.conversation.waiting(id)).toEqual([])
@@ -598,8 +598,13 @@ describe("fork and rewind", () => {
       h.model.next(hold(open.promise))
       h.input(id, "running")
       await h.calls(before + 1)
-      expect(() => h.hub.fork(id, undefined)).toThrow("a turn is running")
-      expect(() => h.hub.rewind(id, first!, undefined, h.sender)).toThrow("a turn is running")
+      const settledFork = h.hub.fork(id, undefined)
+      expect(settledFork).toMatchObject({ running: false })
+      expect(h.hub.isRunning(settledFork.id)).toBe(false)
+      expect(h.hub.store.conversation.waiting(settledFork.id)).toEqual([])
+      h.model.next(say("rewound while running"))
+      await h.hub.rewind(id, first!, undefined, h.sender)
+      await waitFor("the active rewind", () => (!h.hub.isRunning(id) ? true : undefined))
       open.open()
     })
   })
@@ -620,12 +625,17 @@ describe("fork and rewind", () => {
       expect(texts(h.model.last()).at(-1)).toContain("changed outside a context turn: `memory`.")
 
       const fork = h.hub.fork(id, first!).id
-      await h.turnsEnded(fork, 2)
+      expect(h.hub.isRunning(fork)).toBe(false)
+      const copiedCalls = h.model.calls.length
+      h.model.next(say("forked"))
+      h.input(fork, "fork input")
+      await h.calls(copiedCalls + 1)
+      await waitFor("the fork turn", () => (!h.hub.isRunning(fork) ? true : undefined))
       const forked = texts(h.model.last()).at(-1)!
       expect(headings(forked)).toEqual(["# Fork", "# Scratch Lost", "# Memory Restored"])
       expect(forked).toContain("It may hold files written later by turns no longer in your history")
       expect(forked).toContain("`memory/` may differ from what turns in your history wrote there")
-      expect(ofType(h.events(fork), "RUN_STARTED").at(-1)).toMatchObject({ cause: "notification" })
+      expect(ofType(h.events(fork), "RUN_STARTED").at(-1)).toMatchObject({ cause: "user" })
 
       const fourth = runIds(h, id)[3]!
       h.model.next(say("r4 again"))
@@ -651,7 +661,16 @@ describe("fork and rewind", () => {
       h.model.next(say("r1"))
       h.input(id, "t1")
       await h.turnsEnded(id, 1)
-      h.hub.store.conversation.addWaiting(id, { kind: "notification", component: { type: "notification", name: "test", heading: "Test", text: "# Test\n\nnote", sources: {} } }, Date.now())
+      h.hub.store.conversation.addWaiting(
+        id,
+        {
+          kind: "notification",
+          inputId: "n1",
+          component: { type: "notification", name: "test", heading: "Test", text: "# Test\n\nnote", sources: {} },
+          trigger: "notification",
+        },
+        Date.now(),
+      )
       h.model.next(say("noted"))
       h.hub.resumeWaiting()
       await h.turnsEnded(id, 2)
@@ -694,9 +713,17 @@ describe("model switching", () => {
       await h.turnsEnded(id, 3)
       const back = h.model.last()
       const items = responsesInput(back)
-      expect(items.map((item) => item.type)).toEqual(["message", "function_call", "function_call_output", "reasoning", "message", "message"])
+      expect(items.map((item) => item.type)).toEqual([
+        "message",
+        "function_call",
+        "function_call_output",
+        "reasoning",
+        "message",
+        "message",
+        "message",
+      ])
       expect(items[3]).toMatchObject({ encrypted_content: "ENC" })
-      expect(texts(back).at(-1)).toContain(`<agent model="${beta}">\nb1\n</agent>`)
+      expect(texts(back).join("\n")).toContain(`<agent model="${beta}">\nb1\n</agent>`)
       expect(texts(back).at(-1)).toEndWith("<user>\nt3\n</user>")
 
       const open = gate()

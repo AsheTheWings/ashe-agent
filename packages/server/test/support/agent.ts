@@ -4,11 +4,11 @@ import { join } from "node:path"
 import type { Database } from "bun:sqlite"
 import { AIMessageChunk, type AIMessageChunkFields, type BaseMessage } from "@langchain/core/messages"
 import { convertMessagesToResponsesInput } from "@langchain/openai"
-import type { SessionEvent } from "@ashe-agent/protocol"
+import { PERMISSION_ACTION, QUESTIONS_ACTION, type SessionEvent } from "@ashe-agent/protocol"
 import { Effect, Schema } from "effect"
 import type { ModelCall, ModelPort } from "../../src/agent/model.ts"
 import { agentRunner } from "../../src/agent/runner.ts"
-import { builtinTool, type Tool } from "../../src/agent/tools.ts"
+import { builtinTool, type Tool, type ToolClock } from "../../src/agent/tools.ts"
 import type { AuxiliaryModels, ModelOverrides, Permission } from "../../src/inputs/shapes.ts"
 import type { ConfiguredModel } from "../../src/models/registry.ts"
 import { permissionPath } from "../../src/permissions/paths.ts"
@@ -20,6 +20,7 @@ import { openDatabase } from "../../src/store/database.ts"
 import { migrationFiles } from "../../src/store/migration-files.ts"
 import { applyMigrations, discoverMigrations } from "../../src/store/migrations.ts"
 import { waitFor } from "./cli.ts"
+import type { Connection } from "../../src/server/websocket.ts"
 
 /** A configured model of the provider its id names, taking text only and no settings unless given. */
 export const configuredModel = (
@@ -47,6 +48,40 @@ export const agentModels: ReadonlyArray<ConfiguredModel> = [
   configuredModel("test/alpha", { contextLimit: 200_000 }),
   configuredModel("test/beta", { contextLimit: 200_000, imageInput: true }),
 ]
+
+/** A controlled tool clock: timers fire only when a test advances it. */
+export class ManualClock implements ToolClock {
+  private time = 0
+  private next = 0
+  private readonly timers = new Map<number, { readonly at: number; readonly callback: () => void }>()
+
+  now = () => this.time
+
+  setTimeout = (callback: () => void, delayMs: number) => {
+    const id = ++this.next
+    this.timers.set(id, { at: this.time + Math.max(0, delayMs), callback })
+    return id
+  }
+
+  clearTimeout = (handle: unknown) => {
+    if (typeof handle === "number") this.timers.delete(handle)
+  }
+
+  async advance(ms: number) {
+    this.time += ms
+    for (;;) {
+      const due = [...this.timers.entries()]
+        .filter(([, timer]) => timer.at <= this.time)
+        .sort((a, b) => a[1].at - b[1].at)
+      const first = due[0]
+      if (first === undefined) return
+      this.timers.delete(first[0])
+      first[1].callback()
+      await Promise.resolve()
+      await Promise.resolve()
+    }
+  }
+}
 
 /** One scripted model reply: the chunks a call streams. */
 export type Reply = (call: ModelCall, signal: AbortSignal) => AsyncIterable<AIMessageChunk>
@@ -211,6 +246,10 @@ export class AgentHarness {
   hub: SessionHub
   readonly sender = { kind: "login" as const, loginId: "component" }
   readonly files = new SessionFiles(join(this.dir, "sessions"), join(this.dir, "memory"), join(this.dir, "scratch"))
+  private readonly attached = new Set<string>()
+  private readonly clients = new Map<string, Connection>()
+  private readonly actionBySubject = new Map<string, { actionId: string; sessionId: string; name: string }>()
+  private clientSequence = 0
 
   constructor(
     readonly options: {
@@ -229,6 +268,10 @@ export class AgentHarness {
       readonly now?: () => number
       /** The model of each auxiliary task; the latest turn's model by default. */
       readonly auxiliaryModels?: AuxiliaryModels
+      /** Attach a capable subscribed test connection to each created session; true by default. */
+      readonly clientActions?: boolean
+      /** Elapsed-time limits for tool invocations. */
+      readonly toolPolicy?: import("../../src/agent/tools.ts").ToolExecutionPolicy
     } = {},
   ) {
     this.db = openDatabase(join(this.dir, "ashe-agent.db"))
@@ -252,6 +295,7 @@ export class AgentHarness {
       ...(this.options.permission === undefined ? {} : { permission: this.options.permission }),
       ...(this.options.userTimeZone === undefined ? {} : { userTimeZone: this.options.userTimeZone }),
       ...(this.options.now === undefined ? {} : { now: this.options.now }),
+      ...(this.options.toolPolicy === undefined ? {} : { toolPolicy: this.options.toolPolicy }),
       serverTimeZone: "UTC",
       home: realpathSync(this.dir),
       runner:
@@ -259,8 +303,36 @@ export class AgentHarness {
           ? runner
           : (context) => Effect.tap(runner(context), () => Effect.sync(() => afterLoop(hub, context.session.id))),
     })
+    this.hub = hub
     hub.start()
+    this.actionBySubject.clear()
+    if (this.options.clientActions !== false) for (const sessionId of this.attached) this.attachClient(sessionId)
     return hub
+  }
+
+  /** Attaches a connected client that supports questions and permissions and subscribes to `sessionId`. */
+  attachClient(sessionId: string) {
+    this.attached.add(sessionId)
+    const connection: Connection = { id: `test-client-${++this.clientSequence}`, principal: this.sender, authenticating: false, deadline: null }
+    const send = (message: unknown) => {
+      const notice = message as { method?: string; params?: { actionId?: string; sessionId?: string; name?: string; arguments?: unknown } }
+      if (notice.method !== "action.execute" || notice.params === undefined) return
+      const { actionId, sessionId: owner, name, arguments: args } = notice.params
+      if (actionId === undefined || owner === undefined || name === undefined || typeof args !== "object" || args === null) return
+      const value = args as Record<string, unknown>
+      const subject = name === QUESTIONS_ACTION ? value.questionSetId : name === PERMISSION_ACTION ? value.requestId : undefined
+      if (typeof subject === "string") this.actionBySubject.set(`${owner}:${name}:${subject}`, { actionId, sessionId: owner, name })
+    }
+    this.hub.actions.setCapabilities(connection, this.sender, [QUESTIONS_ACTION, PERMISSION_ACTION], send)
+    this.hub.actions.subscribed(connection, this.sender, sessionId, send)
+    this.clients.set(sessionId, connection)
+  }
+
+  /** Withdraws the attached test connection's action support without disconnecting or unsubscribing it. */
+  withdrawActionSupport(sessionId: string) {
+    const connection = this.clients.get(sessionId)
+    if (connection === undefined) throw new Error(`no attached client for ${sessionId}`)
+    this.hub.actions.setCapabilities(connection, this.sender, [], () => {})
   }
 
   /** Stops the hub as a server stop would and starts a new one on the same database. */
@@ -270,7 +342,9 @@ export class AgentHarness {
   }
 
   create(params: { model?: string; agent?: string; reasoningEffort?: string } = {}) {
-    return this.hub.create(params).id
+    const id = this.hub.create(params).id
+    if (this.options.clientActions !== false) this.attachClient(id)
+    return id
   }
 
   /** The directory of the session `id`, its starting working directory. */
@@ -283,7 +357,42 @@ export class AgentHarness {
   }
 
   answer(sessionId: string, requestId: string, answer: "once" | "always" | "reject", message?: string) {
-    this.hub.answer(sessionId, requestId, answer, message, this.sender)
+    const action = this.actionBySubject.get(`${sessionId}:${PERMISSION_ACTION}:${requestId}`)
+    const connection = this.clients.get(sessionId)
+    if (action === undefined || connection === undefined) {
+      this.hub.answer(sessionId, requestId, answer, message, this.sender)
+      return
+    }
+    this.actionBySubject.delete(`${sessionId}:${PERMISSION_ACTION}:${requestId}`)
+    this.hub.actions.complete(connection.id, sessionId, action.actionId, message === undefined ? { answer } : { answer, message })
+  }
+
+  /** The live assignment of a permission request, for exercising broker result validation. */
+  permissionAssignment(sessionId: string, requestId: string) {
+    const action = this.actionBySubject.get(`${sessionId}:${PERMISSION_ACTION}:${requestId}`)
+    const connection = this.clients.get(sessionId)
+    if (action === undefined || connection === undefined) throw new Error(`no assigned permission action for ${requestId}`)
+    return { actionId: action.actionId, connectionId: connection.id }
+  }
+
+  answerQuestion(
+    sessionId: string,
+    questionSetId: string,
+    answers: ReadonlyArray<{ readonly id: string; readonly selection?: string; readonly note?: string }>,
+  ) {
+    const action = this.actionBySubject.get(`${sessionId}:${QUESTIONS_ACTION}:${questionSetId}`)
+    const connection = this.clients.get(sessionId)
+    if (action === undefined || connection === undefined) throw new Error(`no assigned question action for ${questionSetId}`)
+    this.actionBySubject.delete(`${sessionId}:${QUESTIONS_ACTION}:${questionSetId}`)
+    this.hub.actions.complete(connection.id, sessionId, action.actionId, { kind: "answered", answers })
+  }
+
+  replyQuestionByMessage(sessionId: string, questionSetId: string) {
+    const action = this.actionBySubject.get(`${sessionId}:${QUESTIONS_ACTION}:${questionSetId}`)
+    const connection = this.clients.get(sessionId)
+    if (action === undefined || connection === undefined) throw new Error(`no assigned question action for ${questionSetId}`)
+    this.actionBySubject.delete(`${sessionId}:${QUESTIONS_ACTION}:${questionSetId}`)
+    this.hub.actions.complete(connection.id, sessionId, action.actionId, { kind: "repliedByMessage" })
   }
 
   events(sessionId: string): ReadonlyArray<SessionEvent> {

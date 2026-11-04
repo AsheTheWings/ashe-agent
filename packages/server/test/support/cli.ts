@@ -130,13 +130,19 @@ export class Client {
   closed: { code: number } | null = null
   /** Receives every notification; a client without it queues them with responses. */
   onNotification: ((message: any) => void) | null = null
+  /** Receives only this connection's directed execute commands. */
+  onActionExecute: ((params: any) => void) | null = null
+  /** Receives only this connection's directed cancellation commands. */
+  onActionCancel: ((params: any) => void) | null = null
   private nextId = 1
 
   private constructor(private readonly socket: WebSocket) {
     socket.onmessage = (event) => {
       const message = JSON.parse(String(event.data))
-      if (message.id === undefined && this.onNotification !== null) this.onNotification(message)
-      else this.messages.push(message)
+      if (message.id !== undefined) return void this.messages.push(message)
+      if (message.method === "session.event") this.onNotification?.(message)
+      else if (message.method === "action.execute") this.onActionExecute?.(message.params)
+      else if (message.method === "action.cancel") this.onActionCancel?.(message.params)
     }
     socket.onclose = (event) => {
       this.closed = { code: event.code }

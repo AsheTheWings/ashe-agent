@@ -1,7 +1,7 @@
 import { tmpdir } from "node:os"
 import { describe, expect, test } from "bun:test"
 import { Redacted, Schema } from "effect"
-import type { Tool, ToolRun } from "../src/agent/tools.ts"
+import { systemToolClock, type Tool, type ToolRun } from "../src/agent/tools.ts"
 import { McpServers } from "../src/inputs/shapes.ts"
 import { PermissionDenied, type PermissionCheck } from "../src/permissions/rules.ts"
 import type { RequestContext } from "../src/server/websocket.ts"
@@ -37,6 +37,9 @@ const refusingRun = (checks: Array<PermissionCheck>): ToolRun => ({
   onCancel: () => {},
   programCall: () => {},
   offered: () => true,
+  deadline: Number.POSITIVE_INFINITY,
+  clock: systemToolClock,
+  note: () => undefined,
 })
 
 /** One valid call of each built-in tool, by the name models receive. */

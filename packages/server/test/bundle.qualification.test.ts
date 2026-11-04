@@ -7,7 +7,9 @@ import { CliRun, Client, waitFor } from "./support/cli.ts"
 /*
  * Qualifies the bundle `bun run test:qualification` names: the binary it
  * holds runs as the server, migrates, creates an API token, and serves a turn
- * that runs a shell command and reads a docx, against a fake Responses API.
+ * that crosses a steering boundary, completes one exclusive permission action,
+ * times out a shell call before continuing, and reads a docx, against a fake
+ * Responses API.
  */
 
 const bundle = process.env.ASHE_AGENT_QUALIFICATION_BUNDLE
@@ -64,11 +66,11 @@ describe("the bundle", () => {
     expect(readFileSync(join(extracted, "web/revision.txt"), "utf8").trim()).toBe(revision)
   })
 
-  test("its binary migrates, authenticates an API token, and serves a turn with a shell command and a docx read", async () => {
+  test("its binary migrates, authenticates an API token, routes a permission action, crosses a steering boundary, times out a shell call, and reads a docx", async () => {
     const replies = [
-      callReply("1", "shell_exec_command", JSON.stringify({ cmd: "echo qualified-$((6*7))" })),
+      callReply("1", "shell_exec_command", JSON.stringify({ cmd: "sleep 1; echo qualified-$((6*7))" })),
       callReply("2", "file_read", JSON.stringify({ path: docx, limit: 3 })),
-      textReply("3", "done"),
+      textReply("3", "steered done"),
     ]
     const api = Bun.serve({
       hostname: "127.0.0.1",
@@ -79,7 +81,14 @@ describe("the bundle", () => {
         return new Response(sse(reply), { headers: { "content-type": "text/event-stream" } })
       },
     })
-    const run = new CliRun({}, [binary], `http://127.0.0.1:${api.port}/v1`)
+    const run = new CliRun(
+      {
+        ASHE_AGENT_PERMISSION: JSON.stringify({ shell: "ask" }),
+        ASHE_AGENT_TOOL_TIMEOUT_OVERRIDES: JSON.stringify({ shell_exec_command: 300 }),
+      },
+      [binary],
+      `http://127.0.0.1:${api.port}/v1`,
+    )
     try {
       await run.prepare()
       const token = await run.run(["token", "create", "qualification"])
@@ -87,20 +96,43 @@ describe("the bundle", () => {
       const url = await run.serve()
       const client = await Client.connect(url)
       const events: Array<any> = []
+      const actions: Array<any> = []
       client.onNotification = (message) => events.push(message.params.event)
+      client.onActionExecute = (action) => actions.push(action)
       const login = await client.request("auth.authenticate", { token: token.stdout.trim(), protocolVersion: 1 })
       expect(login.result.principal.kind).toBe("token")
       const { result } = await client.request("session.create", {})
       const sessionId = result.session.id
+      await client.request("client.setActions", { actions: ["permission.decide"] })
       await client.request("session.subscribe", { sessionId })
       await client.request("session.input", { sessionId, text: "qualify" })
-      await waitFor("the turn to end", () => (events.some((event) => event.type === "RUN_FINISHED") ? true : undefined), 60_000)
+      const action = await waitFor("the permission action", () => actions[0], 60_000)
+      expect(action.name).toBe("permission.decide")
+      expect(
+        (await client.request("action.complete", { sessionId, actionId: action.actionId, result: { answer: "once" } })).error,
+      ).toBeUndefined()
+      await waitFor("the shell call to start", () =>
+        events.some((event) => event.type === "TOOL_EXECUTION_STARTED") ? true : undefined,
+      )
+      await client.request("session.input", { sessionId, text: "steer" })
+      await waitFor(
+        "both turns to end",
+        () => (events.filter((event) => event.type === "RUN_FINISHED").length >= 2 ? true : undefined),
+        60_000,
+      )
 
       const results = events.filter((event) => event.type === "TOOL_CALL_RESULT")
-      expect(results.map((event) => event.outcome)).toEqual(["success", "success"])
-      expect(results[0].content).toContain("qualified-42")
+      expect(results.map((event) => event.outcome)).toEqual(["failed", "success"])
+      expect(results[0].content).toContain("timed out")
       expect(results[1].content).toContain("Fixture Title")
-      expect(events.at(-1)).toMatchObject({ type: "RUN_FINISHED", outcome: { type: "success" } })
+      expect(events.filter((event) => event.type === "ACTION_ASSIGNED")).toHaveLength(1)
+      expect(events.filter((event) => event.type === "ACTION_SETTLED")).toMatchObject([{ outcome: "completed" }])
+      const starts = events.filter((event) => event.type === "RUN_STARTED")
+      expect(starts.map((event) => event.cause)).toEqual(["user", "user"])
+      expect(starts[1]!.userMessageIds).toHaveLength(1)
+      for (const event of events.filter((candidate) => candidate.type === "RUN_FINISHED")) {
+        expect(event.outcome).toMatchObject({ type: "success" })
+      }
       client.close()
     } finally {
       await run.cleanup()

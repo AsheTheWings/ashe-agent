@@ -461,11 +461,6 @@
     "codeModeLimits": {
       "type": "object",
       "properties": {
-        "wallClockMs": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 9007199254740991
-        },
         "toolCalls": {
           "type": "integer",
           "minimum": 1,
@@ -478,7 +473,29 @@
         }
       },
       "additionalProperties": false,
-      "description": "Optional limits on a code mode program's time, tool calls, and output bytes."
+      "description": "Optional limits on a code mode program's tool calls and output bytes."
+    },
+    "toolTimeoutMs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Elapsed milliseconds one tool invocation may take, including validation, permission waits, and effects."
+    },
+    "toolTimeoutOverrides": {
+      "type": "object",
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "description": "Elapsed-time limits by exact registered tool name; null disables a tool's local limit."
     },
     "exaBaseUrl": {
       "type": "string",

@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 6,
   "scope": "ashe-agent",
   "attributes": {
     "rpc.method": {
@@ -58,6 +58,15 @@
       ],
       "description": "How a turn ended."
     },
+    "ashe_agent.turn.cause": {
+      "type": "string",
+      "values": [
+        "user",
+        "notification",
+        "continuation"
+      ],
+      "description": "What input admitted a turn."
+    },
     "ashe_agent.tool": {
       "type": "string",
       "description": "A tool's registered name: a built-in tool's or a configured MCP server's."
@@ -76,6 +85,10 @@
     "ashe_agent.tool.in_program": {
       "type": "boolean",
       "description": "Whether a code mode program made the call."
+    },
+    "ashe_agent.tool.timed_out": {
+      "type": "boolean",
+      "description": "Whether the call exhausted its execution deadline."
     },
     "ashe_agent.mcp.server": {
       "type": "string",
@@ -125,6 +138,21 @@
         "canceled"
       ],
       "description": "How a question wait ended: answered, ended by a steered user message, or canceled with its turn."
+    },
+    "ashe_agent.action.name": {
+      "type": "string",
+      "description": "A declared client action's name."
+    },
+    "ashe_agent.action.outcome": {
+      "type": "string",
+      "values": [
+        "completed",
+        "canceled",
+        "timedOut",
+        "disconnected",
+        "failed"
+      ],
+      "description": "How an assigned client action settled."
     },
     "ashe_agent.checkpoint_window.cause": {
       "type": "string",
@@ -188,10 +216,18 @@
         "error.type"
       ]
     },
+    "ashe_agent.turn_admission": {
+      "description": "Admitting one turn's inputs and recording its immutable membership.",
+      "attributes": [
+        "ashe_agent.turn.cause",
+        "error.type"
+      ]
+    },
     "ashe_agent.turn": {
       "description": "One turn, from its start to its end.",
       "attributes": [
         "ashe_agent.model",
+        "ashe_agent.turn.cause",
         "ashe_agent.turn.status",
         "error.type"
       ]
@@ -208,7 +244,17 @@
       "attributes": [
         "ashe_agent.tool",
         "ashe_agent.tool.outcome",
-        "ashe_agent.tool.in_program"
+        "ashe_agent.tool.in_program",
+        "ashe_agent.tool.timed_out",
+        "error.type"
+      ]
+    },
+    "ashe_agent.action": {
+      "description": "One client action, from assignment to settlement.",
+      "attributes": [
+        "ashe_agent.action.name",
+        "ashe_agent.action.outcome",
+        "error.type"
       ]
     },
     "ashe_agent.context_turn": {
@@ -248,7 +294,8 @@
     "ashe_agent.question_wait": {
       "description": "One `context_ask_question` call waiting for its answer.",
       "attributes": [
-        "ashe_agent.question.outcome"
+        "ashe_agent.question.outcome",
+        "error.type"
       ]
     },
     "ashe_agent.checkpoint_window_construction": {
@@ -329,7 +376,17 @@
       "attributes": [
         "ashe_agent.tool",
         "ashe_agent.tool.outcome",
-        "ashe_agent.tool.in_program"
+        "ashe_agent.tool.in_program",
+        "ashe_agent.tool.timed_out"
+      ]
+    },
+    "ashe_agent.action.duration": {
+      "kind": "histogram",
+      "unit": "s",
+      "description": "Client action duration, from assignment to settlement.",
+      "attributes": [
+        "ashe_agent.action.name",
+        "ashe_agent.action.outcome"
       ]
     },
     "ashe_agent.clearing.freed": {

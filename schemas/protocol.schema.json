@@ -203,6 +203,96 @@
             "method": {
               "type": "string",
               "enum": [
+                "actions.list"
+              ]
+            },
+            "params": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "client.setActions"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "actions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "required": [
+                "actions"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
                 "models.list"
               ]
             },
@@ -535,6 +625,111 @@
             "method": {
               "type": "string",
               "enum": [
+                "action.complete"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "actionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "result": {}
+              },
+              "required": [
+                "sessionId",
+                "actionId",
+                "result"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "session.resume"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "sessionId"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
                 "session.cancel"
               ]
             },
@@ -726,148 +921,6 @@
             "params"
           ],
           "additionalProperties": true
-        },
-        {
-          "type": "object",
-          "properties": {
-            "jsonrpc": {
-              "type": "string",
-              "enum": [
-                "2.0"
-              ]
-            },
-            "id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "integer",
-                  "minimum": -9007199254740991,
-                  "maximum": 9007199254740991
-                }
-              ]
-            },
-            "method": {
-              "type": "string",
-              "enum": [
-                "session.answerQuestion"
-              ]
-            },
-            "params": {
-              "type": "object",
-              "properties": {
-                "sessionId": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "questionSetId": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "answers": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "id": {
-                        "type": "string"
-                      },
-                      "selection": {
-                        "type": "string"
-                      },
-                      "note": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "id"
-                    ],
-                    "additionalProperties": true
-                  }
-                }
-              },
-              "required": [
-                "sessionId",
-                "questionSetId",
-                "answers"
-              ],
-              "additionalProperties": true
-            }
-          },
-          "required": [
-            "jsonrpc",
-            "id",
-            "method",
-            "params"
-          ],
-          "additionalProperties": true
-        },
-        {
-          "type": "object",
-          "properties": {
-            "jsonrpc": {
-              "type": "string",
-              "enum": [
-                "2.0"
-              ]
-            },
-            "id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "integer",
-                  "minimum": -9007199254740991,
-                  "maximum": 9007199254740991
-                }
-              ]
-            },
-            "method": {
-              "type": "string",
-              "enum": [
-                "permission.answer"
-              ]
-            },
-            "params": {
-              "type": "object",
-              "properties": {
-                "sessionId": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "requestId": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "answer": {
-                  "type": "string",
-                  "enum": [
-                    "once",
-                    "always",
-                    "reject"
-                  ]
-                },
-                "message": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "sessionId",
-                "requestId",
-                "answer"
-              ],
-              "additionalProperties": true
-            }
-          },
-          "required": [
-            "jsonrpc",
-            "id",
-            "method",
-            "params"
-          ],
-          "additionalProperties": true
         }
       ]
     },
@@ -1042,6 +1095,73 @@
                             "type": "string",
                             "minLength": 1
                           }
+                        },
+                        "membership": {
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "system"
+                                    ]
+                                  },
+                                  "inputId": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "inputId"
+                                ],
+                                "additionalProperties": true
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "developer"
+                                    ]
+                                  },
+                                  "inputId": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "inputId"
+                                ],
+                                "additionalProperties": true
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "user"
+                                    ]
+                                  },
+                                  "inputId": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "inputId"
+                                ],
+                                "additionalProperties": true
+                              }
+                            ]
+                          }
                         }
                       },
                       "required": [
@@ -1050,7 +1170,8 @@
                         "runId",
                         "model",
                         "cause",
-                        "userMessageIds"
+                        "userMessageIds",
+                        "membership"
                       ],
                       "additionalProperties": true
                     },
@@ -1860,12 +1981,20 @@
                           "type": "integer",
                           "minimum": 1,
                           "maximum": 9007199254740991
+                        },
+                        "clearedInputIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          }
                         }
                       },
                       "required": [
                         "type",
                         "runId",
-                        "firstRemovedSeq"
+                        "firstRemovedSeq",
+                        "clearedInputIds"
                       ],
                       "additionalProperties": true
                     },
@@ -2542,6 +2671,67 @@
                         "reason"
                       ],
                       "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "ACTION_ASSIGNED"
+                          ]
+                        },
+                        "actionId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "actionId",
+                        "name"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "ACTION_SETTLED"
+                          ]
+                        },
+                        "actionId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "outcome": {
+                          "type": "string",
+                          "enum": [
+                            "completed",
+                            "canceled",
+                            "timedOut",
+                            "disconnected",
+                            "failed"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "actionId",
+                        "name",
+                        "outcome"
+                      ],
+                      "additionalProperties": true
                     }
                   ]
                 }
@@ -2551,6 +2741,105 @@
                 "seq",
                 "timestamp",
                 "event"
+              ],
+              "additionalProperties": true
+            },
+            "id": {
+              "not": {}
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "action.execute"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "actionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "arguments": {}
+              },
+              "required": [
+                "actionId",
+                "sessionId",
+                "name",
+                "arguments"
+              ],
+              "additionalProperties": true
+            },
+            "id": {
+              "not": {}
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "action.cancel"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "actionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "actionId",
+                "sessionId",
+                "reason"
               ],
               "additionalProperties": true
             },
@@ -2604,6 +2893,73 @@
                 "type": "string",
                 "minLength": 1
               }
+            },
+            "membership": {
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "system"
+                        ]
+                      },
+                      "inputId": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "inputId"
+                    ],
+                    "additionalProperties": true
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "developer"
+                        ]
+                      },
+                      "inputId": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "inputId"
+                    ],
+                    "additionalProperties": true
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "user"
+                        ]
+                      },
+                      "inputId": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "inputId"
+                    ],
+                    "additionalProperties": true
+                  }
+                ]
+              }
             }
           },
           "required": [
@@ -2612,7 +2968,8 @@
             "runId",
             "model",
             "cause",
-            "userMessageIds"
+            "userMessageIds",
+            "membership"
           ],
           "additionalProperties": true
         },
@@ -3422,12 +3779,20 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 9007199254740991
+            },
+            "clearedInputIds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             }
           },
           "required": [
             "type",
             "runId",
-            "firstRemovedSeq"
+            "firstRemovedSeq",
+            "clearedInputIds"
           ],
           "additionalProperties": true
         },
@@ -4104,6 +4469,67 @@
             "reason"
           ],
           "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "ACTION_ASSIGNED"
+              ]
+            },
+            "actionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "actionId",
+            "name"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "ACTION_SETTLED"
+              ]
+            },
+            "actionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "completed",
+                "canceled",
+                "timedOut",
+                "disconnected",
+                "failed"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "actionId",
+            "name",
+            "outcome"
+          ],
+          "additionalProperties": true
         }
       ]
     },
@@ -4375,6 +4801,65 @@
         "principal"
       ],
       "additionalProperties": true
+    },
+    "actions.list.params": {
+      "type": "object"
+    },
+    "actions.list.result": {
+      "type": "object",
+      "properties": {
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              },
+              "input": {
+                "type": "object"
+              },
+              "output": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "name",
+              "description",
+              "input",
+              "output"
+            ],
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": [
+        "actions"
+      ],
+      "additionalProperties": true
+    },
+    "client.setActions.params": {
+      "type": "object",
+      "properties": {
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "actions"
+      ],
+      "additionalProperties": true
+    },
+    "client.setActions.result": {
+      "type": "object"
     },
     "models.list.params": {
       "type": "object"
@@ -4872,6 +5357,45 @@
       ],
       "additionalProperties": true
     },
+    "action.complete.params": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "actionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "result": {}
+      },
+      "required": [
+        "sessionId",
+        "actionId",
+        "result"
+      ],
+      "additionalProperties": true
+    },
+    "action.complete.result": {
+      "type": "object"
+    },
+    "session.resume.params": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "additionalProperties": true
+    },
+    "session.resume.result": {
+      "type": "object"
+    },
     "session.cancel.params": {
       "type": "object",
       "properties": {
@@ -5020,82 +5544,6 @@
       "additionalProperties": true
     },
     "session.rewind.result": {
-      "type": "object"
-    },
-    "session.answerQuestion.params": {
-      "type": "object",
-      "properties": {
-        "sessionId": {
-          "type": "string",
-          "minLength": 1
-        },
-        "questionSetId": {
-          "type": "string",
-          "minLength": 1
-        },
-        "answers": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "selection": {
-                "type": "string"
-              },
-              "note": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "id"
-            ],
-            "additionalProperties": true
-          }
-        }
-      },
-      "required": [
-        "sessionId",
-        "questionSetId",
-        "answers"
-      ],
-      "additionalProperties": true
-    },
-    "session.answerQuestion.result": {
-      "type": "object"
-    },
-    "permission.answer.params": {
-      "type": "object",
-      "properties": {
-        "sessionId": {
-          "type": "string",
-          "minLength": 1
-        },
-        "requestId": {
-          "type": "string",
-          "minLength": 1
-        },
-        "answer": {
-          "type": "string",
-          "enum": [
-            "once",
-            "always",
-            "reject"
-          ]
-        },
-        "message": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "sessionId",
-        "requestId",
-        "answer"
-      ],
-      "additionalProperties": true
-    },
-    "permission.answer.result": {
       "type": "object"
     }
   }

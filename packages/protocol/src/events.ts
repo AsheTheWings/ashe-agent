@@ -14,14 +14,29 @@ const event = <const T extends string, F extends Schema.Struct.Fields>(type: T, 
 /** What started a turn: an input holding a user message, a continuation, or another notification component. */
 export const TurnCause = Schema.Literals(["user", "continuation", "notification"])
 
+/**
+ * One content identity admitted in a UserTurn, in render order. The system
+ * entry names the checkpoint window that supplies the harness content.
+ */
+export const TurnInput = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("system"), inputId: Id }),
+  Schema.Struct({ kind: Schema.Literal("developer"), inputId: Id }),
+  Schema.Struct({ kind: Schema.Literal("user"), inputId: Id }),
+])
+
+export type TurnInput = typeof TurnInput.Type
+
 export const RunStarted = event("RUN_STARTED", {
   threadId: Id,
+  /** The stable identifier of this UserTurn and its following AgentTurn. */
   runId: Id,
   /** The model the run uses for all of its model calls. */
   model: Id,
   cause: TurnCause,
   /** The user messages the run's starting input holds, none or several, in order. */
   userMessageIds: Schema.Array(Id),
+  /** The full ordered membership of the admitted UserTurn. */
+  membership: Schema.Array(TurnInput),
 })
 
 export const RunFinished = event("RUN_FINISHED", {
@@ -136,11 +151,7 @@ export const InputWaiting = event("INPUT_WAITING", {
   sender: Sender,
 })
 
-/**
- * A user message entering the conversation: starting a turn or joining the
- * running one at a step boundary. Inputs of each mode enter in order of
- * arrival.
- */
+/** A user message entering an admitted UserTurn. Inputs of each mode enter in arrival order. */
 export const InputReceived = event("INPUT_RECEIVED", {
   inputId: Id,
   text: Schema.String,
@@ -162,6 +173,8 @@ export const ModelChanged = event("MODEL_CHANGED", {
 export const SessionRewound = event("SESSION_REWOUND", {
   runId: Id,
   firstRemovedSeq: Seq,
+  /** Pending deliveries cleared before the reconstructed input was stored. */
+  clearedInputIds: Schema.Array(Id),
 })
 
 /**
@@ -315,6 +328,14 @@ export const PermissionWithdrawn = event("PERMISSION_WITHDRAWN", {
   reason: Schema.Literals(["canceled", "restart"]),
 })
 
+/** A live action was assigned to one connection; execution authority itself is not replayable. */
+export const ActionAssigned = event("ACTION_ASSIGNED", { actionId: Id, name: Id })
+
+export const ActionOutcome = Schema.Literals(["completed", "canceled", "timedOut", "disconnected", "failed"])
+
+/** A live action reached its one terminal outcome, observed by every session subscriber. */
+export const ActionSettled = event("ACTION_SETTLED", { actionId: Id, name: Id, outcome: ActionOutcome })
+
 export const SessionEventBody = Schema.Union([
   RunStarted,
   RunFinished,
@@ -353,6 +374,8 @@ export const SessionEventBody = Schema.Union([
   PermissionRequested,
   PermissionResolved,
   PermissionWithdrawn,
+  ActionAssigned,
+  ActionSettled,
 ])
 
 export type SessionEventBody = typeof SessionEventBody.Type

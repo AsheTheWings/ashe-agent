@@ -3,6 +3,7 @@ import type { InputMode } from "@ashe-agent/protocol"
 import { useMemo, useState } from "react"
 import { Thread } from "@/components/assistant-ui/elements/thread.aui"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
@@ -87,6 +88,7 @@ export const SessionPane = () => {
     state.activeSessionId === null ? undefined : state.views[state.activeSessionId],
   )
   const sessionId = useClientState((state) => state.activeSessionId)
+  const connected = useClientState((state) => state.status === "connected")
   const [queued, setQueued] = useState(false)
   const mode: InputMode | undefined = queued ? "queue" : undefined
   const runtime = useSessionRuntime(client, mode)
@@ -111,6 +113,11 @@ export const SessionPane = () => {
         </span>
         <ModelSwitch />
         <EffortSwitch />
+        {view !== undefined && view.runId === null && (
+          <Button size="sm" variant="outline" disabled={!connected} onClick={() => void client.resumeSession().catch(() => {})}>
+            Continue
+          </Button>
+        )}
       </header>
       <PermissionQueue />
       <div className="min-h-0 flex-1">

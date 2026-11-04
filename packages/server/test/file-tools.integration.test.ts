@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { SessionEvent } from "@ashe-agent/protocol"
-import type { Tool, ToolRun } from "../src/agent/tools.ts"
+import { systemToolClock, type Tool, type ToolRun } from "../src/agent/tools.ts"
 import { fileTools } from "../src/tools/file/index.ts"
 import { waitFor } from "./support/cli.ts"
 import { AgentHarness, agentModels, callTools, messageText, responsesInput, say } from "./support/agent.ts"
@@ -41,6 +41,9 @@ const call = (tool: Tool, cwd: string, args: unknown, imageInput = false, author
     onCancel: () => {},
     programCall: () => {},
     offered: () => true,
+    deadline: Number.POSITIVE_INFINITY,
+    clock: systemToolClock,
+    note: () => undefined,
   }
   return tool.run(args, run)
 }
@@ -224,6 +227,9 @@ describe("file tools in a turn", () => {
         onCancel: () => {},
         programCall: () => {},
         offered: () => true,
+        deadline: Number.POSITIVE_INFINITY,
+        clock: systemToolClock,
+        note: () => undefined,
       }
       const update = "*** Begin Patch\n*** Update File: link/../victim.txt\n@@\n-real victim\n+patched\n*** Delete File: link/alias.txt\n*** End Patch"
       expect(await patch.run({ patch: update }, run)).toMatchObject({ outcome: "success" })

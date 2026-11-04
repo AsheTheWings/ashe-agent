@@ -21,7 +21,7 @@ const FIELDS: Record<EntryItem["entry"]["kind"], ReadonlyArray<string>> = {
 
 const BLOCK_TEXT = new Set(["compaction", "handoff"])
 
-/** The most characters a note holds, as `session.answerQuestion` counts them: in code points, once trimmed. */
+/** The most characters a question note holds: in code points, once trimmed. */
 const NOTE_MAX = 2_000
 const noteLength = (note: string) => [...note.trim()].length
 
@@ -194,13 +194,24 @@ const SettledQuestions = ({ item }: { item: QuestionsItem }) => (
   </dl>
 )
 
-/** A question set: its feedback first, then the open form or the settled answers. */
-const Questions = ({ item }: { item: QuestionsItem }) => (
-  <section aria-label="Questions" className="bg-muted/40 flex flex-col gap-3 rounded-lg border px-3 py-2 text-start">
-    {item.feedback !== null && <p className="text-foreground whitespace-pre-wrap">{item.feedback}</p>}
-    {item.open ? <OpenQuestions item={item} /> : <SettledQuestions item={item} />}
-  </section>
-)
+/** A question set: its feedback first, then the open form, a read-only wait, or the settled answers. */
+const Questions = ({ item }: { item: QuestionsItem }) => {
+  const owned = useClientState((state) => state.owned.questions.includes(item.id))
+  return (
+    <section aria-label="Questions" className="bg-muted/40 flex flex-col gap-3 rounded-lg border px-3 py-2 text-start">
+      {item.feedback !== null && <p className="text-foreground whitespace-pre-wrap">{item.feedback}</p>}
+      {item.open ? (
+        owned ? (
+          <OpenQuestions item={item} />
+        ) : (
+          <p className="text-muted-foreground">Another connected client received this question set and is answering it.</p>
+        )
+      ) : (
+        <SettledQuestions item={item} />
+      )}
+    </section>
+  )
+}
 
 const SessionItem = ({ item }: { item: Item }) => {
   switch (item.kind) {

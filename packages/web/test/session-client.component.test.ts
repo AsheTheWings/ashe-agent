@@ -47,6 +47,16 @@ class FakeSocket {
     const params: SessionEvent = { sessionId: SESSION, seq, timestamp: START + seq, event }
     this.handlers.onMessage(JSON.stringify({ jsonrpc: "2.0", method: "session.event", params }))
   }
+  pushAction(actionId: string, sessionId: string, name: string, args: unknown) {
+    this.handlers.onMessage(
+      JSON.stringify({ jsonrpc: "2.0", method: "action.execute", params: { actionId, sessionId, name, arguments: args } }),
+    )
+  }
+  pushActionCancel(actionId: string, sessionId: string, reason: string) {
+    this.handlers.onMessage(
+      JSON.stringify({ jsonrpc: "2.0", method: "action.cancel", params: { actionId, sessionId, reason } }),
+    )
+  }
   /** The server drops the connection. */
   drop() {
     this.closed = true
@@ -60,6 +70,7 @@ class FakeSocket {
 /** A scripted server behind the socket port, issuing numbered token pairs. */
 class FakeServer {
   readonly sockets: Array<FakeSocket> = []
+  failInput = false
   /** Methods whose answers wait in `pending` until the test delivers them. */
   readonly held = new Set<string>()
   readonly pending: Array<() => void> = []
@@ -89,6 +100,30 @@ class FakeServer {
         return { result: { sessions: [summary] } }
       case "session.subscribe":
         return { result: { session: summary } }
+      case "actions.list":
+        return {
+          result: {
+            actions: ["questions.answer", "permission.decide"].map((name) => ({
+              name,
+              description: name,
+              input: { type: "object" },
+              output: { type: "object" },
+            })),
+          },
+        }
+      case "client.setActions":
+        return { result: {} }
+      case "action.complete":
+        return { result: {} }
+      case "session.input":
+        return this.failInput
+          ? { error: { code: ErrorCode.conflict, message: "input refused" } }
+          : { result: { inputId: `input-${this.issued++}` } }
+      case "session.resume":
+      case "session.rewind":
+        return { result: {} }
+      case "session.fork":
+        return { result: { session: { ...summary, id: "forked" } } }
       case "session.answerQuestion":
         return { result: {} }
       default:
@@ -168,6 +203,7 @@ const signedIn = async () => {
   setFragment("#signIn=code")
   client.resume()
   await until("models", () => client.store.getState().models.length > 0)
+  await until("client action support", () => server.last().methods().includes("client.setActions"))
   return { server, client, storage, fire, timers }
 }
 
@@ -187,7 +223,7 @@ const sender = principal
 const firstTurn: Array<[number, SessionEventBody]> = [
   [1, created],
   [2, { type: "INPUT_RECEIVED", inputId: "i1", text: "greet me", mode: "steer", sender }],
-  [3, { type: "RUN_STARTED", threadId: SESSION, runId: "r1", model: "alpha", cause: "user", userMessageIds: ["i1"] }],
+  [3, { type: "RUN_STARTED", threadId: SESSION, runId: "r1", model: "alpha", cause: "user", userMessageIds: ["i1"], membership: [{ kind: "system", inputId: "system:1" }, { kind: "user", inputId: "i1" }] }],
   [4, { type: "TEXT_MESSAGE_START", messageId: "m1", role: "assistant" }],
   [5, { type: "TEXT_MESSAGE_CONTENT", messageId: "m1", delta: "Hel" }],
   [6, { type: "TEXT_MESSAGE_CONTENT", messageId: "m1", delta: "lo" }],
@@ -206,7 +242,7 @@ const texts = (current: SessionView) =>
   current.items.map((item) => {
     switch (item.kind) {
       case "user":
-        return `user:${item.text}`
+        return `user:${item.messages.map((message) => message.text).join("|")}`
       case "assistant":
         return `assistant:${item.parts.map((part) => (part.type === "tool" ? part.name : part.text)).join("|")}:${item.status}`
       case "notice":
@@ -232,7 +268,14 @@ describe("session client", () => {
     expect(state.serverUrl).toBe(SERVER_URL)
     expect(storage.entries.get(storageKeys.refreshToken(SERVER_URL))).toBe("refresh-1")
     expect([...storage.entries.values()]).not.toContain("access-1")
-    expect(server.last().methods()).toEqual(["auth.exchange", "models.list", "agents.list", "session.list"])
+    expect(server.last().methods()).toEqual([
+      "auth.exchange",
+      "models.list",
+      "agents.list",
+      "session.list",
+      "actions.list",
+      "client.setActions",
+    ])
   })
 
   test("streamed deltas and a replayed range build the conversation, and a permission request stays until resolved", async () => {
@@ -276,19 +319,110 @@ describe("session client", () => {
     expect(shown(view(client))).toEqual({ approvals: [], queued: [] })
   })
 
+  test("directed actions are owned only by this connection and explicit controls use their protocol methods", async () => {
+    const { server, client } = await signedIn()
+    await client.open(SESSION)
+    const socket = server.last()
+    socket.pushAction("a-p", SESSION, "permission.decide", {
+      requestId: "p1",
+      permission: "shell",
+      subjects: ["ls"],
+      patterns: ["ls"],
+    })
+    expect(client.store.getState().owned.permissions).toEqual(["p1"])
+    socket.pushActionCancel("a-p", SESSION, "the turn ended")
+    expect(client.store.getState().owned.permissions).toEqual([])
+
+    socket.pushAction("a-q", SESSION, "questions.answer", {
+      questionSetId: "q1",
+      questions: [
+        {
+          id: "one",
+          header: "One",
+          question: "Pick?",
+          options: [
+            { label: "A", description: "a" },
+            { label: "B", description: "b" },
+          ],
+        },
+      ],
+    })
+    expect(client.store.getState().owned.questions).toEqual(["q1"])
+    await client.answerQuestion("q1", [{ id: "one", selection: "A" }])
+    expect(socket.requests.at(-1)).toMatchObject({ method: "action.complete", params: { actionId: "a-q" } })
+    expect(client.store.getState().owned.questions).toEqual([])
+
+    await client.resumeSession()
+    expect(socket.requests.at(-1)).toMatchObject({ method: "session.resume", params: { sessionId: SESSION } })
+    await client.rewind("r1")
+    expect(socket.requests.at(-1)).toMatchObject({ method: "session.rewind", params: { sessionId: SESSION, runId: "r1" } })
+  })
+
+  test("queued and failed sends leave questions open, reconnect clears ownership, and fork uses its adapter", async () => {
+    const { server, client } = await signedIn()
+    await client.open(SESSION)
+    const socket = server.last()
+    const question = {
+      questionSetId: "q1",
+      questions: [
+        {
+          id: "one",
+          header: "One",
+          question: "Pick?",
+          options: [
+            { label: "A", description: "a" },
+            { label: "B", description: "b" },
+          ],
+        },
+      ],
+    }
+    socket.pushAction("a-q1", SESSION, "questions.answer", question)
+    await client.send("queued", "queue")
+    expect(socket.requests.at(-1)?.method).toBe("session.input")
+    expect(client.store.getState().owned.questions).toEqual(["q1"])
+
+    await client.send("steer")
+    expect(socket.requests.slice(-2).map((request) => request.method)).toEqual(["session.input", "action.complete"])
+    expect(client.store.getState().owned.questions).toEqual([])
+
+    socket.pushAction("a-q2", SESSION, "questions.answer", { ...question, questionSetId: "q2" })
+    server.failInput = true
+    await expect(client.send("refused")).rejects.toThrow()
+    expect(client.store.getState().owned.questions).toEqual(["q2"])
+    expect(
+      socket.requests.some(
+        (request) => request.method === "action.complete" && request.params.actionId === "a-q2",
+      ),
+    ).toBe(false)
+    server.failInput = false
+
+    const forked = await client.fork("r1")
+    expect(forked.id).toBe("forked")
+    expect(socket.requests.some((request) => request.method === "session.fork" && request.params.runId === "r1")).toBe(true)
+
+    socket.pushAction("a-p1", SESSION, "permission.decide", {
+      requestId: "p1",
+      permission: "shell",
+      subjects: ["ls"],
+      patterns: ["ls"],
+    })
+    socket.drop()
+    expect(client.store.getState().owned).toEqual({ questions: [], permissions: [] })
+  })
+
   test("a rewound event applied live removes its range before later events apply", async () => {
     const { server, client } = await signedIn()
     await client.open(SESSION)
     const socket = server.last()
     for (const [seq, event] of firstTurn) socket.push(seq, event)
     socket.push(7, permission)
-    socket.push(8, { type: "SESSION_REWOUND", runId: "r1", firstRemovedSeq: 2 })
+    socket.push(8, { type: "SESSION_REWOUND", runId: "r1", firstRemovedSeq: 2, clearedInputIds: [] })
     expect(texts(view(client))).toEqual([])
     expect(view(client).permissions).toEqual([])
     expect(view(client).runId).toBeNull()
     expect(view(client).lastSeq).toBe(8)
     socket.push(9, { type: "INPUT_RECEIVED", inputId: "i2", text: "greet me again", mode: "steer", sender })
-    socket.push(10, { type: "RUN_STARTED", threadId: SESSION, runId: "r2", model: "alpha", cause: "user", userMessageIds: ["i2"] })
+    socket.push(10, { type: "RUN_STARTED", threadId: SESSION, runId: "r2", model: "alpha", cause: "user", userMessageIds: ["i2"], membership: [{ kind: "system", inputId: "system:1" }, { kind: "user", inputId: "i2" }] })
     expect(texts(view(client))).toEqual(["user:greet me again"])
     expect(view(client).items[0]).toMatchObject({ kind: "user", runId: "r2" })
   })
@@ -303,11 +437,19 @@ describe("session client", () => {
     fire(1_000)
     await until("the resubscription", () => server.last() !== first && server.last().methods().includes("session.subscribe"))
     const second = server.last()
-    expect(second.methods()).toEqual(["auth.authenticate", "models.list", "agents.list", "session.list", "session.subscribe"])
+    expect(second.methods()).toEqual([
+      "auth.authenticate",
+      "models.list",
+      "agents.list",
+      "session.list",
+      "actions.list",
+      "client.setActions",
+      "session.subscribe",
+    ])
     expect(second.requests.at(-1)!.params).toEqual({ sessionId: SESSION, afterSeq: 4 })
     // The replay after 4: the rest of the first turn, the rewind of 2 on at 7, then a new input.
     for (const [seq, event] of firstTurn.slice(4)) second.push(seq, event)
-    second.push(7, { type: "SESSION_REWOUND", runId: "r1", firstRemovedSeq: 2 })
+    second.push(7, { type: "SESSION_REWOUND", runId: "r1", firstRemovedSeq: 2, clearedInputIds: [] })
     second.push(8, { type: "INPUT_RECEIVED", inputId: "i2", text: "greet me again", mode: "steer", sender })
     expect(texts(view(client))).toEqual(["user:greet me again"])
     expect(view(client).lastSeq).toBe(8)
@@ -365,7 +507,7 @@ describe("session client", () => {
       created,
       { type: "CHECKPOINT_WINDOW_SEEDED", runId: null, window: 1, components: [] },
       { type: "INPUT_RECEIVED", inputId: "i1", text: "start", mode: "steer", sender },
-      { type: "RUN_STARTED", threadId: SESSION, runId: "r1", model: "alpha", cause: "user", userMessageIds: ["i1"] },
+      { type: "RUN_STARTED", threadId: SESSION, runId: "r1", model: "alpha", cause: "user", userMessageIds: ["i1"], membership: [{ kind: "system", inputId: "system:1" }, { kind: "user", inputId: "i1" }] },
       entry(1, "open", { Text: "Write the parser" }),
       entry(2, "compaction", { Text: "Requests:\n- old" }),
       { type: "TIMELINE_ENTRY_REPLACED", runId: "r1", number: 2, text: "Requests:\n- new" },
@@ -373,14 +515,19 @@ describe("session client", () => {
       { type: "QUESTIONS_ASKED", runId: "r1", toolCallId: "tq", questionSetId: "qs1", feedback: "Noted.", questions: [question] },
     ]
     events.forEach((event, index) => socket.push(index + 1, event))
+    socket.pushAction("a-q", SESSION, "questions.answer", { questionSetId: "qs1", feedback: "Noted.", questions: [question] })
     expect(texts(view(client))).toEqual(["user:start", "entry:#1 open", "entry:#2 compaction", "assistant:context_ask_question:running", "questions:open"])
     expect(view(client).items.find((item) => item.kind === "entry" && item.entry.number === 2)).toMatchObject({ entry: { fields: { Text: "Requests:\n- new" } } })
     expect(view(client).items.at(-1)).toMatchObject({ kind: "questions", feedback: "Noted.", questions: [question] })
 
     await client.answerQuestion("qs1", [{ id: "q1", selection: "SQLite", note: "Keep it local." }])
     expect(socket.requests.at(-1)).toMatchObject({
-      method: "session.answerQuestion",
-      params: { sessionId: SESSION, questionSetId: "qs1", answers: [{ id: "q1", selection: "SQLite", note: "Keep it local." }] },
+      method: "action.complete",
+      params: {
+        sessionId: SESSION,
+        actionId: "a-q",
+        result: { kind: "answered", answers: [{ id: "q1", selection: "SQLite", note: "Keep it local." }] },
+      },
     })
     const later: Array<SessionEventBody> = [
       { type: "QUESTIONS_ANSWERED", questionSetId: "qs1", answers: [{ id: "q1", selection: "SQLite", note: "Keep it local." }], sender },
@@ -425,14 +572,14 @@ describe("session client", () => {
       developer("r2", "Continuation"),
       { type: "INPUT_RECEIVED", inputId: "i2", text: "held one", mode: "steer", sender },
       { type: "INPUT_RECEIVED", inputId: "i3", text: "held two", mode: "steer", sender },
-      { type: "RUN_STARTED", threadId: SESSION, runId: "r2", model: "alpha", cause: "continuation", userMessageIds: ["i2", "i3"] },
+      { type: "RUN_STARTED", threadId: SESSION, runId: "r2", model: "alpha", cause: "continuation", userMessageIds: ["i2", "i3"], membership: [{ kind: "system", inputId: "system:1" }, { kind: "developer", inputId: "d1" }, { kind: "user", inputId: "i2" }, { kind: "user", inputId: "i3" }] },
       { type: "RUN_FINISHED", threadId: SESSION, runId: "r2", outcome: { type: "success" } },
     )
     expect(pending()).toEqual([])
-    expect(texts(view(client)).slice(11)).toEqual(["mark:window", "developer:Continuation", "user:held one", "user:held two", "mark:continuation"])
+    expect(texts(view(client)).slice(11)).toEqual(["mark:window", "developer:Continuation", "user:held one|held two", "mark:continuation"])
 
     // A rerun without an edit holds both messages again, under new ids, until both are received.
-    push({ type: "SESSION_REWOUND", runId: "r2", firstRemovedSeq: continuationStart })
+    push({ type: "SESSION_REWOUND", runId: "r2", firstRemovedSeq: continuationStart, clearedInputIds: [] })
     push({ type: "INPUT_WAITING", inputId: "i4", text: "held one", mode: "steer", sender }, { type: "INPUT_WAITING", inputId: "i5", text: "held two", mode: "steer", sender })
     expect(view(client).pending.map((input) => input.inputId)).toEqual(["i4", "i5"])
     expect(texts(view(client)).slice(11)).toEqual(["mark:window"])
@@ -441,13 +588,13 @@ describe("session client", () => {
     expect(view(client).pending.map((input) => input.inputId)).toEqual(["i5"])
     push(
       { type: "INPUT_RECEIVED", inputId: "i5", text: "held two", mode: "steer", sender },
-      { type: "RUN_STARTED", threadId: SESSION, runId: "r3", model: "alpha", cause: "continuation", userMessageIds: ["i4", "i5"] },
+      { type: "RUN_STARTED", threadId: SESSION, runId: "r3", model: "alpha", cause: "continuation", userMessageIds: ["i4", "i5"], membership: [{ kind: "system", inputId: "system:1" }, { kind: "user", inputId: "i4" }, { kind: "user", inputId: "i5" }] },
       { type: "RUN_FINISHED", threadId: SESSION, runId: "r3", outcome: { type: "success" } },
     )
     expect(pending()).toEqual([])
 
     // An edit at the continuation turn leaves only the edit pending, and no message an earlier rewind removed returns.
-    push({ type: "SESSION_REWOUND", runId: "r3", firstRemovedSeq: rerunStart })
+    push({ type: "SESSION_REWOUND", runId: "r3", firstRemovedSeq: rerunStart, clearedInputIds: [] })
     push({ type: "INPUT_WAITING", inputId: "i6", text: "edited", mode: "steer", sender })
     expect(view(client).pending.map((input) => input.inputId)).toEqual(["i6"])
     expect(texts(view(client)).slice(0, 11).at(-1)).toBe("mark:clearing")

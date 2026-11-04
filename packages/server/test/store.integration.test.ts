@@ -75,24 +75,33 @@ describe("migrations on a real SQLite file", () => {
           VALUES ('kept', 'k1', 1, 'test/alpha', 'finished', 1, 1)`,
       )
       db.run("INSERT INTO checkpoint_windows (session_id, position, run_id, harness_instructions, created_at) VALUES ('kept', 1, NULL, 'H', 1)")
+      db.run("INSERT INTO api_tokens VALUES ('synthetic-token', 'test', 'synthetic-hash', 1, NULL, NULL)")
+      const tokenBefore = db.query("SELECT * FROM api_tokens").all()
       expect(applyMigrations(db, migrations).map((migration) => migration.name)).toEqual(
         migrations.slice(beforeCleanup.length).map((migration) => migration.name),
       )
       for (const table of ["events", "turns", "session_grants", "waiting_input", "checkpoint_windows"]) {
         const ids = db.query<{ session_id: string }, []>(`SELECT DISTINCT session_id FROM ${table}`).all().map((row) => row.session_id)
-        expect([table, ids]).toEqual([table, ["kept"]])
+        expect([table, ids]).toEqual([table, []])
       }
-      expect(db.query<{ id: string }, []>("SELECT id FROM sessions").all().map((row) => row.id)).toEqual(["kept"])
+      expect(db.query<{ id: string }, []>("SELECT id FROM sessions").all()).toEqual([])
+      expect(db.query("SELECT * FROM api_tokens").all()).toEqual(tokenBefore)
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([])
       expect(readLedger(db).map((entry) => entry.name)).toEqual(migrations.map((migration) => migration.name))
 
       const tables = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name)
       expect(tables).not.toContain("checkpoints")
       expect(tables).not.toContain("checkpoint_blobs")
       expect(tables).not.toContain("checkpoint_writes")
-      expect(tables).toEqual(expect.arrayContaining(["checkpoint_windows", "window_items", "developer_components", "contents", "waiting_input"]))
+      expect(tables).toEqual(
+        expect.arrayContaining(["checkpoint_windows", "window_items", "developer_components", "contents", "waiting_input", "context_workflows"]),
+      )
       const turnColumns = db.query<{ name: string }, []>("PRAGMA table_info(turns)").all().map((row) => row.name)
       expect(turnColumns).not.toContain("checkpoint_id")
       expect(turnColumns).not.toContain("input_id")
+      expect(turnColumns).not.toContain("context_item")
+      expect(turnColumns).not.toContain("context_trigger")
+      expect(turnColumns).toEqual(expect.arrayContaining(["input_membership", "context_workflow_id", "context_start_item"]))
 
       const store = new SessionStore(db, join(runDir, "sessions"))
       store.createSession(
@@ -113,8 +122,14 @@ describe("migrations on a real SQLite file", () => {
         modelOverrides: { "test/alpha": { temperature: 0.5 } },
         permission: { edit: "deny" },
       })
-      const turn = { model: "test/alpha", reasoningEffort: null }
-      expect(store.turns("kept")[0]).toMatchObject({ runId: "k1", cause: "user", userMessageIds: [] })
+      const turn = {
+        model: "test/alpha",
+        reasoningEffort: null,
+        membership: [{ kind: "system" as const, inputId: "system:1" }],
+        contextWorkflowId: null,
+        contextStartItem: null,
+      }
+      expect(store.turns("kept")).toEqual([])
       store.insertTurn("fresh", { ...turn, runId: "r1", cause: "notification", userMessageIds: [], firstSeq: 2 }, 2)
       store.insertTurn("fresh", { ...turn, runId: "r2", cause: "user", userMessageIds: ["i1", "i2"], firstSeq: 3 }, 3)
       expect(store.turns("fresh")).toMatchObject([
@@ -127,7 +142,7 @@ describe("migrations on a real SQLite file", () => {
       expect(applyMigrations(db, migrations)).toEqual([])
       expect(db.query("SELECT sql FROM sqlite_master ORDER BY name").all()).toEqual(schemaBefore)
       expect(store.getSession("fresh")).not.toBeNull()
-      expect(store.getSession("kept")).not.toBeNull()
+      expect(store.getSession("kept")).toBeNull()
     } finally {
       db.close()
     }

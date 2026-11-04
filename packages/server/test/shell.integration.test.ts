@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { SessionEvent } from "@ashe-agent/protocol"
-import type { Tool, ToolRun } from "../src/agent/tools.ts"
+import { systemToolClock, type Tool, type ToolRun } from "../src/agent/tools.ts"
 import type { Permission } from "../src/inputs/shapes.ts"
 import { holderScript, LeftGroup } from "../src/tools/shell/groups.ts"
 import { ShellProcesses, shellTools } from "../src/tools/shell/index.ts"
@@ -54,6 +54,9 @@ const call = (tool: Tool, cwd: string, sessionId: string, args: unknown) => {
     onCancel: () => {},
     programCall: () => {},
     offered: () => true,
+    deadline: Number.POSITIVE_INFINITY,
+    clock: systemToolClock,
+    note: () => undefined,
   }
   return tool.run(args, run).then((result) => result.content as string)
 }

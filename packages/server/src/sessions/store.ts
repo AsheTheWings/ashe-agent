@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite"
 import { join } from "node:path"
-import type { SessionEvent, SessionEventBody, SessionSummary } from "@ashe-agent/protocol"
+import type { SessionEvent, SessionEventBody, SessionSummary, TurnInput } from "@ashe-agent/protocol"
 import type { ModelOverrides, Permission } from "../inputs/shapes.ts"
 import { Conversation } from "./conversation.ts"
 import { FileState } from "./file-state.ts"
@@ -38,6 +38,8 @@ export interface TurnRecord {
   readonly runId: string
   readonly position: number
   readonly cause: TurnCause
+  /** The ordered content identities admitted with this turn; never changed after admission. */
+  readonly membership: ReadonlyArray<TurnInput>
   /** The user messages the turn's starting input holds, in order; a turn holding any is a rewind and fork point. */
   readonly userMessageIds: ReadonlyArray<string>
   readonly model: string
@@ -46,10 +48,28 @@ export interface TurnRecord {
   readonly status: TurnStatus
   /** The number of the turn's first event, where a rewind of it starts removing. */
   readonly firstSeq: number
-  /** The item position of the turn's context turn component, or null for a turn that never became a context turn. */
-  readonly contextItem: number | null
-  /** What started the turn's context turn: the reserve running short, or the context limit. */
-  readonly contextTrigger: "threshold" | "limit" | null
+  /** The context workflow this turn participates in, or null for an ordinary turn. */
+  readonly contextWorkflowId: string | null
+  /** The session item position from which this turn's context work is excluded from chat accounting. */
+  readonly contextStartItem: number | null
+}
+
+/** One context workflow's durable coordination state across its participating turns. */
+export interface ContextWorkflowRecord {
+  readonly id: string
+  readonly sessionId: string
+  readonly trigger: "threshold" | "limit"
+  readonly startTurnId: string
+  readonly currentTurnId: string
+  readonly startItem: number
+  readonly clearings: number
+  readonly clearable: number
+  readonly freed: number
+  readonly validations: number
+  readonly compactionWaited: boolean
+  readonly constructed: boolean
+  readonly createdAt: number
+  readonly endedAt: number | null
 }
 
 interface SessionRow {
@@ -79,29 +99,66 @@ interface TurnRow {
   run_id: string
   position: number
   cause: TurnCause
+  input_membership: string
   user_message_ids: string
   model: string
   reasoning_effort: string | null
   status: TurnStatus
   first_seq: number
-  context_item: number | null
-  context_trigger: "threshold" | "limit" | null
+  context_workflow_id: string | null
+  context_start_item: number | null
+}
+
+interface ContextWorkflowRow {
+  id: string
+  session_id: string
+  trigger: "threshold" | "limit"
+  start_turn_id: string
+  current_turn_id: string
+  start_item: number
+  clearings: number
+  clearable: number
+  freed: number
+  validations: number
+  compaction_waited: number
+  constructed: number
+  created_at: number
+  ended_at: number | null
 }
 
 const toTurn = (row: TurnRow): TurnRecord => ({
   runId: row.run_id,
   position: row.position,
   cause: row.cause,
+  membership: JSON.parse(row.input_membership),
   userMessageIds: JSON.parse(row.user_message_ids),
   model: row.model,
   reasoningEffort: row.reasoning_effort,
   status: row.status,
   firstSeq: row.first_seq,
-  contextItem: row.context_item,
-  contextTrigger: row.context_trigger,
+  contextWorkflowId: row.context_workflow_id,
+  contextStartItem: row.context_start_item,
 })
 
-const turnColumns = "run_id, position, cause, user_message_ids, model, reasoning_effort, status, first_seq, context_item, context_trigger"
+const toContextWorkflow = (row: ContextWorkflowRow): ContextWorkflowRecord => ({
+  id: row.id,
+  sessionId: row.session_id,
+  trigger: row.trigger,
+  startTurnId: row.start_turn_id,
+  currentTurnId: row.current_turn_id,
+  startItem: row.start_item,
+  clearings: row.clearings,
+  clearable: row.clearable,
+  freed: row.freed,
+  validations: row.validations,
+  compactionWaited: row.compaction_waited === 1,
+  constructed: row.constructed === 1,
+  createdAt: row.created_at,
+  endedAt: row.ended_at,
+})
+
+const turnColumns =
+  "run_id, position, cause, input_membership, user_message_ids, model, reasoning_effort, status, first_seq, context_workflow_id, context_start_item"
 
 /** Session, event, and turn persistence. Every write that numbers an event takes the session's counter. */
 export class SessionStore {
@@ -259,7 +316,7 @@ export class SessionStore {
 
   insertTurn(
     sessionId: string,
-    turn: Omit<TurnRecord, "position" | "status" | "contextItem" | "contextTrigger">,
+    turn: Omit<TurnRecord, "position" | "status">,
     startedAt: number,
   ): TurnRecord {
     const position =
@@ -268,26 +325,111 @@ export class SessionStore {
     this.db
       .query(
         `INSERT INTO turns
-          (session_id, run_id, position, cause, user_message_ids, model, reasoning_effort, status, first_seq, started_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)`,
+          (session_id, run_id, position, cause, input_membership, user_message_ids, model, reasoning_effort, status, first_seq,
+           context_workflow_id, context_start_item, started_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)`,
       )
       .run(
         sessionId,
         turn.runId,
         position,
         turn.cause,
+        JSON.stringify(turn.membership),
         JSON.stringify(turn.userMessageIds),
         turn.model,
         turn.reasoningEffort,
         turn.firstSeq,
+        turn.contextWorkflowId,
+        turn.contextStartItem,
         startedAt,
       )
-    return { ...turn, position, status: "running", contextItem: null, contextTrigger: null }
+    return { ...turn, position, status: "running" }
   }
 
-  /** Records that the turn `runId` became a context turn at the item `item`. */
-  markContextTurn(sessionId: string, runId: string, item: number, trigger: "threshold" | "limit") {
-    this.db.query("UPDATE turns SET context_item = ?, context_trigger = ? WHERE session_id = ? AND run_id = ?").run(item, trigger, sessionId, runId)
+  /** Records that the turn `runId` participates in a context workflow from the session item `startItem`. */
+  markContextTurn(sessionId: string, runId: string, workflowId: string, startItem: number) {
+    this.db
+      .query("UPDATE turns SET context_workflow_id = ?, context_start_item = ? WHERE session_id = ? AND run_id = ?")
+      .run(workflowId, startItem, sessionId, runId)
+  }
+
+  /** The session's unfinished context workflow, if any. */
+  contextWorkflow(sessionId: string): ContextWorkflowRecord | null {
+    const row = this.db
+      .query<ContextWorkflowRow, [string]>("SELECT * FROM context_workflows WHERE session_id = ? AND ended_at IS NULL")
+      .get(sessionId)
+    return row === null ? null : toContextWorkflow(row)
+  }
+
+  /** Every unfinished context workflow, oldest first. */
+  contextWorkflows(): ReadonlyArray<ContextWorkflowRecord> {
+    return this.db
+      .query<ContextWorkflowRow, []>("SELECT * FROM context_workflows WHERE ended_at IS NULL ORDER BY created_at, id")
+      .all()
+      .map(toContextWorkflow)
+  }
+
+  /** The turns that participated in `workflowId`, in session order. */
+  contextWorkflowTurnIds(workflowId: string): ReadonlyArray<string> {
+    return this.db
+      .query<{ run_id: string }, [string]>("SELECT run_id FROM turns WHERE context_workflow_id = ? ORDER BY position")
+      .all(workflowId)
+      .map((row) => row.run_id)
+  }
+
+  /** Inserts a context workflow, which the caller's transaction may also record the turn's participation in. */
+  createContextWorkflow(workflow: ContextWorkflowRecord) {
+    this.writeContextWorkflow(workflow, "INSERT")
+  }
+
+  /** Saves a workflow's turn association and mutable coordination state. */
+  saveContextWorkflow(workflow: ContextWorkflowRecord) {
+    this.writeContextWorkflow(workflow, "UPDATE")
+  }
+
+  private writeContextWorkflow(workflow: ContextWorkflowRecord, kind: "INSERT" | "UPDATE") {
+    if (kind === "INSERT") {
+      this.db
+        .query(
+          `INSERT INTO context_workflows
+            (id, session_id, trigger, start_turn_id, current_turn_id, start_item, clearings, clearable, freed, validations,
+             compaction_waited, constructed, created_at, ended_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          workflow.id,
+          workflow.sessionId,
+          workflow.trigger,
+          workflow.startTurnId,
+          workflow.currentTurnId,
+          workflow.startItem,
+          workflow.clearings,
+          workflow.clearable,
+          workflow.freed,
+          workflow.validations,
+          workflow.compactionWaited ? 1 : 0,
+          workflow.constructed ? 1 : 0,
+          workflow.createdAt,
+          workflow.endedAt,
+        )
+      return
+    }
+    this.db
+      .query(
+        `UPDATE context_workflows SET current_turn_id = ?, clearings = ?, clearable = ?, freed = ?, validations = ?,
+          compaction_waited = ?, constructed = ?, ended_at = ? WHERE id = ?`,
+      )
+      .run(
+        workflow.currentTurnId,
+        workflow.clearings,
+        workflow.clearable,
+        workflow.freed,
+        workflow.validations,
+        workflow.compactionWaited ? 1 : 0,
+        workflow.constructed ? 1 : 0,
+        workflow.endedAt,
+        workflow.id,
+      )
   }
 
   /** Whether the session's kept events hold one of `type`. */
@@ -327,6 +469,13 @@ export class SessionStore {
           AND json_extract(body, '$.inputId') IN (SELECT value FROM json_each(?))))`,
       )
       .run(sessionId, turn.firstSeq, taken)
+    const removedIds = JSON.stringify(removed.map((candidate) => candidate.runId))
+    this.db
+      .query(
+        `DELETE FROM context_workflows WHERE session_id = ?
+          AND (start_turn_id IN (SELECT value FROM json_each(?)) OR current_turn_id IN (SELECT value FROM json_each(?)))`,
+      )
+      .run(sessionId, removedIds, removedIds)
     this.db.query("DELETE FROM turns WHERE session_id = ? AND position >= ?").run(sessionId, turn.position)
   }
 
@@ -386,10 +535,10 @@ export class SessionStore {
       this.db
         .query(
           `INSERT INTO turns
-            (session_id, run_id, position, cause, user_message_ids, model, reasoning_effort, status, first_seq, started_at, ended_at,
-             context_item, context_trigger)
-            SELECT ?, run_id, position, cause, user_message_ids, model, reasoning_effort, status, first_seq, started_at, ended_at,
-              context_item, context_trigger
+            (session_id, run_id, position, cause, input_membership, user_message_ids, model, reasoning_effort, status, first_seq, started_at, ended_at,
+             context_workflow_id, context_start_item)
+            SELECT ?, run_id, position, cause, input_membership, user_message_ids, model, reasoning_effort, status, first_seq, started_at, ended_at,
+              NULL, context_start_item
             FROM turns WHERE session_id = ? AND first_seq < ?`,
         )
         .run(target.id, source.id, cutoff)

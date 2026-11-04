@@ -23,7 +23,7 @@ import { join } from "node:path"
 import type { SessionEvent } from "@ashe-agent/protocol"
 import { SCRATCH_FORK_MAX_BYTES } from "../src/context/constants.ts"
 import { removeTree, sha256 } from "../src/sessions/files.ts"
-import { AgentHarness, callTools, hold, messageText, say, type Reply } from "./support/agent.ts"
+import { AgentHarness, callTools, gate, hold, messageText, say, type Reply } from "./support/agent.ts"
 import { waitFor } from "./support/cli.ts"
 import { contextHarness, windowModel } from "./support/context.ts"
 
@@ -103,6 +103,78 @@ const breakMemoryDir = (h: AgentHarness, id: string) => {
 }
 
 describe("snapshots and restores", () => {
+  test("active rewind validates before interrupting, refuses late input, and clears its queued input", async () => {
+    await withHarness(async (h) => {
+      const id = h.create()
+      const running = gate()
+      h.model.next(hold(running.promise, say("first")), say("rerun"))
+      h.input(id, "first")
+      await h.calls(1)
+      const firstRun = (h.events(id).find(({ event }) => event.type === "RUN_STARTED")!.event as any).runId
+      await expect(h.hub.rewind(id, "missing-run", undefined, h.sender)).rejects.toThrow("no turn missing-run")
+      expect(h.hub.isRunning(id)).toBe(true)
+
+      h.input(id, "queued", "queue")
+      const rewinding = h.hub.rewind(id, firstRun, "edited", h.sender)
+      expect(() => h.input(id, "late", "queue")).toThrow("history is being changed")
+      running.open()
+      await rewinding
+      await h.turnsEnded(id, 1)
+      const rewound = h.events(id).find(({ event }) => event.type === "SESSION_REWOUND")!.event as any
+      expect(rewound.clearedInputIds).toHaveLength(1)
+      expect(h.events(id).some(({ event }) => event.type === "INPUT_RECEIVED" && event.text === "queued")).toBe(false)
+      expect(h.events(id).some(({ event }) => event.type === "INPUT_RECEIVED" && event.text === "late")).toBe(false)
+    })
+  })
+
+  test("a snapshot failure on an active rewind leaves its turn running, and a steering turn restores its own snapshot", async () => {
+    await withHarness(async (h) => {
+      const id = h.create()
+      const running = gate()
+      h.model.next(hold(running.promise, say("first")))
+      h.input(id, "first")
+      await h.calls(1)
+      const firstRun = (h.events(id).find(({ event }) => event.type === "RUN_STARTED")!.event as any).runId
+      const files = h.hub.store.files as any
+      const snapshot = files.snapshot
+      files.snapshot = () => {
+        throw new Error("injected snapshot failure")
+      }
+      await expect(h.hub.rewind(id, firstRun, undefined, h.sender)).rejects.toThrow("injected snapshot failure")
+      expect(h.hub.isRunning(id)).toBe(true)
+      files.snapshot = snapshot
+      running.open()
+      await h.turnsEnded(id, 1)
+
+      const steering = h.create()
+      const first = gate()
+      h.model.next(
+        (_call, signal) => {
+          writeFileSync(join(research(h, steering), "a.md"), "A1")
+          return hold(first.promise, say("first"))(_call, signal)
+        },
+        doing(() => writeFileSync(join(research(h, steering), "a.md"), "A2"), "steering"),
+        say("rerun"),
+      )
+      const callsBefore = h.model.calls.length
+      h.input(steering, "first")
+      await h.calls(callsBefore + 1)
+      h.input(steering, "steer")
+      first.open()
+      await h.turnsEnded(steering, 2)
+      const steeringRun = (h.events(steering).filter(({ event }) => event.type === "RUN_STARTED")[1]!.event as any).runId
+      expect(readResearch(h, steering)).toEqual({ "a.md": "A2" })
+      h.hub.rewind(steering, steeringRun, undefined, h.sender)
+      await waitFor("the steering rerun", () =>
+        h.events(steering).some(({ event }) => event.type === "RUN_STARTED" && event.runId !== steeringRun) &&
+        !h.hub.isRunning(steering)
+          ? true
+          : undefined,
+      )
+      expect(readResearch(h, steering)).toEqual({ "a.md": "A1" })
+    })
+  })
+
   test("a rewind restores research, replacing a symlink without following it, publishes memory, and leaves scratch", async () => {
     await withHarness(async (h) => {
       const id = h.create()
@@ -182,7 +254,7 @@ describe("snapshots and restores", () => {
     })
   })
 
-  test("a fork writes its fork point's files, after a notification-started turn changed them, or the current files without one", async () => {
+  test("a fork writes its point's next-turn files, while the latest settled point with no next turn writes the current files", async () => {
     await withHarness(async (h) => {
       const id = h.create()
       await turn(h, id, "t1", () => writeFileSync(join(research(h, id), "a.md"), "A1"))
@@ -190,7 +262,12 @@ describe("snapshots and restores", () => {
       // A turn started by a notification alone changes research after the fork point.
       h.hub.store.conversation.addWaiting(
         id,
-        { kind: "notification", component: { type: "notification", name: "test", heading: "Test", text: "# Test\n\nnote", sources: {} } },
+        {
+          kind: "notification",
+          inputId: "n1",
+          component: { type: "notification", name: "test", heading: "Test", text: "# Test\n\nnote", sources: {} },
+          trigger: "notification",
+        },
         Date.now(),
       )
       h.model.next(doing(() => writeFileSync(join(research(h, id), "a.md"), "A-later")))
@@ -204,9 +281,17 @@ describe("snapshots and restores", () => {
       expect(readlinkSync(join(h.sessionDir(atPoint), "memory"))).toBe(join(h.files.memoryDir, atPoint, "1"))
 
       const whole = h.hub.fork(id, undefined).id
-      expect(readResearch(h, whole)).toEqual({ "a.md": "A-later" })
-      expect(readFileSync(join(h.sessionDir(whole), "memory", "timeline.md"), "utf8")).toBe("T-later")
+      expect(readResearch(h, whole)).toEqual({ "a.md": "A1" })
+      expect(readFileSync(join(h.sessionDir(whole), "memory", "timeline.md"), "utf8")).toBe("T1")
       expect(readResearch(h, id)).toEqual({ "a.md": "A-later" })
+
+      const current = h.create()
+      await turn(h, current, "only")
+      writeFileSync(join(research(h, current), "a.md"), "A-current")
+      publishMemory(h, current, { "timeline.md": "T-current" })
+      const latest = h.hub.fork(current, undefined).id
+      expect(readResearch(h, latest)).toEqual({ "a.md": "A-current" })
+      expect(readFileSync(join(h.sessionDir(latest), "memory", "timeline.md"), "utf8")).toBe("T-current")
     })
   })
 
@@ -232,7 +317,7 @@ describe("snapshots and restores", () => {
       let seen: Record<string, string> = {}
       h.model.next(doing(() => (seen = readResearch(h, id)), "rerun"), say("meanwhile"), say("later"))
       h.input(id, "later", "queue")
-      await h.turnsEnded(id, 4)
+      await h.turnsEnded(id, 3)
       expect(seen).toEqual({ "a.md": "A1" })
       expect(ofType(h.events(id), "INPUT_RECEIVED").map((event) => event.text)).toEqual(["t1", "t2 edited", "meanwhile", "later"])
     })

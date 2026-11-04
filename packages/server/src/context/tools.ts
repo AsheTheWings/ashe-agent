@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { QUESTIONS_ACTION } from "@ashe-agent/protocol"
 import { builtinTool, type Tool, type ToolResult, type ToolRun } from "../agent/tools.ts"
 import type { AppendInput } from "./entries.ts"
 
@@ -115,6 +116,7 @@ export const contextTools = (port: ContextToolPort): ReadonlyArray<Tool> => [
     namespace: "context",
     name: "ask_question",
     permission: ASK_PERMISSION,
+    actions: [QUESTIONS_ACTION],
     description: ASK_DESCRIPTION,
     args: AskArgs,
     prepare: (args, run) => port.refuseAsk(run, args) ?? { check: { permission: ASK_PERMISSION, subjects: [], patterns: ["*"] }, plan: undefined },

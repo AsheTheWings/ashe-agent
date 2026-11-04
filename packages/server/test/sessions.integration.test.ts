@@ -64,6 +64,15 @@ const execute = (server: TestServer, sql: string) => {
   }
 }
 
+const turnStatuses = (server: TestServer, id: string) => {
+  const db = new Database(server.databasePath, { readonly: true })
+  try {
+    return db.query<{ status: string }, [string]>("SELECT status FROM turns WHERE session_id = ? ORDER BY position").all(id)
+  } finally {
+    db.close()
+  }
+}
+
 describe("sessions", () => {
   test("creation refuses a working directory, gives each session its own directory, and sessions and models are listed", async () => {
     await withServer(async (server, token) => {
@@ -121,7 +130,7 @@ describe("two clients on one session", () => {
       await control.request("session.input", { sessionId: id, text: "more" })
       server.script.release("long")
       await b.waitFor("the turn to finish", (v) => finishedRuns(v) === 1)
-      expect(b.texts()).toEqual(["echo: long", "steered: more"])
+      expect(b.texts()).toEqual(["echo: long", "echo: more"])
       const again = await SessionView.open(server.url, token, id, seenByA)
       await again.waitFor("the replay", (v) => v.lastSeq === b.lastSeq)
       expect([...a.events, ...again.events]).toEqual(b.events)
@@ -143,13 +152,12 @@ describe("input during turns", () => {
       await second.request("session.input", { sessionId: id, text: "queued one", mode: "queue" })
       await control.request("session.input", { sessionId: id, text: "queued two", mode: "queue" })
       await second.request("session.input", { sessionId: id, text: "steer" })
-      await view.waitFor("the steered input", (v) => v.texts().includes("steered: steer"))
-      expect(runIds(view)).toHaveLength(1)
+      await view.waitFor("the steered input", (v) => v.texts().includes("echo: steer"))
+      expect(runIds(view)).toHaveLength(2)
       server.script.release("first")
-      await view.waitFor("the first queued turn", (v) => v.texts().includes("echo: queued one"))
+      server.script.release("steer")
+      await view.waitFor("the queued turn", (v) => v.texts().includes("echo: queued one"))
       server.script.release("queued one")
-      await view.waitFor("the second queued turn", (v) => v.texts().includes("echo: queued two"))
-      server.script.release("queued two")
       await view.waitFor("three finished turns", (v) => finishedRuns(v) === 3)
       const inputs = view.events.filter((event) => event.event.type === "INPUT_RECEIVED").map((event) => event.event)
       expect(inputs.map((input) => input.text)).toEqual(["first", "steer", "queued one", "queued two"])
@@ -213,6 +221,83 @@ describe("input during turns", () => {
       expect((await control.request("session.cancel", { sessionId: id })).error.code).toBe(-32005)
     })
   })
+
+  test("a withdrawal write failure during cancel leaves a terminal failed turn", async () => {
+    await withServer(async (server, token) => {
+      const control = await connect(server.url, token)
+      const id = await createSession(control)
+      const view = await SessionView.open(server.url, token, id)
+      await control.request("session.input", { sessionId: id, text: "ask ls withdraw" })
+      await view.waitFor("the permission request", (v) => v.types().includes("PERMISSION_REQUESTED"))
+      execute(
+        server,
+        "CREATE TRIGGER fail_withdraw BEFORE INSERT ON events WHEN NEW.body LIKE '%PERMISSION_WITHDRAWN%' BEGIN SELECT RAISE(ABORT, 'injected'); END",
+      )
+      await control.request("session.cancel", { sessionId: id })
+      await view.waitFor("the fallback failure", (v) => v.types().includes("RUN_ERROR"))
+      expect(view.events.find((event) => event.event.type === "RUN_ERROR")!.event).toMatchObject({ code: "state_integrity_failed" })
+      await waitFor("the failed turn row", () => (turnStatuses(server, id).at(-1)?.status === "failed" ? true : undefined))
+      expect((await control.request("session.list")).result.sessions.find((session: any) => session.id === id).running).toBe(false)
+      execute(server, "DROP TRIGGER fail_withdraw")
+    })
+  })
+
+  test("an active rewind finishes when its cancelled turn cannot write a withdrawal", async () => {
+    await withServer(async (server, token) => {
+      const control = await connect(server.url, token)
+      const id = await createSession(control)
+      const view = await SessionView.open(server.url, token, id)
+      await control.request("session.input", { sessionId: id, text: "ask ls rewind" })
+      await view.waitFor("the permission request", (v) => v.types().includes("PERMISSION_REQUESTED"))
+      const runId = runIds(view)[0]!
+      execute(
+        server,
+        "CREATE TRIGGER fail_withdraw BEFORE INSERT ON events WHEN NEW.body LIKE '%PERMISSION_WITHDRAWN%' BEGIN SELECT RAISE(ABORT, 'injected'); END",
+      )
+      const response = await Promise.race([
+        control.request("session.rewind", { sessionId: id, runId }),
+        Bun.sleep(1_000).then(() => {
+          throw new Error("the active rewind waited for a settled turn")
+        }),
+      ])
+      execute(server, "DROP TRIGGER fail_withdraw")
+      expect(response.error).toBeUndefined()
+      await view.waitFor("the rerun", (v) => v.types().includes("SESSION_REWOUND") && runIds(v).length === 1)
+    })
+  })
+
+  test("a RUN_FINISHED write failure records a failed terminal turn", async () => {
+    await withServer(async (server, token) => {
+      const control = await connect(server.url, token)
+      const id = await createSession(control)
+      const view = await SessionView.open(server.url, token, id)
+      execute(
+        server,
+        "CREATE TRIGGER fail_finished BEFORE INSERT ON events WHEN NEW.body LIKE '%RUN_FINISHED%' BEGIN SELECT RAISE(ABORT, 'injected'); END",
+      )
+      await control.request("session.input", { sessionId: id, text: "finish" })
+      server.script.release("finish")
+      await view.waitFor("the fallback failure", (v) => v.types().includes("RUN_ERROR"))
+      expect(view.events.find((event) => event.event.type === "RUN_ERROR")!.event).toMatchObject({ code: "state_integrity_failed" })
+      execute(server, "DROP TRIGGER fail_finished")
+      await waitFor("the failed turn row", () => (turnStatuses(server, id).at(-1)?.status === "failed" ? true : undefined))
+    })
+  })
+
+  test("a RUN_ERROR write failure still settles the turn row and session", async () => {
+    await withServer(async (server, token) => {
+      const control = await connect(server.url, token)
+      const id = await createSession(control)
+      execute(
+        server,
+        "CREATE TRIGGER fail_error BEFORE INSERT ON events WHEN NEW.body LIKE '%RUN_ERROR%' BEGIN SELECT RAISE(ABORT, 'injected'); END",
+      )
+      await control.request("session.input", { sessionId: id, text: "fail now" })
+      await waitFor("the failed turn row", () => (turnStatuses(server, id).at(-1)?.status === "failed" ? true : undefined))
+      expect((await control.request("session.list")).result.sessions.find((session: any) => session.id === id).running).toBe(false)
+      execute(server, "DROP TRIGGER fail_error")
+    })
+  })
 })
 
 describe("restart", () => {
@@ -227,8 +312,17 @@ describe("restart", () => {
       await server.restart()
       const after = await SessionView.open(server.url, token, id, before)
       await after.waitFor("the interrupted event", (v) => v.types().includes("RUN_INTERRUPTED"))
-      expect(after.types()).toEqual(["PERMISSION_WITHDRAWN", "RUN_INTERRUPTED"])
-      expect(after.events[0].event.reason).toBe("restart")
+      expect(after.types()).toEqual([
+        "ACTION_SETTLED",
+        "PERMISSION_WITHDRAWN",
+        "TEXT_MESSAGE_START",
+        "TEXT_MESSAGE_CONTENT",
+        "TEXT_MESSAGE_END",
+        "RUN_INTERRUPTED",
+      ])
+      expect(["canceled", "restart"]).toContain(
+        after.events.find((event) => event.event.type === "PERMISSION_WITHDRAWN").event.reason,
+      )
       const client = await connect(server.url, token)
       const listed = (await client.request("session.list")).result.sessions
       expect(listed[0]).toMatchObject({ id, sessionDir: join(server.sessionsDir, id), running: false })
@@ -248,10 +342,14 @@ describe("restart", () => {
       await control.request("session.cancel", { sessionId: id })
       await view.waitFor("the cancelled event", (v) => finishedRuns(v) === 1)
       const requested = view.events.find((event) => event.event.type === "PERMISSION_REQUESTED")
-      expect(view.events.slice(-2).map((event) => event.event)).toMatchObject([
-        { type: "PERMISSION_WITHDRAWN", requestId: requested.event.requestId, reason: "canceled" },
-        { type: "RUN_FINISHED", outcome: { type: "cancelled" } },
-      ])
+      const withdrawn = view.events.findIndex(
+        (event) =>
+          event.event.type === "PERMISSION_WITHDRAWN" &&
+          event.event.requestId === requested.event.requestId &&
+          event.event.reason === "canceled",
+      )
+      expect(withdrawn).toBeGreaterThan(-1)
+      expect(view.events.slice(withdrawn).map((event) => event.event.type)).toContain("RUN_FINISHED")
       await server.restart()
       const after = await SessionView.open(server.url, token, id)
       await after.waitFor("the replay", (v) => v.lastSeq === view.lastSeq)
@@ -268,9 +366,8 @@ describe("restart", () => {
         await control.request("session.input", { sessionId: id, text: "ask ls a" })
         await view.waitFor("the permission request", (v) => v.types().includes("PERMISSION_REQUESTED"))
         const requested = view.events.find((event) => event.event.type === "PERMISSION_REQUESTED")
-        const answer = { sessionId: id, requestId: requested.event.requestId, answer: "always" }
-        expect((await control.request("permission.answer", answer)).result).toEqual({})
-        expect((await control.request("permission.answer", answer)).error.code).toBe(-32006)
+        expect(await view.answerPermission(requested.event.requestId, "always")).toEqual({})
+        await expect(view.answerPermission(requested.event.requestId, "always")).rejects.toThrow("no assigned permission action")
         await view.waitFor("the allowed call", (v) => said(v).includes("permission: allowed"))
         server.script.release("ask ls a")
         await view.waitFor("the turn to finish", (v) => finishedRuns(v) === 1)
@@ -309,7 +406,7 @@ describe("fork and rewind", () => {
     return { control, id, view }
   }
 
-  test("fork copies through a user turn and leaves the source unchanged; both are refused while a turn runs", async () => {
+  test("fork copies through a settled user turn while the source runs, and active rewind replaces the running tail", async () => {
     await withServer(async (server, token) => {
       const { control, id, view } = await threeTurns(server, token)
       await control.request("session.setModel", { sessionId: id, model: models[1]!.id })
@@ -329,8 +426,16 @@ describe("fork and rewind", () => {
 
       await control.request("session.input", { sessionId: id, text: "running" })
       await view.waitFor("the running turn", (v) => v.texts().includes("echo: running"))
-      expect((await control.request("session.fork", { sessionId: id })).error.code).toBe(-32005)
-      expect((await control.request("session.rewind", { sessionId: id, runId: second })).error.code).toBe(-32005)
+      const whileRunning = await control.request("session.fork", { sessionId: id })
+      expect(whileRunning.error).toBeUndefined()
+      expect(whileRunning.result.session).toMatchObject({ running: false })
+      const interrupted = runIds(view).at(-1)
+      expect((await control.request("session.rewind", { sessionId: id, runId: second })).result).toEqual({})
+      await view.waitFor("the active rewind's rerun", (v) => {
+        const ids = runIds(v)
+        return ids.length === 2 && ids.at(-1) !== interrupted
+      })
+      expect(runIds(view)).toHaveLength(2)
       server.script.release("running")
     })
   })

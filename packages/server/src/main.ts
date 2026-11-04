@@ -24,6 +24,7 @@ import { migrationFiles } from "./store/migration-files.ts"
 import { applyMigrations, discoverMigrations, MigrationError, readMigrationStatus } from "./store/migrations.ts"
 import { mcpLogEvents } from "./telemetry/mcp-events.ts"
 import { parseOtlpHeaders } from "./telemetry/headers.ts"
+import { toolPolicy } from "./agent/tools.ts"
 
 declare const ASHE_AGENT_REVISION: string | undefined
 
@@ -151,7 +152,8 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
     })
     void mcp.start()
     // Code mode programs call the tools of servers without `codemode: false`; `execute` is offered while there are any.
-    const execute = executeTool(() => mcp.tools(false), inputs.codeModeLimits)
+    const toolTimePolicy = toolPolicy(inputs.toolTimeoutMs, inputs.toolTimeoutOverrides)
+    const execute = executeTool(() => mcp.tools(false), inputs.codeModeLimits, toolTimePolicy)
     const tools = () => [...builtin, ...mcp.tools(true), ...(mcp.tools(false).length === 0 ? [] : [execute])]
     const layer = ProtocolServer.layer({
       hostname: inputs.listenHost,
@@ -186,6 +188,7 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
           userTimeZone: inputs.userTimeZone,
           port,
           auxiliaryModels: inputs.auxiliaryModels,
+          toolPolicy: toolTimePolicy,
           runner: agentRunner({ port, models }),
         }),
       ),

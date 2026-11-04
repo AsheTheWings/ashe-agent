@@ -7,3 +7,10 @@ export class TurnFailure extends Error {
     super(message)
   }
 }
+
+/** A session or persistence integrity failure; it stops execution rather than becoming a tool result. */
+export class IntegrityFailure extends TurnFailure {
+  constructor(message: string, code = "state_integrity_failed") {
+    super(message, code)
+  }
+}

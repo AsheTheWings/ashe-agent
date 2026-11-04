@@ -6,7 +6,7 @@ import { logs, SeverityNumber } from "@opentelemetry/api-logs"
  * with its attributes, units, and error classes. Bump the version whenever
  * a name, attribute, unit, or error class changes.
  */
-export const SIGNAL_CATALOG_VERSION = 4
+export const SIGNAL_CATALOG_VERSION = 6
 
 /** The instrumentation scope of every signal. */
 export const SCOPE = "ashe-agent"
@@ -57,6 +57,7 @@ export const TOOL_OUTCOMES = ["success", "failed", "canceled", "declined", "inte
 export const CONTEXT_TRIGGERS = ["threshold", "limit"] as const
 export const VALIDATION_RESULTS = ["passed", "failed"] as const
 export const QUESTION_OUTCOMES = ["answered", "message", "canceled"] as const
+export const ACTION_OUTCOMES = ["completed", "canceled", "timedOut", "disconnected", "failed"] as const
 export const CHECKPOINT_WINDOW_CAUSES = ["creation", "context_turn"] as const
 export const SIGN_IN_OUTCOMES = ["signed_in", "denied", "not_owner", "github_failed", "unknown_state"] as const
 
@@ -66,9 +67,15 @@ export const ATTRIBUTES = {
   "error.type": { type: "string", values: ERROR_CLASSES, description: "The error class of a failed operation." },
   "ashe_agent.model": { type: "string", description: "A configured model id." },
   "ashe_agent.turn.status": { type: "string", values: TURN_STATUSES, description: "How a turn ended." },
+  "ashe_agent.turn.cause": {
+    type: "string",
+    values: ["user", "notification", "continuation"] as const,
+    description: "What input admitted a turn.",
+  },
   "ashe_agent.tool": { type: "string", description: "A tool's registered name: a built-in tool's or a configured MCP server's." },
   "ashe_agent.tool.outcome": { type: "string", values: TOOL_OUTCOMES, description: "How a tool call ended." },
   "ashe_agent.tool.in_program": { type: "boolean", description: "Whether a code mode program made the call." },
+  "ashe_agent.tool.timed_out": { type: "boolean", description: "Whether the call exhausted its execution deadline." },
   "ashe_agent.mcp.server": { type: "string", description: "A configured MCP server's name." },
   "ashe_agent.mcp.collision.servers": {
     type: "string[]",
@@ -89,6 +96,8 @@ export const ATTRIBUTES = {
     values: QUESTION_OUTCOMES,
     description: "How a question wait ended: answered, ended by a steered user message, or canceled with its turn.",
   },
+  "ashe_agent.action.name": { type: "string", description: "A declared client action's name." },
+  "ashe_agent.action.outcome": { type: "string", values: ACTION_OUTCOMES, description: "How an assigned client action settled." },
   "ashe_agent.checkpoint_window.cause": {
     type: "string",
     values: CHECKPOINT_WINDOW_CAUSES,
@@ -108,11 +117,28 @@ type SignalAttributes = Partial<Record<AttributeName, AttributeValue>>
 
 export const SPANS = {
   "ashe_agent.request": { description: "One protocol request, authentication included.", attributes: ["rpc.method", "error.type"] },
-  "ashe_agent.turn": { description: "One turn, from its start to its end.", attributes: ["ashe_agent.model", "ashe_agent.turn.status", "error.type"] },
+  "ashe_agent.turn_admission": {
+    description: "Admitting one turn's inputs and recording its immutable membership.",
+    attributes: ["ashe_agent.turn.cause", "error.type"],
+  },
+  "ashe_agent.turn": {
+    description: "One turn, from its start to its end.",
+    attributes: ["ashe_agent.model", "ashe_agent.turn.cause", "ashe_agent.turn.status", "error.type"],
+  },
   "ashe_agent.model_call": { description: "One model call of a turn.", attributes: ["ashe_agent.model", "error.type"] },
   "ashe_agent.tool_call": {
     description: "One tool call, a code mode program's calls included as children of their execute call.",
-    attributes: ["ashe_agent.tool", "ashe_agent.tool.outcome", "ashe_agent.tool.in_program"],
+    attributes: [
+      "ashe_agent.tool",
+      "ashe_agent.tool.outcome",
+      "ashe_agent.tool.in_program",
+      "ashe_agent.tool.timed_out",
+      "error.type",
+    ],
+  },
+  "ashe_agent.action": {
+    description: "One client action, from assignment to settlement.",
+    attributes: ["ashe_agent.action.name", "ashe_agent.action.outcome", "error.type"],
   },
   "ashe_agent.context_turn": {
     description: "One context turn, from its context turn component to the end of its turn.",
@@ -124,7 +150,7 @@ export const SPANS = {
   "ashe_agent.handoff_call": { description: "One handoff call of a context turn.", attributes: ["ashe_agent.model", "error.type"] },
   "ashe_agent.question_wait": {
     description: "One `context_ask_question` call waiting for its answer.",
-    attributes: ["ashe_agent.question.outcome"],
+    attributes: ["ashe_agent.question.outcome", "error.type"],
   },
   "ashe_agent.checkpoint_window_construction": {
     description: "Building one checkpoint window's harness seed.",
@@ -155,7 +181,13 @@ export const METRICS = {
     kind: "histogram",
     unit: "s",
     description: "Tool call duration.",
-    attributes: ["ashe_agent.tool", "ashe_agent.tool.outcome", "ashe_agent.tool.in_program"],
+    attributes: ["ashe_agent.tool", "ashe_agent.tool.outcome", "ashe_agent.tool.in_program", "ashe_agent.tool.timed_out"],
+  },
+  "ashe_agent.action.duration": {
+    kind: "histogram",
+    unit: "s",
+    description: "Client action duration, from assignment to settlement.",
+    attributes: ["ashe_agent.action.name", "ashe_agent.action.outcome"],
   },
   "ashe_agent.clearing.freed": {
     kind: "histogram",

@@ -12,7 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
-import { useClient } from "./client-context.tsx"
+import { useClient, useClientState } from "./client-context.tsx"
 
 export const REWIND_WARNING =
   "This turn and every later turn are removed from the session. Research and memory files return to their state when this turn started; scratch, other files, and other effects of the removed turns stay as they are."
@@ -20,15 +20,18 @@ export const REWIND_WARNING =
 type Rewinding = { readonly edit: boolean } | null
 
 /**
- * Rerun, edit and rerun, and fork on a user input that started a turn,
- * disabled while a turn runs. A rewind first states what it removes and
- * what it keeps.
+ * Rerun and edit-and-rerun work while a turn runs; fork appears only on a
+ * settled turn. A rewind first states what it removes and what it keeps.
  */
 export const UserActions = () => {
   const client = useClient()
   const runId = useAuiState((s) => (s.message.metadata.custom as { runId?: string | null }).runId ?? null)
   const text = useAuiState((s) => s.message.parts.map((part) => (part.type === "text" ? part.text : "")).join(""))
-  const running = useAuiState((s) => s.thread.isRunning)
+  const settled = useClientState((state) =>
+    runId === null || state.activeSessionId === null
+      ? false
+      : (state.views[state.activeSessionId]?.settled.includes(runId) ?? false),
+  )
   const [rewinding, setRewinding] = useState<Rewinding>(null)
   const [draft, setDraft] = useState(text)
   if (runId === null) return null
@@ -41,12 +44,11 @@ export const UserActions = () => {
 
   return (
     <div className="text-muted-foreground flex gap-1">
-      <TooltipIconButton tooltip="Rerun" disabled={running} onClick={() => setRewinding({ edit: false })}>
+      <TooltipIconButton tooltip="Rerun" onClick={() => setRewinding({ edit: false })}>
         <RotateCcwIcon />
       </TooltipIconButton>
       <TooltipIconButton
         tooltip="Edit and rerun"
-        disabled={running}
         onClick={() => {
           setDraft(text)
           setRewinding({ edit: true })
@@ -54,9 +56,11 @@ export const UserActions = () => {
       >
         <PencilIcon />
       </TooltipIconButton>
-      <TooltipIconButton tooltip="Fork through this turn" disabled={running} onClick={() => void client.fork(runId).catch(() => {})}>
-        <GitForkIcon />
-      </TooltipIconButton>
+      {settled && (
+        <TooltipIconButton tooltip="Fork through this turn" onClick={() => void client.fork(runId).catch(() => {})}>
+          <GitForkIcon />
+        </TooltipIconButton>
+      )}
       <Dialog open={rewinding !== null} onOpenChange={(open) => !open && setRewinding(null)}>
         <DialogContent>
           <DialogHeader>

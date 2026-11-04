@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { Tool, ToolRun } from "../src/agent/tools.ts"
+import { systemToolClock, type Tool, type ToolRun } from "../src/agent/tools.ts"
 import type { McpServers } from "../src/inputs/shapes.ts"
 import { McpRegistry, type Collision } from "../src/tools/mcp/servers.ts"
 import { mcpHandler } from "./fixtures/mcp-server.ts"
@@ -57,6 +57,9 @@ const run: ToolRun = {
   onCancel: () => {},
   programCall: () => {},
   offered: () => true,
+  deadline: Number.POSITIVE_INFINITY,
+  clock: systemToolClock,
+  note: () => undefined,
 }
 
 /** Whether the process `pid` is still alive. */

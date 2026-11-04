@@ -177,34 +177,6 @@ describe("permissions and limits inside programs", () => {
     })
   })
 
-  test("an ask waits for its answer without using the program's time", async () => {
-    const limit = 300
-    await withHarness({ permission: { srv_echo: "ask" }, limits: { wallClockMs: limit } }, async (h) => {
-      const id = program(h, 'return await tools.srv.echo({ text: "a" })')
-      const [request] = await waitFor("the ask", () => {
-        const asked = ofType(h.events(id), "PERMISSION_REQUESTED")
-        return asked.length > 0 ? asked : undefined
-      }, 10_000)
-      const asked = performance.now()
-      // The wait outlasts the program's whole time limit before the answer comes.
-      await waitFor("the time limit to pass", () => (performance.now() - asked > limit * 2 ? true : undefined), 10_000)
-      expect(results(h, id)).toEqual([])
-      h.answer(id, request.requestId, "once")
-      await h.turnsEnded(id, 1)
-      expect(results(h, id).map((result) => [result.outcome, result.content])).toEqual([["success", "echoed a"]])
-    })
-  })
-
-  test("the time limit still ends a program that runs without waiting", async () => {
-    await withHarness({ limits: { wallClockMs: 100 } }, async (h) => {
-      const id = program(h, "for (;;) {}")
-      await h.turnsEnded(id, 1)
-      const [result] = results(h, id)
-      expect(result.outcome).toBe("failed")
-      expect(result.content).toMatch(/time/i)
-    })
-  })
-
   test("the tool call and output limits bound a program", async () => {
     await withHarness({ limits: { toolCalls: 1, outputBytes: 16 } }, async (h) => {
       // The fake model's replies are one queue, so the sessions run one after the other.

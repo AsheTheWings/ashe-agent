@@ -1,7 +1,7 @@
 import { Schema } from "effect"
 import { SessionEvent } from "./events.ts"
 import { methodNames, methods, type MethodName } from "./methods.ts"
-import { PROTOCOL_VERSIONS } from "./shared.ts"
+import { Id, PROTOCOL_VERSIONS } from "./shared.ts"
 
 /** The WebSocket path every protocol connection uses. */
 export const PROTOCOL_PATH = "/v1/ws"
@@ -37,7 +37,7 @@ export const AnyRequest = Schema.Struct({
 export type AnyRequest = typeof AnyRequest.Type
 
 /** Methods whose params define no fields; their requests may omit `params`. */
-const withoutParams = new Set<MethodName>(["models.list", "agents.list", "session.list"])
+const withoutParams = new Set<MethodName>(["models.list", "agents.list", "actions.list", "session.list"])
 
 const requestOf = <M extends MethodName>(name: M) => {
   const params = methods[name].params
@@ -106,8 +106,30 @@ export const SessionEventNotification = Schema.Struct({
   id: Absent,
 })
 
+/** A live command to the one connection assigned an action; it is never a session event. */
+export const ActionExecuteNotification = Schema.Struct({
+  jsonrpc: JsonRpc,
+  method: Schema.Literal("action.execute"),
+  params: Schema.Struct({ actionId: Id, sessionId: Id, name: Id, arguments: Schema.Unknown }),
+  id: Absent,
+})
+
+/** Withdraws a live action assignment from its connection; no later completion is accepted. */
+export const ActionCancelNotification = Schema.Struct({
+  jsonrpc: JsonRpc,
+  method: Schema.Literal("action.cancel"),
+  params: Schema.Struct({ actionId: Id, sessionId: Id, reason: Schema.String }),
+  id: Absent,
+})
+
 /** Every message a server sends. */
-export const ServerMessage = Schema.Union([SuccessResponse, ErrorResponse, SessionEventNotification])
+export const ServerMessage = Schema.Union([
+  SuccessResponse,
+  ErrorResponse,
+  SessionEventNotification,
+  ActionExecuteNotification,
+  ActionCancelNotification,
+])
 
 export type ServerMessage = typeof ServerMessage.Type
 

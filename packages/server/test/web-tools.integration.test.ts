@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { Redacted } from "effect"
-import type { Tool, ToolRun } from "../src/agent/tools.ts"
+import { systemToolClock, type Tool, type ToolRun } from "../src/agent/tools.ts"
 import type { PermissionCheck } from "../src/permissions/rules.ts"
 import { builtinTools } from "../src/tools/builtin.ts"
 import { ShellProcesses } from "../src/tools/shell/index.ts"
@@ -51,6 +51,9 @@ const call = (tool: Tool, args: unknown) => {
     onCancel: () => {},
     programCall: () => {},
     offered: () => true,
+    deadline: Number.POSITIVE_INFINITY,
+    clock: systemToolClock,
+    note: () => undefined,
   }
   return tool.run(args, run)
 }
