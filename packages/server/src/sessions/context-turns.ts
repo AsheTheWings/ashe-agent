@@ -1,6 +1,12 @@
-import { ErrorCode, type Sender, type SessionEvent, type SessionEventBody } from "@ashe-agent/protocol"
+import {
+  ErrorCode,
+  QUESTIONS_ACTION,
+  type QuestionsActionResult,
+  type SessionEvent,
+  type SessionEventBody,
+} from "@ashe-agent/protocol"
 import { context as otelContext, type Context as TraceContext, type Span } from "@opentelemetry/api"
-import { TurnFailure } from "../agent/failure.ts"
+import { IntegrityFailure, TurnFailure } from "../agent/failure.ts"
 import type { ModelPort } from "../agent/model.ts"
 import type { Tool, ToolResult, ToolRun } from "../agent/tools.ts"
 import { messageText } from "../agent/window.ts"
@@ -46,7 +52,7 @@ import {
 } from "../context/entries.ts"
 import { allowanceMessage, renderSeed, seedTokens, unifiedDiff, type SeedSources } from "../context/seed.ts"
 import { boundaryCloses, clearingPlan, countsInBoundary, resultTokens } from "../context/sizes.ts"
-import { answerEntries, questionProblems, type Answer } from "../context/questions.ts"
+import { answerEntries, questionProblems } from "../context/questions.ts"
 import { CONTEXT_TOOLS, contextTools, type AskArgs } from "../context/tools.ts"
 import { memoryViolations, overCount, validateFiles, violationCount, type AreaEntry } from "../context/validation.ts"
 import type { AuxiliaryModels, AuxiliaryTask } from "../inputs/shapes.ts"
@@ -55,8 +61,9 @@ import { ProtocolError } from "../server/websocket.ts"
 import { countOne, endSpan, recordDuration, startSpan, traced, tracedAsync, withSpan, type SpanNotes } from "../telemetry/signals.ts"
 import type { Item } from "./conversation.ts"
 import { sha256, type SessionFiles, type StoredFile } from "./files.ts"
-import type { SessionRecord, SessionStore, TurnRecord } from "./store.ts"
+import type { ContextWorkflowRecord, SessionRecord, SessionStore, TurnRecord } from "./store.ts"
 import type { Boundary } from "./timeline.ts"
+import type { ActionBroker } from "./actions.ts"
 
 type Append = (body: SessionEventBody) => SessionEvent
 
@@ -91,6 +98,7 @@ export interface ContextOptions {
   readonly models: ReadonlyArray<ConfiguredModel>
   /** The model of each auxiliary task; a task without one uses the model of the session's latest turn. */
   readonly auxiliaryModels: AuxiliaryModels
+  readonly actions: ActionBroker
 }
 
 interface ResearchCall {
@@ -103,8 +111,13 @@ interface ResearchCall {
 
 /** What a running context turn holds in memory; a server stop ends the context turn, which needs none of it then. */
 interface ContextTurn {
+  readonly id: string
   readonly sessionId: string
-  readonly runId: string
+  readonly startTurnId: string
+  currentTurnId: string
+  readonly turnIds: Array<string>
+  readonly startItem: number
+  readonly trigger: ContextTrigger
   clearings: number
   /** The estimated tokens of the clearable results before the first clearing. */
   clearable: number
@@ -121,19 +134,8 @@ interface ContextTurn {
   readonly span: Span
   /** The trace context holding the context turn's span, the parent of the spans of its work. */
   readonly trace: TraceContext
+  readonly createdAt: number
 }
-
-/** A question set waiting for its answer, in memory only. */
-interface PendingQuestions {
-  readonly sessionId: string
-  readonly runId: string
-  readonly questions: AskArgs["questions"]
-  readonly settle: (outcome: AskOutcome) => void
-}
-
-type AskOutcome =
-  | { readonly kind: "answered"; readonly entries: ReadonlyArray<Entry>; readonly skipped: ReadonlyArray<string> }
-  | { readonly kind: "message" }
 
 const wire = (component: Component) => ({ type: component.type, heading: component.heading, text: component.text })
 
@@ -175,7 +177,8 @@ const untilAborted = <A>(promise: Promise<A>, signal: AbortSignal): Promise<A> =
  */
 export class ContextTurns {
   private readonly turns = new Map<string, ContextTurn>()
-  private readonly questions = new Map<string, PendingQuestions>()
+  /** The active context workflow of each participating turn. */
+  private readonly byTurn = new Map<string, string>()
   /** Running compaction calls, by session and boundary. */
   private readonly compactions = new Map<string, Promise<boolean>>()
   /** Each session's history version, raised by every rewind and fork; a summary call whose version changed is discarded. */
@@ -211,12 +214,25 @@ export class ContextTurns {
 
   /** Whether the turn `runId` is a context turn now. */
   isContextTurn(runId: string) {
-    return this.turns.has(runId)
+    return this.byTurn.has(runId)
   }
 
   /** How many clearings the context turn `runId` made. */
   clearings(runId: string) {
-    return this.turns.get(runId)?.clearings ?? 0
+    const workflow = this.byTurn.get(runId)
+    return workflow === undefined ? 0 : (this.turns.get(workflow)?.clearings ?? 0)
+  }
+
+  /** The session's active context workflow, if any. */
+  activeWorkflow(sessionId: string) {
+    return [...this.turns.values()].find((state) => state.sessionId === sessionId) ?? null
+  }
+
+  /** The workflow association a queued context input carries. */
+  association(workflowId: string | undefined) {
+    if (workflowId === undefined) return null
+    const state = this.turns.get(workflowId)
+    return state === undefined ? null : { workflowId: state.id, startItem: state.startItem }
   }
 
   /**
@@ -232,6 +248,13 @@ export class ContextTurns {
   /** Discards the session's running summary calls, after a rewind or fork changed its history. */
   historyChanged(sessionId: string) {
     this.versions.set(sessionId, (this.versions.get(sessionId) ?? 0) + 1)
+    for (const state of [...this.turns.values()]) {
+      if (state.sessionId !== sessionId || this.store.contextWorkflow(state.id) !== null) continue
+      this.turns.delete(state.id)
+      for (const turnId of state.turnIds) this.byTurn.delete(turnId)
+      state.controller.abort()
+      endSpan(state.span, { "ashe_agent.context_turn.constructed": state.constructed }, "canceled")
+    }
   }
 
   private version(sessionId: string) {
@@ -283,7 +306,7 @@ export class ContextTurns {
   // Questions.
 
   private refuseAsk(run: ToolRun, args: AskArgs): ToolResult | null {
-    if (this.turns.has(run.runId)) return failed("`context_ask_question` is not available in a context turn. Finish the context turn first.")
+    if (this.byTurn.has(run.runId)) return failed("`context_ask_question` is not available in a context turn. Finish the context turn first.")
     const problems = questionProblems(args)
     if (problems.length > 0) return failed(`The questions were not asked: ${problems.join("; ")}.`)
     if (args.feedback !== undefined && !this.store.hasEvent(run.sessionId, "QUESTIONS_ASKED")) {
@@ -295,80 +318,69 @@ export class ContextTurns {
   private ask(run: ToolRun, args: AskArgs): Promise<ToolResult> {
     run.signal.throwIfAborted()
     const questionSetId = crypto.randomUUID()
-    this.host.commit(run.sessionId, (append) =>
-      append({
-        type: "QUESTIONS_ASKED",
-        runId: run.runId,
-        toolCallId: run.toolCallId,
+    const span = startSpan("ashe_agent.question_wait", {}, otelContext.active())
+    let actionId: string | null = null
+    const action = this.options.actions.run<QuestionsActionResult>(
+      QUESTIONS_ACTION,
+      {
         questionSetId,
         ...(args.feedback === undefined ? {} : { feedback: args.feedback }),
-        questions: args.questions.map((question) => ({ ...question, options: question.options.map((option) => ({ ...option })) })),
-      }),
-    )
-    const span = startSpan("ashe_agent.question_wait", {}, otelContext.active())
-    return new Promise<ToolResult>((resolve, reject) => {
-      const onAbort = () => {
-        this.questions.delete(questionSetId)
-        endSpan(span, { "ashe_agent.question.outcome": "canceled" })
-        reject(run.signal.reason)
-      }
-      run.signal.addEventListener("abort", onAbort, { once: true })
-      this.questions.set(questionSetId, {
-        sessionId: run.sessionId,
-        runId: run.runId,
         questions: args.questions,
-        settle: (outcome) => {
-          run.signal.removeEventListener("abort", onAbort)
-          this.questions.delete(questionSetId)
-          endSpan(span, { "ashe_agent.question.outcome": outcome.kind === "message" ? "message" : "answered" })
-          if (outcome.kind === "message") {
-            resolve({ outcome: "success", content: "The user replied with a message instead of answering; it follows." })
-            return
-          }
-          const render = this.render(this.timeline.entries(run.sessionId))
-          const lines = [
-            ...(outcome.entries.length === 0 ? [] : [outcome.entries.map(render).join("\n\n")]),
-            ...(outcome.skipped.length === 0 ? [] : [`Skipped: ${outcome.skipped.join(", ")}`]),
-          ]
-          resolve({ outcome: "success", content: lines.join("\n") })
-        },
-      })
-    })
-  }
-
-  /**
-   * Takes the first answer to the pending question set `questionSetId`:
-   * each answered question becomes an answer entry, recorded with the
-   * answered event, and the waiting call returns them. A set already
-   * answered or ended refuses the answer.
-   */
-  answer(
-    sessionId: string,
-    questionSetId: string,
-    answers: ReadonlyArray<Answer>,
-    sender: Sender,
-  ) {
-    const pending = this.questions.get(questionSetId)
-    if (pending === undefined || pending.sessionId !== sessionId) {
-      const asked = this.store
-        .eventsAfter(sessionId, 0)
-        .some(({ event }) => event.type === "QUESTIONS_ASKED" && event.questionSetId === questionSetId)
-      throw asked
-        ? new ProtocolError({ code: ErrorCode.alreadyResolved, message: `question set ${questionSetId} is already answered or ended` })
-        : new ProtocolError({ code: ErrorCode.notFound, message: `no question set ${questionSetId}` })
+      },
+      {
+        sessionId: run.sessionId,
+        clock: run.clock,
+        signal: run.signal,
+        deadline: run.deadline,
+        onAssigned: (id) => (actionId = id),
+      },
+    )
+    try {
+      this.host.commit(run.sessionId, (append) =>
+        append({
+          type: "QUESTIONS_ASKED",
+          runId: run.runId,
+          toolCallId: run.toolCallId,
+          questionSetId,
+          ...(args.feedback === undefined ? {} : { feedback: args.feedback }),
+          questions: args.questions.map((question) => ({ ...question, options: question.options.map((option) => ({ ...option })) })),
+        }),
+      )
+    } catch (error) {
+      if (actionId !== null) this.options.actions.cancel(actionId, "question recording failed")
+      throw error
     }
-    const checked = answerEntries(pending.questions, answers)
-    if (!checked.ok) throw invalid(checked.problem)
-    const recorded = this.host.commit(sessionId, (append) => {
-      append({ type: "QUESTIONS_ANSWERED", questionSetId, answers: answers.map((answer) => ({ ...answer })), sender })
-      return this.record(sessionId, pending.runId, checked.entries, null, append)
-    })
-    pending.settle({ kind: "answered", entries: recorded, skipped: checked.skipped })
-  }
-
-  /** Ends the session's waiting question calls: a steered user message arrived instead of an answer. */
-  messageArrived(sessionId: string) {
-    for (const pending of [...this.questions.values()]) if (pending.sessionId === sessionId) pending.settle({ kind: "message" })
+    return action.then(
+      (outcome) => {
+        endSpan(span, { "ashe_agent.question.outcome": outcome.result.kind === "repliedByMessage" ? "message" : "answered" })
+        const result = outcome.result
+        if (result.kind === "repliedByMessage") {
+          return { outcome: "success", content: "The user replied with a message instead of answering; it follows." }
+        }
+        const checked = answerEntries(args.questions, result.answers)
+        if (!checked.ok) return failed(`No answer was recorded: ${checked.problem}.`)
+        const recorded = this.host.commit(run.sessionId, (append) => {
+          append({
+            type: "QUESTIONS_ANSWERED",
+            questionSetId,
+            answers: result.answers.map((answer) => ({ ...answer })),
+            sender: outcome.principal,
+          })
+          return this.record(run.sessionId, run.runId, checked.entries, null, append)
+        })
+        const render = this.render(this.timeline.entries(run.sessionId))
+        const lines = [
+          ...(recorded.length === 0 ? [] : [recorded.map(render).join("\n\n")]),
+          ...(checked.skipped.length === 0 ? [] : [`Skipped: ${checked.skipped.join(", ")}`]),
+        ]
+        return { outcome: "success", content: lines.join("\n") }
+      },
+      (error: unknown) => {
+        endSpan(span, { "ashe_agent.question.outcome": "canceled" }, run.signal.aborted ? "canceled" : "internal")
+        if (run.signal.aborted || error instanceof IntegrityFailure) throw error
+        return failed(`The question set was not answered: ${errorText(error)}.`)
+      },
+    )
   }
 
   // Chat boundaries and compaction entries.
@@ -380,7 +392,7 @@ export class ContextTurns {
 
   /** Whether an item counts in chat boundaries: neither a seed component nor an item of a context turn. */
   private counted(item: Item, turns: ReadonlyMap<string, TurnRecord>) {
-    return countsInBoundary(item, (runId) => turns.get(runId)?.contextItem ?? null)
+    return countsInBoundary(item, (runId) => turns.get(runId)?.contextStartItem ?? null)
   }
 
   private turnMap(sessionId: string) {
@@ -394,13 +406,13 @@ export class ContextTurns {
    * boundary.
    */
   afterItems(sessionId: string, turn: TurnRecord) {
-    if (this.turns.has(turn.runId)) return
+    if (this.byTurn.has(turn.runId)) return
     const open = this.timeline.openBoundary(sessionId)
     if (open === null) return
     const items = this.conversation.itemsFrom(sessionId, open.position)
     if (items.length === 0) return
     const turns = this.turnMap(sessionId)
-    if (!boundaryCloses(items, (runId) => turns.get(runId)?.contextItem ?? null)) return
+    if (!boundaryCloses(items, (runId) => turns.get(runId)?.contextStartItem ?? null)) return
     const through = items.at(-1)!.position
     this.host.commit(sessionId, () => this.timeline.close(sessionId, open.position, turn.runId, through))
     void this.summarize(sessionId, open.position)
@@ -427,7 +439,7 @@ export class ContextTurns {
         covers.push(item.position)
       }
       const turn = item.runId === null ? undefined : turns.get(item.runId)
-      if (turn === undefined || lastOf.get(turn.runId) !== item || turn.status === "running" || turn.contextItem !== null) continue
+      if (turn === undefined || lastOf.get(turn.runId) !== item || turn.status === "running" || turn.contextStartItem !== null) continue
       if (turn.status === "finished" && item.kind === "assistant" && (item.message.tool_calls ?? []).length === 0) {
         const text = messageText(item.message)
         if (text.trim() !== "") {
@@ -530,10 +542,10 @@ export class ContextTurns {
    * once more; a call that fails again ends the turn. A cancel ends the
    * wait at once, leaving the calls to finish in the background.
    */
-  private async compactionStep(sessionId: string, state: ContextTurn) {
+  private async compactionStep(sessionId: string, state: ContextTurn, turnSignal: AbortSignal) {
     if (state.compactionWaited) return
     state.compactionWaited = true
-    const signal = state.controller.signal
+    const signal = AbortSignal.any([state.controller.signal, turnSignal])
     await untilAborted(Promise.all([...this.compactions.entries()].filter(([key]) => key.startsWith(`${sessionId} `)).map(([, call]) => call)), signal)
     for (const boundary of this.timeline.boundaries(sessionId)) {
       if (!this.due(sessionId, boundary)) continue
@@ -574,37 +586,85 @@ export class ContextTurns {
     })
   }
 
-  /** Delivers one of the context turn's own notification components into its turn, without state components. */
-  private deliverOwn(sessionId: string, turn: TurnRecord, component: Component, also: (append: Append, position: number) => void = () => {}) {
-    this.host.commit(sessionId, (append) => {
-      const window = this.conversation.currentWindow(sessionId)!
-      const item = this.conversation.appendItem(sessionId, window.position, { runId: turn.runId, model: turn.model }, { kind: "component", component })
-      append({ type: "DEVELOPER_MESSAGE", runId: turn.runId, components: [wire(component)] })
-      also(append, item.position)
-    })
+  /** Queues one of the workflow's own developer inputs for its next turn. */
+  private queueOwn(state: ContextTurn, component: Component) {
+    this.conversation.addWaiting(
+      state.sessionId,
+      {
+        kind: "notification",
+        inputId: crypto.randomUUID(),
+        component,
+        trigger: "context",
+        workflowId: state.id,
+      },
+      this.host.now(),
+    )
   }
 
-  private state(runId: string) {
-    const state = this.turns.get(runId)
+  private workflow(runId: string) {
+    const id = this.byTurn.get(runId)
+    const state = id === undefined ? undefined : this.turns.get(id)
     if (state === undefined) throw new Error(`the turn ${runId} is no context turn`)
     return state
   }
 
+  private recordOf(state: ContextTurn): ContextWorkflowRecord {
+    return {
+      id: state.id,
+      sessionId: state.sessionId,
+      trigger: state.trigger,
+      startTurnId: state.startTurnId,
+      currentTurnId: state.currentTurnId,
+      startItem: state.startItem,
+      clearings: state.clearings,
+      clearable: state.clearable,
+      freed: state.freed,
+      validations: state.validations,
+      compactionWaited: state.compactionWaited,
+      constructed: state.constructed,
+      createdAt: state.createdAt,
+      endedAt: null,
+    }
+  }
+
+  /** Persists the workflow's mutable state; the caller's transaction holds the write. */
+  private save(state: ContextTurn) {
+    this.store.saveContextWorkflow(this.recordOf(state))
+  }
+
+  /** Binds a newly admitted context turn to its workflow. */
+  turnStarted(turn: TurnRecord) {
+    if (turn.contextWorkflowId === null) return
+    const state = this.turns.get(turn.contextWorkflowId)
+    if (state === undefined) return
+    state.currentTurnId = turn.runId
+    state.turnIds.push(turn.runId)
+    this.byTurn.set(turn.runId, state.id)
+    this.save(state)
+  }
+
   /**
-   * Makes the rest of the turn a context turn: writes the memory draft,
-   * delivers the context turn component with the violations found, and
-   * starts the research calls and the open boundary's compaction call.
+   * Starts a context workflow from a complete step of `turn`: writes the
+   * memory draft, records the turn's association, queues the context turn
+   * component for the next turn, and starts research and compaction work.
    * A turn at the context limit is cleared first.
    */
   start(session: SessionRecord, turn: TurnRecord, trigger: ContextTrigger, signal: AbortSignal) {
     const sessionId = session.id
+    const id = crypto.randomUUID()
+    const startItem = this.conversation.lastItemPosition(sessionId) + 1
     const controller = new AbortController()
     signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true })
     const parent = this.host.trace(sessionId)
     const span = startSpan("ashe_agent.context_turn", { "ashe_agent.context_turn.trigger": trigger }, parent)
     const state: ContextTurn = {
+      id,
       sessionId,
-      runId: turn.runId,
+      startTurnId: turn.runId,
+      currentTurnId: turn.runId,
+      turnIds: [turn.runId],
+      startItem,
+      trigger,
       clearings: 0,
       clearable: 0,
       freed: 0,
@@ -615,8 +675,10 @@ export class ContextTurns {
       controller,
       span,
       trace: withSpan(span, parent),
+      createdAt: this.host.now(),
     }
-    this.turns.set(turn.runId, state)
+    this.turns.set(id, state)
+    this.byTurn.set(turn.runId, id)
     if (trigger === "limit") this.clear(turn)
     const fileState = this.store.files
     this.host.files.writeDraft(sessionId, fileState.files(fileState.generationFiles(sessionId, fileState.generations(sessionId).memory)))
@@ -628,8 +690,10 @@ export class ContextTurns {
       count: violations.count,
       maxFiles: MEMORY_FILES_MAX,
     })
-    this.deliverOwn(sessionId, turn, component, (append, position) => {
-      this.store.markContextTurn(sessionId, turn.runId, position, trigger)
+    this.host.commit(sessionId, (append) => {
+      this.store.markContextTurn(sessionId, turn.runId, id, startItem)
+      this.store.createContextWorkflow(this.recordOf(state))
+      this.queueOwn(state, component)
       append({ type: "CONTEXT_TURN_STARTED", runId: turn.runId, trigger })
     })
     this.startResearch(session, state)
@@ -644,7 +708,7 @@ export class ContextTurns {
    * before the first clearing are freed.
    */
   private clear(turn: TurnRecord) {
-    const state = this.state(turn.runId)
+    const state = this.workflow(turn.runId)
     const sessionId = state.sessionId
     const attempt = (state.clearings + 1) as 1 | 2 | 3
     const attributes = { "ashe_agent.clearing.attempt": attempt }
@@ -658,6 +722,7 @@ export class ContextTurns {
       state.freed += freed
       this.host.commit(sessionId, (append) => {
         this.conversation.clear(sessionId, turn.runId, attempt, positions)
+        this.save(state)
         append({ type: "TOOL_RESULTS_CLEARED", runId: turn.runId, attempt, tokensFreed: freed })
       })
       state.clearings = attempt
@@ -670,11 +735,12 @@ export class ContextTurns {
    * context turn becomes one after its first clearing, a context turn is
    * cleared again, and after its third clearing it hands off and ends.
    */
-  async limitReached(session: SessionRecord, turn: TurnRecord, signal: AbortSignal): Promise<"retry" | "ended"> {
-    const state = this.turns.get(turn.runId)
+  async limitReached(session: SessionRecord, turn: TurnRecord, signal: AbortSignal): Promise<"retry" | "handoff" | "ended"> {
+    const workflow = this.byTurn.get(turn.runId)
+    const state = workflow === undefined ? undefined : this.turns.get(workflow)
     if (state === undefined) {
       this.start(session, turn, "limit", signal)
-      return "retry"
+      return "handoff"
     }
     if (state.clearings < CLEARING_SHARES.length) {
       this.clear(turn)
@@ -815,11 +881,11 @@ export class ContextTurns {
    * draft and constructs the next checkpoint window, and failing delivers
    * a failed validation component, or after the third failure falls back.
    */
-  async idle(session: SessionRecord, turn: TurnRecord): Promise<"continue" | "ended"> {
-    const state = this.state(turn.runId)
+  async idle(session: SessionRecord, turn: TurnRecord, turnSignal: AbortSignal): Promise<"handoff" | "ended"> {
+    const state = this.workflow(turn.runId)
     const sessionId = session.id
     await this.researchStep(session, turn, state)
-    await this.compactionStep(sessionId, state)
+    await this.compactionStep(sessionId, state, turnSignal)
     // Trimming, validation, publishing, and construction run without a
     // further wait, so no cancel can land between them.
     state.controller.signal.throwIfAborted()
@@ -828,8 +894,11 @@ export class ContextTurns {
       const window = this.conversation.currentWindow(sessionId)!.position
       const render = this.render(this.timeline.entries(sessionId))
       const unseen = trimmed.filter((entry) => (entry.kind === "compaction" || entry.kind === "research") && entry.windowPosition === window)
-      this.deliverOwn(sessionId, turn, timelinesTrimmed(trimmed[0]!.number, trimmed.at(-1)!.number, unseen.map(render)))
-      return "continue"
+      this.host.commit(sessionId, () => {
+        this.queueOwn(state, timelinesTrimmed(trimmed[0]!.number, trimmed.at(-1)!.number, unseen.map(render)))
+        this.save(state)
+      })
+      return "handoff"
     }
     const violations = this.validation(sessionId, state, state.validations + 1)
     if (violationCount(violations) === 0) {
@@ -840,13 +909,15 @@ export class ContextTurns {
     state.validations += 1
     const lines = [...violations.research, ...violations.memory]
     if (state.validations < VALIDATION_ATTEMPTS) {
-      this.deliverOwn(sessionId, turn, validationFailed(state.validations, VALIDATION_ATTEMPTS, lines), (append) =>
-        append({ type: "VALIDATION_FAILED", runId: turn.runId, attempt: state.validations, violations: lines }),
-      )
-      return "continue"
+      this.host.commit(sessionId, (append) => {
+        this.queueOwn(state, validationFailed(state.validations, VALIDATION_ATTEMPTS, lines))
+        this.save(state)
+        append({ type: "VALIDATION_FAILED", runId: turn.runId, attempt: state.validations, violations: lines })
+      })
+      return "handoff"
     }
     this.host.commit(sessionId, (append) => append({ type: "VALIDATION_FAILED", runId: turn.runId, attempt: state.validations, violations: lines }))
-    const unsorted = this.settleDraft(sessionId, turn.runId, true)
+    const unsorted = this.settleDraft(sessionId, state.turnIds, true)
     this.construct(session, turn, state, unsorted === undefined ? {} : { unsorted })
     return "ended"
   }
@@ -899,7 +970,7 @@ export class ContextTurns {
       this.record(sessionId, turn.runId, [{ kind: "handoff", fields: { Text: output.text } }], HANDOFF_PROMPT.revision, append),
     )
     await this.researchStep(session, turn, state)
-    await this.compactionStep(sessionId, state)
+    await this.compactionStep(sessionId, state, signal)
     state.controller.signal.throwIfAborted()
     this.trim(sessionId, turn.runId)
     const violations = this.validation(sessionId, state, 1)
@@ -910,7 +981,7 @@ export class ContextTurns {
     }
     const lines = [...violations.research, ...violations.memory]
     this.host.commit(sessionId, (append) => append({ type: "VALIDATION_FAILED", runId: turn.runId, attempt: 1, violations: lines }))
-    const unsorted = this.settleDraft(sessionId, turn.runId, true)
+    const unsorted = this.settleDraft(sessionId, state.turnIds, true)
     this.construct(session, turn, state, { handoff: handoff!.number, ...(unsorted === undefined ? {} : { unsorted }) })
   }
 
@@ -933,7 +1004,11 @@ export class ContextTurns {
    * beside the secondary timelines that memory will hold. Returns the
    * unsorted file when there is one.
    */
-  private settleDraft(sessionId: string, runId: string, fit = false): { readonly first: number; readonly last: number; readonly path: string } | undefined {
+  private settleDraft(
+    sessionId: string,
+    runIds: ReadonlyArray<string>,
+    fit = false,
+  ): { readonly first: number; readonly last: number; readonly path: string } | undefined {
     const files = this.host.files
     if (!files.hasDraft(sessionId)) return undefined
     const stored = this.timeline.entries(sessionId)
@@ -945,7 +1020,7 @@ export class ContextTurns {
     const current = fileState.files(fileState.generationFiles(sessionId, fileState.generations(sessionId).memory))
     const unsortedFile = () => {
       const entries = this.timeline.entries(sessionId)
-      const trimmed = new Set(this.timeline.trimmedBy(sessionId, runId))
+      const trimmed = new Set(runIds.flatMap((runId) => this.timeline.trimmedBy(sessionId, runId)))
       const moved = entries.filter((entry) => trimmed.has(entry.number))
       if (moved.length === 0) return null
       const first = moved[0]!.number
@@ -963,7 +1038,7 @@ export class ContextTurns {
           description:
             other === unsorted?.file ? unsorted.description : (frontmatterDescription(Buffer.from(other.data).toString("utf8"))?.description ?? ""),
         }))
-    while (fit && this.trim(sessionId, runId, listing(unsortedFile())) !== null) continue
+    while (fit && this.trim(sessionId, runIds.at(-1)!, listing(unsortedFile())) !== null) continue
     const unsorted = unsortedFile()
     if (unsorted === null) {
       files.removeDraft(sessionId)
@@ -1006,8 +1081,9 @@ export class ContextTurns {
   ) {
     const sessionId = session.id
     const old = this.conversation.currentWindow(sessionId)!
-    const contextItem = this.store.getTurn(sessionId, turn.runId)!.contextItem ?? Number.POSITIVE_INFINITY
-    const before = this.conversation.items(sessionId, old.position).filter((item) => item.position < contextItem && !seedComponent(item))
+    const before = this.conversation
+      .items(sessionId, old.position)
+      .filter((item) => item.position < state.startItem && !seedComponent(item))
     const entries = this.timeline.entries(sessionId)
     const fileState = this.store.files
     const generation = fileState.generationFiles(sessionId, fileState.generations(sessionId).memory)
@@ -1035,52 +1111,75 @@ export class ContextTurns {
       throw new TurnFailure(message, "checkpoint_window_failed")
     }
     const research = this.host.files.readResearch(sessionId)
-    this.host.commit(sessionId, (append) => {
-      const now = this.host.now()
-      if (sources.instructions !== null) this.conversation.putContent(sources.instructions.sha256, sources.instructions.text)
-      const window = this.conversation.insertWindow(sessionId, turn.runId, sources.harness, now)
-      for (const component of seed.components) {
-        this.conversation.appendItem(sessionId, window.position, { runId: turn.runId, model: turn.model }, { kind: "component", component })
-      }
-      this.store.files.putFiles(research)
-      this.conversation.recordBaseline(sessionId, window.position, turn.runId, research)
-      this.conversation.addWaiting(sessionId, { kind: "notification", component: continuationComponent(extras) }, now)
-      append({ type: "CHECKPOINT_WINDOW_SEEDED", runId: turn.runId, window: window.position, components: seed.components.map(wire) })
-    })
     state.constructed = true
+    try {
+      this.host.commit(sessionId, (append) => {
+        const now = this.host.now()
+        if (sources.instructions !== null) this.conversation.putContent(sources.instructions.sha256, sources.instructions.text)
+        const window = this.conversation.insertWindow(sessionId, turn.runId, sources.harness, now)
+        for (const component of seed.components) {
+          this.conversation.appendItem(sessionId, window.position, { runId: turn.runId, model: turn.model }, { kind: "component", component })
+        }
+        this.store.files.putFiles(research)
+        this.conversation.recordBaseline(sessionId, window.position, turn.runId, research)
+        this.conversation.addWaiting(
+          sessionId,
+          { kind: "notification", inputId: crypto.randomUUID(), component: continuationComponent(extras), trigger: "continuation" },
+          now,
+        )
+        this.save(state)
+        append({ type: "CHECKPOINT_WINDOW_SEEDED", runId: turn.runId, window: window.position, components: seed.components.map(wire) })
+      })
+    } catch (error) {
+      state.constructed = false
+      throw error
+    }
     recordDuration("ashe_agent.checkpoint_window.size", seedTokens(sources.harness, seed.components), { "ashe_agent.checkpoint_window.cause": "context_turn" })
   }
 
-  /**
-   * Ends the context turn `runId`'s memory state when its turn ends:
-   * discards its research calls and, unless it constructed the next
-   * checkpoint window, settles its draft as a context turn ended early.
-   */
-  ended(sessionId: string, runId: string) {
-    const state = this.turns.get(runId)
-    if (state === undefined) return
-    this.turns.delete(runId)
+  /** Ends a workflow exactly once, settling its draft only when it did not complete construction. */
+  private finish(state: ContextTurn, settle: boolean) {
+    this.turns.delete(state.id)
+    for (const turnId of state.turnIds) this.byTurn.delete(turnId)
     state.controller.abort()
     endSpan(state.span, { "ashe_agent.context_turn.constructed": state.constructed })
-    if (!state.constructed) this.settleDraft(sessionId, runId)
+    if (settle) this.settleDraft(state.sessionId, state.turnIds)
+    else this.host.files.removeDraft(state.sessionId)
+    this.host.commit(state.sessionId, () => {
+      this.conversation.removeWaitingWorkflow(state.sessionId, state.id)
+      this.store.saveContextWorkflow({ ...this.recordOf(state), endedAt: this.host.now() })
+    })
   }
 
   /**
-   * At server start: settles the draft of each context turn a stop left
-   * running, unless it had constructed the next checkpoint window, and
-   * removes every other memory draft.
+   * Records the end of one participating turn. An ordinary successful
+   * handoff keeps the workflow; construction or any terminal outcome ends it.
+   */
+  turnEnded(sessionId: string, runId: string, status: "finished" | "cancelled" | "failed" | "interrupted") {
+    const id = this.byTurn.get(runId)
+    const state = id === undefined ? undefined : this.turns.get(id)
+    if (state === undefined || state.currentTurnId !== runId) return
+    if (status !== "finished") {
+      this.finish(state, !state.constructed)
+      return
+    }
+    if (state.constructed) this.finish(state, false)
+  }
+
+  /**
+   * At server start: settles each interrupted workflow's draft unless it
+   * completed construction, removes its queued context inputs, and clears
+   * every other memory draft.
    */
   settleAtStart() {
-    const running = new Map<string, string>()
-    for (const { sessionId, runId } of this.store.runningTurns()) {
-      if (this.store.getTurn(sessionId, runId)?.contextItem != null) running.set(sessionId, runId)
+    for (const workflow of this.store.contextWorkflows()) {
+      if (workflow.constructed) this.host.files.removeDraft(workflow.sessionId)
+      else this.settleDraft(workflow.sessionId, this.store.contextWorkflowTurnIds(workflow.id))
+      this.host.commit(workflow.sessionId, () => {
+        this.conversation.removeWaitingWorkflow(workflow.sessionId, workflow.id)
+        this.store.saveContextWorkflow({ ...workflow, endedAt: this.host.now() })
+      })
     }
-    for (const session of this.store.sessions()) {
-      if (!this.host.files.hasDraft(session.id)) continue
-      const runId = running.get(session.id)
-      const constructed = runId !== undefined && this.conversation.currentWindow(session.id)?.runId === runId
-      if (runId === undefined || constructed) this.host.files.removeDraft(session.id)
-      else this.settleDraft(session.id, runId)
-    }
+    for (const session of this.store.sessions()) if (this.host.files.hasDraft(session.id)) this.host.files.removeDraft(session.id)
   }
 }

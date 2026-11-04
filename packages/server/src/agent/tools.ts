@@ -1,7 +1,44 @@
 import { JsonSchema, Schema } from "effect"
 import { PermissionDenied, PermissionRejected, type PermissionCheck } from "../permissions/rules.ts"
+import { IntegrityFailure } from "./failure.ts"
 import type { ToolSpec } from "./model.ts"
 import type { ToolContent, ToolOutcome } from "./window.ts"
+
+export interface ToolClock {
+  now(): number
+  setTimeout(callback: () => void, delayMs: number): unknown
+  clearTimeout(handle: unknown): void
+}
+
+export interface ToolExecutionPolicy {
+  /** The limit of each invocation without an exact-name override, in milliseconds. */
+  readonly globalTimeoutMs: number
+  /** Exact registered tool names with a positive limit, or null to disable only their local limit. */
+  readonly timeoutOverrides: Readonly<Record<string, number | null>>
+  readonly clock: ToolClock
+}
+
+export const systemToolClock: ToolClock = {
+  now: () => performance.now(),
+  setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+}
+
+export const toolPolicy = (
+  globalTimeoutMs = 300_000,
+  timeoutOverrides: Readonly<Record<string, number | null>> = {},
+  clock: ToolClock = systemToolClock,
+): ToolExecutionPolicy => ({ globalTimeoutMs, timeoutOverrides, clock })
+
+/** The invocation's local limit: an exact-name override, or the global limit. */
+export const toolTimeout = (policy: ToolExecutionPolicy, name: string): number | null =>
+  Object.hasOwn(policy.timeoutOverrides, name) ? policy.timeoutOverrides[name]! : policy.globalTimeoutMs
+
+export class ToolTimedOut extends Error {
+  constructor(readonly tool: string, readonly timeoutMs: number) {
+    super(`the ${tool} call exceeded its ${timeoutMs} ms execution budget`)
+  }
+}
 
 /** What a running tool call knows about itself. */
 export interface ToolRun {
@@ -14,6 +51,10 @@ export interface ToolRun {
   readonly imageInput: boolean
   /** Aborted when the turn is canceled or the server stops. */
   readonly signal: AbortSignal
+  /** The invocation's absolute deadline on the tool clock; `Infinity` when no limit applies. */
+  readonly deadline: number
+  /** The clock measuring the deadline and delegated-action timers. */
+  readonly clock: ToolClock
   /**
    * Returns when the permission rules let the call run, after an ask if
    * they ask; throws `PermissionDenied` or `PermissionRejected` otherwise.
@@ -33,6 +74,8 @@ export interface ToolRun {
    * the call runs, such as how to reach a process it leaves running.
    */
   readonly onCancel: (note: string) => void
+  /** The note recorded for a canceled or timed-out invocation, such as a process handle. */
+  readonly note: () => string | undefined
   /**
    * Records that a tool call the call's code mode program made ended, by
    * the called tool's permission name, emitting `PROGRAM_CALL_FINISHED`.
@@ -47,8 +90,8 @@ export interface ToolRun {
  * reject: the turn makes no further model call.
  */
 export type ToolResult =
-  | { readonly outcome: "success" | "failed"; readonly content: ToolContent }
-  | { readonly outcome: "declined"; readonly content: ToolContent; readonly endTurn: boolean }
+  | { readonly outcome: "success" | "failed"; readonly content: ToolContent; readonly timedOut?: boolean }
+  | { readonly outcome: "declined"; readonly content: ToolContent; readonly endTurn: boolean; readonly timedOut?: boolean }
 
 /**
  * A tool the model can call. `run` receives the model's arguments, parsed
@@ -60,6 +103,8 @@ export interface Tool {
   readonly namespace: string | null
   readonly name: string
   readonly permission: string | null
+  /** Declared client actions the tool needs to produce a result; it is offered only when a subscriber supports all of them. */
+  readonly actions?: ReadonlyArray<string>
   readonly spec: ToolSpec
   readonly run: (args: unknown, run: ToolRun) => Promise<ToolResult>
 }
@@ -94,6 +139,7 @@ export const builtinTool = <S extends Schema.Codec<unknown, unknown, never, neve
   readonly name: string
   readonly permission: string | null
   readonly description: string
+  readonly actions?: ReadonlyArray<string>
   readonly args: S
   readonly prepare?: (args: S["Type"], run: ToolRun) => Prepared<P> | ToolResult | Promise<Prepared<P> | ToolResult>
   readonly run: (args: S["Type"], run: ToolRun, plan: P) => Promise<ToolResult>
@@ -104,6 +150,7 @@ export const builtinTool = <S extends Schema.Codec<unknown, unknown, never, neve
     namespace,
     name: definition.name,
     permission: definition.permission,
+    ...(definition.actions === undefined ? {} : { actions: definition.actions }),
     spec: {
       name: namespace === null ? definition.name : `${namespace}_${definition.name}`,
       description: definition.description,
@@ -144,4 +191,88 @@ export const failedResult = (error: unknown): ToolResult => {
       : { outcome: "failed", content: `The user rejected this tool call: ${error.reason}` }
   }
   return { outcome: "failed", content: `The tool failed: ${error instanceof Error ? error.message : String(error)}` }
+}
+
+const timeoutResult = (tool: string, timeoutMs: number, started: boolean, note?: string): ToolResult => ({
+  outcome: "failed",
+  timedOut: true,
+  content:
+    `${tool} timed out after ${timeoutMs} ms of elapsed execution. ` +
+    (started
+      ? `Execution had started, so external effects may be partial; this call cannot claim rollback or guaranteed remote termination. Check its effects before deciding whether to retry.${note === undefined ? "" : ` ${note}`}`
+      : "Execution had not started, so this invocation changed nothing."),
+})
+
+/**
+ * Invokes a tool under the common elapsed-time boundary: validation,
+ * permission collection, effects, and settlement share one deadline, and a
+ * nested call is bounded by the earlier of its own limit and its parent's
+ * deadline.
+ */
+export const invokeTool = async (
+  tool: Tool,
+  args: unknown,
+  run: ToolRun,
+  policy: ToolExecutionPolicy,
+): Promise<ToolResult> => {
+  const { clock } = policy
+  const local = toolTimeout(policy, tool.spec.name)
+  const startedAt = clock.now()
+  const deadline = local === null ? run.deadline : Math.min(run.deadline, startedAt + local)
+  if (deadline !== Number.POSITIVE_INFINITY && deadline <= startedAt) {
+    return timeoutResult(tool.spec.name, Math.max(0, deadline - startedAt), false)
+  }
+  const controller = new AbortController()
+  const signal = AbortSignal.any([run.signal, controller.signal])
+  let started = false
+  let timer: unknown = null
+  const budget = deadline === Number.POSITIVE_INFINITY ? null : deadline - startedAt
+  const expired =
+    budget === null
+      ? null
+      : new Promise<ToolResult>((resolve) => {
+          timer = clock.setTimeout(() => {
+            const error = new ToolTimedOut(tool.spec.name, budget)
+            controller.abort(error)
+            resolve(timeoutResult(tool.spec.name, budget, started, run.note()))
+          }, budget)
+        })
+  const execution = (async () => {
+    try {
+      const inner: ToolRun = {
+        ...run,
+        signal,
+        deadline,
+        started: () => {
+          started = true
+          run.started()
+        },
+        authorize: (check, also) => run.authorize(check, also === undefined ? signal : AbortSignal.any([signal, also])),
+      }
+      const result = await tool.run(args, inner)
+      if (deadline !== Number.POSITIVE_INFINITY && clock.now() >= deadline) {
+        controller.abort(new ToolTimedOut(tool.spec.name, budget ?? 0))
+        return timeoutResult(tool.spec.name, budget ?? 0, started, run.note())
+      }
+      return result
+    } catch (error) {
+      if (run.signal.aborted) throw error
+      if (error instanceof IntegrityFailure) throw error
+      return failedResult(error)
+    }
+  })()
+  let onAbort: (() => void) | null = null
+  const cancelled =
+    run.signal.aborted
+      ? Promise.reject(run.signal.reason)
+      : new Promise<ToolResult>((_resolve, reject) => {
+          onAbort = () => reject(run.signal.reason)
+          run.signal.addEventListener("abort", onAbort, { once: true })
+        })
+  try {
+    return expired === null ? await Promise.race([execution, cancelled]) : await Promise.race([execution, expired, cancelled])
+  } finally {
+    if (timer !== null) clock.clearTimeout(timer)
+    if (onAbort !== null) run.signal.removeEventListener("abort", onAbort)
+  }
 }

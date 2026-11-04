@@ -45,9 +45,12 @@ export type WaitingEntry =
   | {
       readonly position: number
       readonly kind: "notification"
+      readonly inputId: string
       readonly component: Component
-      /** Set when a fork queued the component, which a delivery then places directly after the fork component. */
-      readonly causedBy?: "fork"
+      /** Why this developer input waits for admission. */
+      readonly trigger: "notification" | "continuation" | "fork" | "context"
+      /** The context workflow that owns an internal context input. */
+      readonly workflowId?: string
     }
 
 export type NewWaitingEntry =
@@ -286,6 +289,23 @@ export class Conversation {
 
   removeWaiting(sessionId: string, position: number) {
     this.db.query("DELETE FROM waiting_input WHERE session_id = ? AND position = ?").run(sessionId, position)
+  }
+
+  /** Removes every pending delivery of a session, returning their input ids. */
+  clearWaiting(sessionId: string): ReadonlyArray<string> {
+    const ids = this.waiting(sessionId).map((entry) => entry.inputId)
+    this.db.query("DELETE FROM waiting_input WHERE session_id = ?").run(sessionId)
+    return ids
+  }
+
+  /** Removes the context inputs a workflow queued but no turn admitted. */
+  removeWaitingWorkflow(sessionId: string, workflowId: string) {
+    this.db
+      .query(
+        `DELETE FROM waiting_input WHERE session_id = ? AND kind = 'notification'
+          AND json_extract(body, '$.workflowId') = ?`,
+      )
+      .run(sessionId, workflowId)
   }
 
   /**

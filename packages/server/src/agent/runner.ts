@@ -8,10 +8,10 @@ import { callSettings, type ConfiguredModel } from "../models/registry.ts"
 import type { TurnContext, TurnOutcome, TurnRunner } from "../sessions/hub.ts"
 import { endSpan, recordDuration, startSpan, withSpan, type ErrorClass } from "../telemetry/signals.ts"
 import { REQUEST_INSTRUCTIONS } from "./blocks.ts"
-import { TurnFailure } from "./failure.ts"
+import { IntegrityFailure, TurnFailure } from "./failure.ts"
 import { ModelCallError, type ModelPort } from "./model.ts"
 import { unfinishedResult } from "./notes.ts"
-import { failedResult, type Tool, type ToolResult } from "./tools.ts"
+import { failedResult, invokeTool, type Tool, type ToolResult } from "./tools.ts"
 import { estimateCall, renderWindow, toolContentText, type ToolContent, type ToolOutcome } from "./window.ts"
 
 export interface AgentOptions {
@@ -151,6 +151,10 @@ class TurnEvents {
     if (call !== undefined) call.cancelNote = note
   }
 
+  note(id: string): string | undefined {
+    return this.calls.get(id)?.cancelNote
+  }
+
   /** Records the call's result: an item with its event for a committed call, else the event alone. */
   result(id: string, content: ToolContent, outcome: ToolOutcome) {
     const call = this.calls.get(id)
@@ -283,12 +287,12 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
     // The context limit, checked before each model call: an estimate reaching the checkpoint window size.
     const estimate = estimateCall(REQUEST_INSTRUCTIONS, messages, specs)
     if (estimate >= context.checkpointWindowSize) {
-      if ((await context.limitReached(signal)) === "ended") return { status: "finished" }
+      if ((await context.limitReached(signal)) !== "retry") return { status: "finished" }
       continue
     }
     if (!context.isContextTurn() && context.checkpointWindowSize - estimate < RESERVE) {
       context.reserveReached(signal)
-      continue
+      return { status: "finished" }
     }
     const chunks: Array<AIMessageChunk> = []
     try {
@@ -302,7 +306,7 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
       if (error instanceof ModelCallError && error.overflow) {
         // A provider failing the call as over its context window is the context limit too.
         events.settle("failed")
-        if ((await context.limitReached(signal)) === "ended") return { status: "finished" }
+        if ((await context.limitReached(signal)) !== "retry") return { status: "finished" }
         continue
       }
       throw new TurnFailure(`the model call failed: ${error instanceof Error ? error.message : String(error)}`, "model_failed")
@@ -313,11 +317,11 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
 
     const calls = (message.tool_calls ?? []).filter((call) => !invalid.has(call.id!))
     if (calls.length === 0 && invalid.size === 0) {
-      // A step boundary after a reply without tool calls: the turn ends unless input joins it, or a context turn's idle goes on.
-      if (context.deliver()) continue
+      // A step boundary after a reply without tool calls: eligible input ends the turn; a context turn's idle may go on.
+      if (context.deliver()) return { status: "finished" }
       if (!context.isContextTurn()) return { status: "finished" }
-      if ((await context.idle()) === "ended") return { status: "finished" }
-      continue
+      await context.idle(signal)
+      return { status: "finished" }
     }
     let stopped = false
     for (const call of calls) {
@@ -332,8 +336,8 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
       events.result(callId, result.content, result.outcome)
     }
     if (stopped) return { status: "finished" }
-    // A step boundary after the tool results.
-    context.deliver()
+    // A step boundary after the tool results: eligible input ends this AgentTurn.
+    if (context.deliver()) return { status: "finished" }
   }
 }
 
@@ -352,12 +356,17 @@ const runTool = async (
   const toolName = tool === undefined ? "unknown" : name
   const span = startSpan("ashe_agent.tool_call", { "ashe_agent.tool": toolName, "ashe_agent.tool.in_program": false }, context.trace)
   const startedAt = performance.now()
-  const ended = (outcome: ToolOutcome) => {
-    endSpan(span, { "ashe_agent.tool.outcome": outcome }, outcome === "canceled" ? "canceled" : undefined)
+  const ended = (outcome: ToolOutcome, timedOut = false) => {
+    endSpan(
+      span,
+      { "ashe_agent.tool.outcome": outcome, "ashe_agent.tool.timed_out": timedOut },
+      outcome === "canceled" ? "canceled" : undefined,
+    )
     recordDuration("ashe_agent.tool_call.duration", (performance.now() - startedAt) / 1000, {
       "ashe_agent.tool": toolName,
       "ashe_agent.tool.outcome": outcome,
       "ashe_agent.tool.in_program": false,
+      "ashe_agent.tool.timed_out": timedOut,
     })
   }
   let result: ToolResult
@@ -369,28 +378,31 @@ const runTool = async (
   } else {
     try {
       result = await otelContext.with(withSpan(span, context.trace), () =>
-        tool.run(args, {
+        invokeTool(tool, args, {
           sessionId: context.session.id,
           runId: context.turn.runId,
           toolCallId: callId,
           cwd: context.session.sessionDir,
           imageInput,
           signal,
+          deadline: Number.POSITIVE_INFINITY,
+          clock: context.toolPolicy.clock,
           authorize: (check, also) => context.authorize(callId, check, also === undefined ? signal : AbortSignal.any([signal, also])),
           started: () => events.started(callId),
           onCancel: (note) => events.cancelNote(callId, note),
+          note: () => events.note(callId),
           programCall: (program, outcome) => events.emit({ type: "PROGRAM_CALL_FINISHED", toolCallId: callId, tool: program, outcome }),
           offered: context.offered,
-        }),
+        }, context.toolPolicy),
       )
     } catch (error) {
-      if (signal.aborted) {
+      if (signal.aborted || error instanceof IntegrityFailure) {
         ended("canceled")
         throw error
       }
       result = failedResult(error)
     }
   }
-  ended(result.outcome)
+  ended(result.outcome, result.timedOut === true)
   return result
 }

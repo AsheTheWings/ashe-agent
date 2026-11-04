@@ -6,8 +6,16 @@
 
 import { CodeMode, Tool as CodeModeTool, toolError, type ToolError } from "@ashe-agent/codemode"
 import { context as otelContext, type Context as TraceContext } from "@opentelemetry/api"
-import { Deferred, Effect, Option, Schema } from "effect"
-import { builtinTool, failedResult, withholdingName, type Tool, type ToolResult, type ToolRun } from "../../agent/tools.ts"
+import { Deferred, Effect, Schema } from "effect"
+import {
+  builtinTool,
+  invokeTool,
+  toolPolicy,
+  withholdingName,
+  type Tool,
+  type ToolExecutionPolicy,
+  type ToolRun,
+} from "../../agent/tools.ts"
 import type { ToolContentPart, ToolOutcome } from "../../agent/window.ts"
 import { endSpan, recordDuration, startSpan } from "../../telemetry/signals.ts"
 import { whollyDenied, type Rule } from "../../permissions/rules.ts"
@@ -15,7 +23,6 @@ import { renderCatalog, type CatalogTool } from "./catalog.ts"
 
 /** Limits on each program, as the code mode limits input names them. */
 export interface CodeModeLimits {
-  readonly wallClockMs?: number
   readonly toolCalls?: number
   readonly outputBytes?: number
 }
@@ -43,12 +50,13 @@ interface Execution {
   readonly declined: Deferred.Deferred<string>
   /** The trace context of the `execute` call, the parent of its program's call spans. */
   readonly trace: TraceContext
+  readonly policy: ToolExecutionPolicy
 }
 
 /**
  * The code mode tools record over `inventory`, namespaced by MCP server.
  * Each call runs the tool as a direct call would, under the tool's own
- * permission, with the program's clock paused while it is authorized.
+ * permission and the shared elapsed execution policy.
  */
 const programTools = (inventory: ReadonlyArray<Tool>, execution: Execution | null) => {
   // Records without a prototype, so a name such as `__proto__` or `constructor` is an ordinary key.
@@ -73,40 +81,49 @@ const call = (tool: Tool, input: unknown, execution: Execution): Effect.Effect<s
     const span = startSpan("ashe_agent.tool_call", attributes, execution.trace)
     const startedAt = performance.now()
     let outcome: ToolOutcome = "canceled"
+    let timedOut = false
     return Effect.ensuring(
-      runCall(tool, input, execution, (ended) => (outcome = ended)),
+      runCall(tool, input, execution, (ended, expired) => {
+        outcome = ended
+        timedOut = expired
+      }),
       Effect.sync(() => {
-        endSpan(span, { "ashe_agent.tool.outcome": outcome }, outcome === "canceled" ? "canceled" : undefined)
-        recordDuration("ashe_agent.tool_call.duration", (performance.now() - startedAt) / 1000, { ...attributes, "ashe_agent.tool.outcome": outcome })
+        endSpan(
+          span,
+          { "ashe_agent.tool.outcome": outcome, "ashe_agent.tool.timed_out": timedOut },
+          outcome === "canceled" ? "canceled" : undefined,
+        )
+        recordDuration("ashe_agent.tool_call.duration", (performance.now() - startedAt) / 1000, {
+          ...attributes,
+          "ashe_agent.tool.outcome": outcome,
+          "ashe_agent.tool.timed_out": timedOut,
+        })
       }),
     )
   })
 
-const runCall = (tool: Tool, input: unknown, execution: Execution, ended: (outcome: ToolOutcome) => void): Effect.Effect<string | null, ToolError> =>
+const runCall = (
+  tool: Tool,
+  input: unknown,
+  execution: Execution,
+  ended: (outcome: ToolOutcome, timedOut: boolean) => void,
+): Effect.Effect<string | null, ToolError> =>
   Effect.gen(function* () {
     const index = execution.calls++
-    const clock = yield* Effect.serviceOption(CodeMode.ActiveTime)
     const outer = execution.run
     const result = yield* Effect.promise((signal) => {
       const inner: ToolRun = {
         ...outer,
         signal: AbortSignal.any([outer.signal, signal]),
-        authorize: async (check) => {
-          const resume = Option.isSome(clock) ? clock.value.pause() : () => {}
-          try {
-            await outer.authorize(check, signal)
-          } finally {
-            resume()
-          }
-        },
+        authorize: async (check, also) => outer.authorize(check, also === undefined ? signal : AbortSignal.any([signal, also])),
         started: () => {},
         onCancel: () => {},
         programCall: () => {},
       }
-      return tool.run(input, inner).catch((error: unknown): ToolResult => failedResult(error))
+      return invokeTool(tool, input, inner, execution.policy)
     })
-    ended(result.outcome)
-    outer.programCall(tool.spec.name, result.outcome)
+    ended(result.outcome, result.timedOut === true)
+    if (!outer.signal.aborted) outer.programCall(tool.spec.name, result.outcome)
     const parts = typeof result.content === "string" ? [{ type: "text" as const, text: result.content }] : result.content
     const text = parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")
     if (result.outcome === "declined" && result.endTurn) {
@@ -139,7 +156,11 @@ export const sessionCodeModeCatalog =
  * the call that the session's rules leave offered, under the `execute`
  * permission by `*` and `limits`.
  */
-export const executeTool = (inventory: () => ReadonlyArray<Tool>, limits: CodeModeLimits): Tool =>
+export const executeTool = (
+  inventory: () => ReadonlyArray<Tool>,
+  limits: CodeModeLimits,
+  policy: ToolExecutionPolicy = toolPolicy(),
+): Tool =>
   builtinTool({
     name: "execute",
     permission: "execute",
@@ -149,11 +170,10 @@ export const executeTool = (inventory: () => ReadonlyArray<Tool>, limits: CodeMo
     run: async ({ code }, run) => {
       const trace = otelContext.active()
       const program = Effect.gen(function* () {
-        const execution: Execution = { run, images: [], calls: 0, declined: yield* Deferred.make<string>(), trace }
+        const execution: Execution = { run, images: [], calls: 0, declined: yield* Deferred.make<string>(), trace, policy }
         const runtime = CodeMode.make({
           tools: programTools(inventory().filter(run.offered), execution),
           limits: {
-            ...(limits.wallClockMs === undefined ? {} : { timeoutMs: limits.wallClockMs }),
             ...(limits.toolCalls === undefined ? {} : { maxToolCalls: limits.toolCalls }),
             ...(limits.outputBytes === undefined ? {} : { maxOutputBytes: limits.outputBytes }),
           },

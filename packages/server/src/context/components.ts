@@ -2,7 +2,7 @@ import type { FileMetadata } from "../agents/titles.ts"
 import { block, escapeTags, lowerHeadings } from "../agent/blocks.ts"
 import harness from "./harness.md" with { type: "text" }
 
-/** How a developer component is injected: rendered at construction, riding on a delivery, or steered into a turn. */
+/** How a developer component is injected: rendered at construction, riding on a delivery, or delivered into a UserTurn. */
 export type ComponentType = "seed" | "state" | "notification"
 
 /** A source whose state reconciliation compares with what a checkpoint window knows. */

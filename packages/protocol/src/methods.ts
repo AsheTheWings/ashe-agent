@@ -4,14 +4,13 @@ import {
   Id,
   InputMode,
   Model,
-  PermissionAnswer,
   ProtocolVersion,
   Sender,
   SessionSummary,
   Seq,
   Timestamp,
 } from "./shared.ts"
-import { QuestionAnswer } from "./events.ts"
+import { ActionDeclaration } from "./actions.ts"
 
 /** An object with no fields this protocol defines; unknown fields are ignored. */
 const Empty = Schema.Record(Schema.String, Schema.Unknown)
@@ -48,6 +47,10 @@ export const methods = {
     Schema.Struct({ token: Schema.String, protocolVersion: ProtocolVersion }),
     Schema.Struct({ principal: Sender }),
   ),
+  /** The actions this server declares; clients advertise support by these names. */
+  "actions.list": method(Empty, Schema.Struct({ actions: Schema.Array(ActionDeclaration) })),
+  /** Replaces the action names this authenticated connection supports. */
+  "client.setActions": method(Schema.Struct({ actions: Schema.Array(Id) }), Empty),
   /** The configured models and the one sessions start with by default. */
   "models.list": method(Empty, Schema.Struct({ models: Schema.Array(Model), defaultModel: Id })),
   /** The configured agents and the one sessions run as by default, if any. */
@@ -73,11 +76,15 @@ export const methods = {
     Schema.Struct({ session: SessionSummary }),
   ),
   "session.unsubscribe": method(Schema.Struct({ sessionId: Id }), Empty),
-  /** Without a mode, input steers a running turn, or starts one when the session is idle. */
+  /** Without a mode, input is admitted as a later UserTurn at the running turn's next complete step, or starts one when idle. */
   "session.input": method(
     Schema.Struct({ sessionId: Id, text: Schema.String, mode: Schema.optionalKey(InputMode) }),
     Schema.Struct({ inputId: Id }),
   ),
+  /** Completes the action assigned to this connection with its declared result. */
+  "action.complete": method(Schema.Struct({ sessionId: Id, actionId: Id, result: Schema.Unknown }), Empty),
+  /** Starts an idle session with continuation input, alone or joined to its next eligible batch. */
+  "session.resume": method(Schema.Struct({ sessionId: Id }), Empty),
   "session.cancel": method(Schema.Struct({ sessionId: Id }), Empty),
   /** Selects the model and, optionally, a reasoning effort it lists; without one, the selection is cleared. */
   "session.setModel": method(
@@ -95,25 +102,6 @@ export const methods = {
    */
   "session.rewind": method(
     Schema.Struct({ sessionId: Id, runId: Id, text: Schema.optionalKey(Schema.String) }),
-    Empty,
-  ),
-  /**
-   * Answers the pending question set `questionSetId`: each answer names a
-   * question by id with an option's label, a note of 1 to 2,000
-   * characters, or both; a question without an answer is skipped. Only
-   * the first answer to a set is taken.
-   */
-  "session.answerQuestion": method(
-    Schema.Struct({ sessionId: Id, questionSetId: Id, answers: Schema.Array(QuestionAnswer) }),
-    Empty,
-  ),
-  "permission.answer": method(
-    Schema.Struct({
-      sessionId: Id,
-      requestId: Id,
-      answer: PermissionAnswer,
-      message: Schema.optionalKey(Schema.String),
-    }),
     Empty,
   ),
 } as const

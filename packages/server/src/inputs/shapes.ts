@@ -91,10 +91,12 @@ export const McpServers = Schema.Record(
 export type McpServers = typeof McpServers.Type
 
 export const CodeModeLimits = Schema.Struct({
-  wallClockMs: Schema.optionalKey(PositiveInt),
   toolCalls: Schema.optionalKey(PositiveInt),
   outputBytes: Schema.optionalKey(PositiveInt),
 })
+
+/** Positive elapsed-time limits by exact registered tool name; null disables a tool's local limit. */
+export const ToolTimeoutOverrides = Schema.Record(Schema.String, Schema.NullOr(PositiveInt))
 
 export const Profile = Schema.Literals(["development", "production"])
 

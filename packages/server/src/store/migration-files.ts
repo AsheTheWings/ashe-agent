@@ -23,6 +23,8 @@ import m0022 from "../../migrations/0022_context_turns.sql" with { type: "text" 
 import m0023 from "../../migrations/0023_research_baseline_versions.sql" with { type: "text" }
 import m0024 from "../../migrations/0024_password_removal.sql" with { type: "text" }
 import m0025 from "../../migrations/0025_github_logins.sql" with { type: "text" }
+import m0026 from "../../migrations/0026_turn_membership.sql" with { type: "text" }
+import m0027 from "../../migrations/0027_context_workflows.sql" with { type: "text" }
 
 /**
  * The migration directory `packages/server/migrations`, embedded so a
@@ -55,4 +57,6 @@ export const migrationFiles: ReadonlyArray<{ readonly file: string; readonly sql
   { file: "0023_research_baseline_versions.sql", sql: m0023 },
   { file: "0024_password_removal.sql", sql: m0024 },
   { file: "0025_github_logins.sql", sql: m0025 },
+  { file: "0026_turn_membership.sql", sql: m0026 },
+  { file: "0027_context_workflows.sql", sql: m0027 },
 ]

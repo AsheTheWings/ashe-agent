@@ -33,21 +33,22 @@ export type AssistantPart = TextPart | ReasoningPart | ToolPart
 
 export type UserItem = {
   readonly kind: "user"
+  /** The turn's stable identifier, or an input id before its turn starts. */
   readonly id: string
   readonly seq: number
-  readonly text: string
-  readonly mode: InputMode
-  readonly sender: Sender
-  /** The turn this input started; null for an input that joined a running turn. */
+  /** Every UserMessage admitted in this one UserTurn, in order. */
+  readonly messages: ReadonlyArray<{
+    readonly id: string
+    readonly text: string
+    readonly mode: InputMode
+    readonly sender: Sender
+  }>
   readonly runId: string | null
 }
 
 export type RunStatus = "running" | "finished" | "cancelled" | "failed" | "interrupted"
 
-/**
- * The assistant's output in one turn between two inputs; a turn that an
- * input steered has one segment before the input and one after it.
- */
+/** The assistant's output in one AgentTurn. */
 export type AssistantItem = {
   readonly kind: "assistant"
   readonly id: string
@@ -148,6 +149,8 @@ export type SessionView = {
   readonly permissions: ReadonlyArray<PendingPermission>
   /** How many assistant segments each turn has, for segment ids. */
   readonly segments: Readonly<Record<string, number>>
+  /** Turns whose AgentTurn has settled; those with a user message are fork points. */
+  readonly settled: ReadonlyArray<string>
 }
 
 export const emptyView = (sessionId: string): SessionView => ({
@@ -164,6 +167,7 @@ export const emptyView = (sessionId: string): SessionView => ({
   pending: [],
   permissions: [],
   segments: {},
+  settled: [],
 })
 
 const answerText: Record<PermissionAnswer, string> = { once: "allowed once", always: "always allowed", reject: "rejected" }
@@ -182,7 +186,12 @@ export const applyEvent = (view: SessionView, event: SessionEvent): SessionView 
       view.events.flatMap(({ seq, event }) => (seq >= body.firstRemovedSeq && event.type === "INPUT_RECEIVED" ? [event.inputId] : [])),
     )
     const kept = view.events.filter(
-      (applied) => applied.seq < body.firstRemovedSeq && !(applied.event.type === "INPUT_WAITING" && removed.has(applied.event.inputId)),
+      (applied) =>
+        applied.seq < body.firstRemovedSeq &&
+        !(
+          applied.event.type === "INPUT_WAITING" &&
+          (removed.has(applied.event.inputId) || body.clearedInputIds.includes(applied.event.inputId))
+        ),
     )
     return { ...kept.reduce(fold, emptyView(view.sessionId)), lastSeq: event.seq }
   }
@@ -281,6 +290,9 @@ const endRun = (view: SessionView, seq: number, runId: string, status: RunStatus
   return { ...view, items, runId: view.runId === runId ? null : view.runId }
 }
 
+const settled = (view: SessionView, runId: string): SessionView =>
+  view.settled.includes(runId) ? view : { ...view, settled: [...view.settled, runId] }
+
 const reduce = (view: SessionView, { seq, event }: SessionEvent): SessionView => {
   switch (event.type) {
     case "SESSION_CREATED": {
@@ -303,28 +315,42 @@ const reduce = (view: SessionView, { seq, event }: SessionEvent): SessionView =>
         kind: "user",
         id: event.inputId,
         seq,
-        text: event.text,
-        mode: event.mode,
-        sender: event.sender,
+        messages: [{ id: event.inputId, text: event.text, mode: event.mode, sender: event.sender }],
         runId: null,
       }
       return { ...view, items: [...view.items, user], pending: view.pending.filter((input) => input.inputId !== event.inputId) }
     }
     case "RUN_STARTED": {
-      const items = view.items.map((item) =>
-        item.kind === "user" && event.userMessageIds.includes(item.id) ? { ...item, runId: event.runId } : item,
+      const ids = new Set(event.userMessageIds)
+      const grouped = view.items.flatMap((item) =>
+        item.kind === "user" ? item.messages.filter((message) => ids.has(message.id)) : [],
       )
-      const started = { ...view, items, runId: event.runId }
+      const first = view.items.findIndex((item) =>
+        item.kind === "user" && item.messages.some((message) => ids.has(message.id)),
+      )
+      const items = view.items.filter(
+        (item) => !(item.kind === "user" && item.messages.some((message) => ids.has(message.id))),
+      )
+      if (first >= 0) {
+        items.splice(first, 0, {
+          kind: "user",
+          id: event.runId,
+          seq,
+          messages: grouped,
+          runId: event.runId,
+        })
+      }
+      const started = { ...view, items, runId: event.runId, settled: view.settled.filter((id) => id !== event.runId) }
       if (event.cause === "continuation") return mark(started, seq, event.runId, { mark: "continuation" })
       if (event.cause === "notification") return mark(started, seq, event.runId, { mark: "developer_turn" })
       return started
     }
     case "RUN_FINISHED":
-      return endRun(view, seq, event.runId, event.outcome.type === "success" ? "finished" : "cancelled", null)
+      return settled(endRun(view, seq, event.runId, event.outcome.type === "success" ? "finished" : "cancelled", null), event.runId)
     case "RUN_ERROR":
-      return endRun(view, seq, event.runId, "failed", event.message)
+      return settled(endRun(view, seq, event.runId, "failed", event.message), event.runId)
     case "RUN_INTERRUPTED":
-      return endRun(view, seq, event.runId, "interrupted", null)
+      return settled(endRun(view, seq, event.runId, "interrupted", null), event.runId)
     case "TEXT_MESSAGE_START":
       return withSegment(view, seq, (segment) => ({
         ...segment,
@@ -447,6 +473,8 @@ const reduce = (view: SessionView, { seq, event }: SessionEvent): SessionView =>
     case "REASONING_END":
     case "TOOL_CALL_END":
     case "SESSION_REWOUND":
+    case "ACTION_ASSIGNED":
+    case "ACTION_SETTLED":
       return view
   }
 }

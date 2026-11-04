@@ -1,3 +1,4 @@
+export * from "./actions.ts"
 export * from "./events.ts"
 export * from "./json-schema.ts"
 export * from "./jsonrpc.ts"

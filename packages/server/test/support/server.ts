@@ -59,19 +59,10 @@ export class ScriptedRunner {
 
   readonly runner: TurnRunner = (context) => {
     const self = this
-    // The user messages the turn holds: its starting input's, then those steered in at each delivery.
-    const users = () =>
-      context.window().items.flatMap((item) => (item.kind === "user" && item.runId === context.turn.runId ? [item] : []))
-    let seen = users().length
-    const takeSteered = () => {
-      context.deliver()
-      const all = users()
-      const fresh = all.slice(seen)
-      seen = all.length
-      return fresh
-    }
+    const input = () => context.window().items.find((item) => item.kind === "user" && item.runId === context.turn.runId)
     return Effect.gen(function* () {
-      const text = users()[0]?.text ?? ""
+      const first = input()
+      const text = first?.kind === "user" ? first.text : ""
       self.started.push(text)
       const say = (message: string) => {
         const messageId = crypto.randomUUID()
@@ -92,11 +83,10 @@ export class ScriptedRunner {
       }
       const gate = self.gate(text)
       for (;;) {
-        for (const steered of takeSteered()) say(`steered: ${steered.text}`)
+        if (context.deliver()) return { status: "finished" as const }
         if (yield* Deferred.isDone(gate)) break
         yield* Effect.sleep("10 millis")
       }
-      for (const steered of takeSteered()) say(`steered: ${steered.text}`)
       if (text.startsWith("hold")) {
         self.pastLastBoundary.add(text)
         yield* Deferred.await(self.gate(`${text} end`))
@@ -184,6 +174,8 @@ export class TestServer {
 export class SessionView {
   events: Array<any> = []
   lastSeq = 0
+  readonly actions = new Map<string, { readonly name: string; readonly arguments: any }>()
+  readonly actionExecutions: Array<{ readonly actionId: string; readonly name: string; readonly arguments: any }> = []
   private constructor(
     readonly client: Client,
     readonly sessionId: string,
@@ -196,6 +188,16 @@ export class SessionView {
     const view = new SessionView(client, sessionId)
     view.lastSeq = afterSeq
     client.onNotification = (message) => view.apply(message.params)
+    client.onActionExecute = (params) => {
+      view.actionExecutions.push(params)
+      view.actions.set(params.actionId, { name: params.name, arguments: params.arguments })
+    }
+    client.onActionCancel = (params) => void view.actions.delete(params.actionId)
+    const declared = await client.request("actions.list")
+    if (declared.error !== undefined) throw new Error(declared.error.message)
+    const supported = declared.result.actions.map((action: { name: string }) => action.name)
+    const registered = await client.request("client.setActions", { actions: supported })
+    if (registered.error !== undefined) throw new Error(registered.error.message)
     const subscribed = await client.request("session.subscribe", { sessionId, ...(afterSeq > 0 ? { afterSeq } : {}) })
     if (subscribed.error !== undefined) throw new Error(subscribed.error.message)
     return view
@@ -216,6 +218,29 @@ export class SessionView {
 
   types() {
     return this.events.map((event) => event.event.type)
+  }
+
+  async executeAction(actionId: string, result: unknown) {
+    const response = await this.client.request("action.complete", { sessionId: this.sessionId, actionId, result })
+    if (response.error !== undefined) throw new Error(response.error.message)
+    this.actions.delete(actionId)
+    return response.result
+  }
+
+  async answerPermission(requestId: string, answer: "once" | "always" | "reject", message?: string) {
+    const entry = [...this.actions.entries()].find(
+      ([, action]) => action.name === "permission.decide" && action.arguments.requestId === requestId,
+    )
+    if (entry === undefined) throw new Error(`no assigned permission action for ${requestId}`)
+    return await this.executeAction(entry[0], message === undefined ? { answer } : { answer, message })
+  }
+
+  async answerQuestion(questionSetId: string, answers: ReadonlyArray<Record<string, unknown>>) {
+    const entry = [...this.actions.entries()].find(
+      ([, action]) => action.name === "questions.answer" && action.arguments.questionSetId === questionSetId,
+    )
+    if (entry === undefined) throw new Error(`no assigned question action for ${questionSetId}`)
+    return await this.executeAction(entry[0], { kind: "answered", answers })
   }
 
   texts() {

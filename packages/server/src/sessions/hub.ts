@@ -6,10 +6,13 @@ import {
   ErrorCode,
   type InputMode,
   type Model,
+  PERMISSION_ACTION,
+  type PermissionActionResult,
   type Sender,
   type SessionEvent,
   type SessionEventBody,
   type SessionSummary,
+  type TurnInput,
 } from "@ashe-agent/protocol"
 import type { ModelPort } from "../agent/model.ts"
 import { programCallsNote, unfinishedResult } from "../agent/notes.ts"
@@ -20,6 +23,7 @@ import { InstructionsUnreadable, type KnownInstructions } from "../agents/setup.
 import { displayTitle, type FileMetadata } from "../agents/titles.ts"
 import {
   currentDates,
+  continuationComponent,
   datesChanged,
   forkComponent,
   harnessInstructions,
@@ -47,7 +51,10 @@ import {
 import { ProtocolError } from "../server/websocket.ts"
 import { Store } from "../store/database.ts"
 import { endSpan, isErrorClass, recordDuration, startSpan, traced, withSpan, type ErrorClass } from "../telemetry/signals.ts"
+import { toolPolicy as defaultToolPolicy, type ToolExecutionPolicy } from "../agent/tools.ts"
 import { ContextTurns } from "./context-turns.ts"
+import { ActionBroker } from "./actions.ts"
+import { IntegrityFailure } from "../agent/failure.ts"
 import type { Item, NewWaitingEntry, WaitingEntry } from "./conversation.ts"
 import type { FileRef } from "./file-state.ts"
 import { SessionFiles, type StoredFile } from "./files.ts"
@@ -73,9 +80,8 @@ export interface TurnContext {
     event: SessionEventBody,
   ) => void
   /**
-   * The step boundary's delivery: the steered user messages and the
-   * notification components waiting, with the state components that ride
-   * on them, join the turn. Returns whether anything joined.
+   * At a complete step boundary, whether another input batch is eligible to
+   * start the next turn. It never appends to the admitted turn.
    */
   readonly deliver: () => boolean
   /** Whether a cancel request, rather than a server stop, is ending the turn. */
@@ -92,24 +98,26 @@ export interface TurnContext {
   readonly trace: TraceContext
   /** Whether the session's rules leave `tool` offered: false for a tool they wholly deny. */
   readonly offered: (tool: Tool) => boolean
+  /** The elapsed-time policy shared by every direct and code-mode tool invocation. */
+  readonly toolPolicy: ToolExecutionPolicy
   /** The checkpoint window size of the turn's model for the session's agent. */
   readonly checkpointWindowSize: number
   /** Whether the turn is a context turn now. */
   readonly isContextTurn: () => boolean
-  /** A model call would leave less than the reserve: the rest of the turn becomes a context turn. */
+  /** A model call would leave less than the reserve: start a context workflow and end this turn. */
   readonly reserveReached: (signal: AbortSignal) => void
   /**
    * A model call reached the context limit: the turn is cleared, becoming a
    * context turn, and retries the call, or after its third clearing hands
    * off and ends, the next checkpoint window constructed.
    */
-  readonly limitReached: (signal: AbortSignal) => Promise<"retry" | "ended">
+  readonly limitReached: (signal: AbortSignal) => Promise<"retry" | "handoff" | "ended">
   /**
    * A context turn went idle: it goes on after a trim or a failed
    * validation, or ends with the next checkpoint window constructed. A
    * failure throws `TurnFailure`.
    */
-  readonly idle: () => Promise<"continue" | "ended">
+  readonly idle: (signal: AbortSignal) => Promise<"handoff" | "ended">
 }
 
 export type TurnOutcome = { readonly status: "finished" } | { readonly status: "failed"; readonly message: string; readonly code?: string }
@@ -166,6 +174,8 @@ export interface HubOptions {
   readonly userTimeZone?: string
   /** The server's own time zone; the process's when unset. */
   readonly serverTimeZone?: string
+  /** Elapsed-time limits for every tool invocation; a 300000 ms global limit when unset. */
+  readonly toolPolicy?: ToolExecutionPolicy
   readonly now?: () => number
 }
 
@@ -185,12 +195,20 @@ type AskOutcome = { readonly kind: "allowed" } | { readonly kind: "rejected"; re
 interface Ask {
   readonly runId: string
   readonly check: PermissionCheck
+  actionId: string | null
   readonly settle: (outcome: AskOutcome) => void
+  readonly fail: (error: Error) => void
 }
+
+class PermissionCollectionUnavailable extends Error {}
 
 interface SessionState {
   readonly listeners: Set<Listener>
   live: Live | null
+  /** A history operation owns advancement until it settles the prior turn and commits its replacement. */
+  controlled: boolean
+  /** Resolves once the interrupted turn's settlement callback has finished. */
+  settled: (() => void) | null
   /** Permission requests waiting for an answer, by request id, in arrival order. */
   readonly asks: Map<string, Ask>
 }
@@ -200,6 +218,7 @@ type Append = (body: SessionEventBody) => SessionEvent
 const notFound = (what: string) => new ProtocolError({ code: ErrorCode.notFound, message: `no ${what}` })
 const conflict = (message: string) => new ProtocolError({ code: ErrorCode.conflict, message })
 const invalid = (message: string) => new ProtocolError({ code: ErrorCode.invalidInput, message })
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
 const SESSION_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
 /** The largest multiple of the alphabet's size below 256: bytes from it on are discarded, so each character is uniform. */
@@ -216,12 +235,15 @@ export const randomSessionId = (): string => {
   return id
 }
 
-/** Whether a waiting entry joins a turn other than as its first entry: a steered user message or a notification. */
-const joins = (entry: WaitingEntry) => entry.kind === "notification" || entry.mode === "steer"
-
 const wire = (component: Component) => ({ type: component.type, heading: component.heading, text: component.text })
 
-const isContinuation = (entry: WaitingEntry) => entry.kind === "notification" && entry.component.name === "continuation"
+const isContinuation = (entry: WaitingEntry) => entry.kind === "notification" && entry.trigger === "continuation"
+const isForkAttach = (entry: WaitingEntry) => entry.kind === "notification" && entry.trigger === "fork"
+const takeCause = (taken: ReadonlyArray<WaitingEntry>) =>
+  isContinuation(taken[0]!) ? "continuation" : taken.some((entry) => entry.kind === "user") ? "user" : "notification"
+const isContextInput = (entry: WaitingEntry) => entry.kind === "notification" && entry.trigger === "context"
+const isIndependent = (entry: WaitingEntry) =>
+  (entry.kind === "user" && entry.mode === "steer") || (entry.kind === "notification" && entry.trigger === "notification")
 
 /**
  * Keeps every session's live state: its subscribers, its running turn, and
@@ -231,7 +253,9 @@ const isContinuation = (entry: WaitingEntry) => entry.kind === "notification" &&
  */
 export class SessionHub {
   private readonly states = new Map<string, SessionState>()
+  readonly actions = new ActionBroker((sessionId, body) => this.emit(sessionId, body))
   private readonly now: () => number
+  private readonly toolPolicy: ToolExecutionPolicy
   private stopping = false
   private readonly context: ContextTurns
 
@@ -240,6 +264,7 @@ export class SessionHub {
     private readonly options: HubOptions,
   ) {
     this.now = options.now ?? Date.now
+    this.toolPolicy = options.toolPolicy ?? defaultToolPolicy()
     this.context = new ContextTurns(
       {
         store,
@@ -250,7 +275,7 @@ export class SessionHub {
         seedSources: (session, window) => this.laterSeedSources(session, window),
         trace: (sessionId) => this.traceOf(sessionId),
       },
-      { port: options.port, models: options.models, auxiliaryModels: options.auxiliaryModels ?? {} },
+      { port: options.port, models: options.models, auxiliaryModels: options.auxiliaryModels ?? {}, actions: this.actions },
     )
   }
 
@@ -378,9 +403,9 @@ export class SessionHub {
     this.files.removeOtherGenerations(sessionId, current)
   }
 
-  /** Stores a notification component as waiting input, in a transaction the caller holds. */
-  private queue(sessionId: string, component: Component, causedBy?: "fork") {
-    const entry: NewWaitingEntry = { kind: "notification", component, ...(causedBy === undefined ? {} : { causedBy }) }
+  /** Stores a developer notification as waiting input, in a transaction the caller holds. */
+  private queue(sessionId: string, component: Component, trigger: "notification" | "continuation" | "fork" = "notification") {
+    const entry: NewWaitingEntry = { kind: "notification", inputId: crypto.randomUUID(), component, trigger }
     this.conversation.addWaiting(sessionId, entry, this.now())
   }
 
@@ -420,12 +445,12 @@ export class SessionHub {
    * restored, without paths, when the session's generation exceeds the one
    * the current checkpoint window knows.
    */
-  private queueReconciledNotifications(sessionId: string, causedBy?: "fork") {
+  private queueReconciledNotifications(sessionId: string, trigger: "notification" | "fork" = "notification") {
     const generations = this.fileState.generations(sessionId)
     const known = this.conversation.knownStates(sessionId, this.conversation.currentWindow(sessionId)!.position)
-    if (generations.scratch > (known.scratchGeneration ?? 0)) this.queue(sessionId, scratchLost(generations.scratch, true), causedBy)
+    if (generations.scratch > (known.scratchGeneration ?? 0)) this.queue(sessionId, scratchLost(generations.scratch, true), trigger)
     if (generations.memoryRestore > (known.memoryRestoreGeneration ?? 0)) {
-      this.queue(sessionId, memoryRestored(generations.memoryRestore, null), causedBy)
+      this.queue(sessionId, memoryRestored(generations.memoryRestore, null), trigger)
     }
   }
 
@@ -522,7 +547,7 @@ export class SessionHub {
   private state(sessionId: string): SessionState {
     let state = this.states.get(sessionId)
     if (state === undefined) {
-      state = { listeners: new Set(), live: null, asks: new Map() }
+      state = { listeners: new Set(), live: null, controlled: false, settled: null, asks: new Map() }
       this.states.set(sessionId, state)
     }
     return state
@@ -551,30 +576,111 @@ export class SessionHub {
     const asks = this.state(sessionId).asks
     const requestId = crypto.randomUUID()
     return new Promise<void>((resolve, reject) => {
-      const onAbort = () => {
-        asks.delete(requestId)
-        reject(signal.reason)
-      }
-      asks.set(requestId, {
+      const ask: Ask = {
         runId,
         check,
+        actionId: null,
         settle: (outcome) => {
           signal.removeEventListener("abort", onAbort)
           asks.delete(requestId)
           if (outcome.kind === "allowed") resolve()
           else reject(new PermissionRejected(outcome.message))
         },
-      })
+        fail: (error) => {
+          signal.removeEventListener("abort", onAbort)
+          asks.delete(requestId)
+          reject(error)
+        },
+      }
+      const onAbort = () => {
+        asks.delete(requestId)
+        try {
+          this.emit(sessionId, {
+            type: "PERMISSION_WITHDRAWN",
+            requestId,
+            reason: this.stopping ? "restart" : "canceled",
+          })
+        } catch (error) {
+          reject(error instanceof IntegrityFailure ? error : new IntegrityFailure(`the permission withdrawal could not be recorded: ${errorText(error)}`))
+          return
+        }
+        reject(signal.reason)
+      }
+      asks.set(requestId, ask)
       signal.addEventListener("abort", onAbort, { once: true })
-      this.emit(sessionId, {
-        type: "PERMISSION_REQUESTED",
-        requestId,
-        runId,
-        toolCallId,
-        permission: check.permission,
-        subjects: [...decision.asked],
-        patterns: [...check.patterns],
-      })
+      try {
+        this.emit(sessionId, {
+          type: "PERMISSION_REQUESTED",
+          requestId,
+          runId,
+          toolCallId,
+          permission: check.permission,
+          subjects: [...decision.asked],
+          patterns: [...check.patterns],
+        })
+      } catch (error) {
+        ask.fail(error instanceof IntegrityFailure ? error : new IntegrityFailure(`the permission request could not be recorded: ${errorText(error)}`))
+        return
+      }
+      try {
+        const action = this.actions.run<PermissionActionResult>(
+          PERMISSION_ACTION,
+          { requestId, permission: check.permission, subjects: [...decision.asked], patterns: [...check.patterns] },
+          { sessionId, clock: this.toolPolicy.clock, signal, onAssigned: (id) => (ask.actionId = id) },
+        )
+        void action.then(
+          (outcome) => {
+            try {
+              this.answer(sessionId, requestId, outcome.result.answer, outcome.result.message, outcome.principal)
+            } catch (error) {
+              if (asks.get(requestId) !== ask) return
+              try {
+                this.emit(sessionId, {
+                  type: "PERMISSION_WITHDRAWN",
+                  requestId,
+                  reason: this.stopping ? "restart" : "canceled",
+                })
+              } catch (emitError) {
+                ask.fail(emitError instanceof Error ? emitError : new IntegrityFailure(errorText(emitError)))
+                return
+              }
+              ask.fail(
+                error instanceof IntegrityFailure
+                  ? error
+                  : new IntegrityFailure(`the permission decision could not be recorded: ${errorText(error)}`),
+              )
+            }
+          },
+          (error: unknown) => {
+            if (asks.get(requestId) !== ask) return
+            asks.delete(requestId)
+            try {
+              this.emit(sessionId, {
+                type: "PERMISSION_WITHDRAWN",
+                requestId,
+                reason: this.stopping ? "restart" : "canceled",
+              })
+            } catch (emitError) {
+              ask.fail(emitError instanceof IntegrityFailure ? emitError : new IntegrityFailure(`the permission withdrawal could not be recorded: ${errorText(emitError)}`))
+              return
+            }
+            ask.fail(error instanceof IntegrityFailure ? error : new PermissionCollectionUnavailable(errorText(error)))
+          },
+        )
+      } catch (error) {
+        asks.delete(requestId)
+        try {
+          this.emit(sessionId, {
+            type: "PERMISSION_WITHDRAWN",
+            requestId,
+            reason: this.stopping ? "restart" : "canceled",
+          })
+        } catch (emitError) {
+          ask.fail(emitError instanceof IntegrityFailure ? emitError : new IntegrityFailure(`the permission withdrawal could not be recorded: ${errorText(emitError)}`))
+          return
+        }
+        ask.fail(error instanceof IntegrityFailure ? error : new PermissionCollectionUnavailable(errorText(error)))
+      }
     })
   }
 
@@ -609,6 +715,7 @@ export class SessionHub {
       resolved(requestId, "reject", sender)
       ask.settle({ kind: "rejected", message })
       for (const [id, other] of others) {
+        if (other.actionId !== null) this.actions.cancel(other.actionId, "rejected with another pending permission request")
         resolved(id, "reject")
         other.settle({ kind: "rejected", message })
       }
@@ -621,6 +728,7 @@ export class SessionHub {
     const rules = this.rules(session)
     for (const [id, other] of [...asks.entries()]) {
       if (decide(rules, other.check).action !== "allow") continue
+      if (other.actionId !== null) this.actions.cancel(other.actionId, "allowed by another permission grant")
       resolved(id, "always")
       other.settle({ kind: "allowed" })
     }
@@ -642,13 +750,19 @@ export class SessionHub {
    */
   private commit<A>(sessionId: string, write: (append: (body: SessionEventBody) => SessionEvent) => A): A {
     const appended: Array<SessionEvent> = []
-    const result = this.store.db.transaction(() =>
-      write((body) => {
-        const event = this.store.appendEvent(sessionId, body, this.now())
-        appended.push(event)
-        return event
-      }),
-    )()
+    let result: A
+    try {
+      result = this.store.db.transaction(() =>
+        write((body) => {
+          const event = this.store.appendEvent(sessionId, body, this.now())
+          appended.push(event)
+          return event
+        }),
+      )()
+    } catch (error) {
+      if (error instanceof ProtocolError || error instanceof IntegrityFailure) throw error
+      throw new IntegrityFailure(`the session state transaction failed: ${errorText(error)}`)
+    }
     const listeners = this.state(sessionId).listeners
     for (const event of appended) for (const listener of listeners) listener(event)
     return result
@@ -701,10 +815,11 @@ export class SessionHub {
    * tool they do not wholly deny, and `context_append` and
    * `context_get_open_items` under any rules.
    */
-  private offeredTools(rules: ReadonlyArray<Rule>): ReadonlyArray<Tool> {
-    return [...(this.options.tools?.() ?? []), ...this.context.tools].filter(
-      (tool) => UNCHECKED_CONTEXT_TOOLS.includes(tool.spec.name) || !whollyDenied(rules, withholdingName(tool)),
-    )
+  private offeredTools(rules: ReadonlyArray<Rule>, sessionId?: string): ReadonlyArray<Tool> {
+    return [...(this.options.tools?.() ?? []), ...this.context.tools].filter((tool) => {
+      if (!UNCHECKED_CONTEXT_TOOLS.includes(tool.spec.name) && whollyDenied(rules, withholdingName(tool))) return false
+      return tool.actions === undefined || (sessionId !== undefined && tool.actions.every((name) => this.actions.available(sessionId, name)))
+    })
   }
 
   /** The user instructions the checkpoint window `window` knows, with their stored text, or null when it knows none. */
@@ -797,7 +912,7 @@ export class SessionHub {
         dates: this.dates(),
         scratchGeneration: 0,
         memoryRestoreGeneration: 0,
-        tools: this.offeredTools(rules).map((tool) => tool.spec),
+        tools: this.offeredTools(rules, id).map((tool) => tool.spec),
       })
       if (!seed.ok) throw invalid(`the session's first checkpoint window cannot be built: ${allowanceMessage(seed.issue)}`)
       return { instructions, seed }
@@ -879,34 +994,22 @@ export class SessionHub {
 
   /**
    * Takes a user message: it is stored as waiting input, then starts a turn
-   * on an idle session. Waiting, a steered message joins the running turn
-   * at its next step boundary, and a queued one starts a turn after it
-   * ends; messages of each mode enter in order of arrival.
+   * on an idle session. Waiting, a steered message is admitted as a new turn
+   * at the running turn's next complete step, and a queued one starts a turn
+   * after it ends; messages of each lane enter in arrival order.
    */
   input(sessionId: string, text: string, mode: InputMode | undefined, sender: Sender): string {
     this.session(sessionId)
     if (this.stopping) throw conflict("the server is stopping")
+    if (this.state(sessionId).controlled) throw conflict("the session's history is being changed")
     const inputId = crypto.randomUUID()
     const entry = { kind: "user" as const, inputId, text, mode: mode ?? "steer", sender }
     this.commit(sessionId, (append) => {
       this.conversation.addWaiting(sessionId, entry, this.now())
       append({ type: "INPUT_WAITING", inputId, text, mode: entry.mode, sender })
     })
-    // A steered message ends a waiting question call; it joins the turn at the next step boundary.
-    if (entry.mode === "steer") this.context.messageArrived(sessionId)
     this.startNext(sessionId)
     return inputId
-  }
-
-  /** Answers the pending question set `questionSetId` of the session; only the first answer to a set is taken. */
-  answerQuestion(
-    sessionId: string,
-    questionSetId: string,
-    answers: ReadonlyArray<{ readonly id: string; readonly selection?: string; readonly note?: string }>,
-    sender: Sender,
-  ) {
-    this.session(sessionId)
-    this.context.answer(sessionId, questionSetId, answers, sender)
   }
 
   cancel(sessionId: string) {
@@ -917,29 +1020,63 @@ export class SessionHub {
     Effect.runFork(Fiber.interrupt(live.fiber))
   }
 
+  /** Starts an idle session with continuation content, which joins its next eligible batch. */
+  resume(sessionId: string) {
+    this.session(sessionId)
+    if (this.state(sessionId).controlled) throw conflict("the session's history is being changed")
+    if (this.state(sessionId).live !== null) throw conflict("the session is already running")
+    if (this.context.activeWorkflow(sessionId) !== null) throw conflict("the session's context workflow is active")
+    if (this.conversation.waiting(sessionId).some(isContinuation)) throw conflict("a continuation is already pending")
+    this.commit(sessionId, () => this.queue(sessionId, continuationComponent({}), "continuation"))
+    this.startNext(sessionId)
+  }
+
 
   /**
-   * Starts a turn on an idle session with waiting input: its first entry,
-   * with every steered message and notification after it, or a waiting
-   * continuation component with all the input held for it. A pending
-   * restore is completed first, and a session whose restore fails starts
-   * no turn. The turn start checks scratch and memory, which may queue
-   * notifications that join the turn, and snapshots the research and
-   * memory files. When the turn cannot start, its input stays waiting for
-   * the next start, and a session error event says why.
+   * Starts a turn on an idle session with one finite batch from the eligible
+   * lane: steering and independently triggering notifications, in arrival
+   * order, otherwise queued input. A continuation joins that batch, or is
+   * admitted alone. Fork reconciliation is attach-only. A pending restore is
+   * completed first, and a session whose restore fails starts no turn. The
+   * turn start checks scratch and memory, which may queue notifications, and
+   * snapshots the research and memory files. When the turn cannot start, its
+   * input stays waiting for the next start, and a session error event says
+   * why.
    */
   private startNext(sessionId: string) {
-    if (this.stopping || this.state(sessionId).live !== null) return
+    const state = this.state(sessionId)
+    if (this.stopping || state.controlled || state.live !== null) return
     if (this.conversation.waiting(sessionId).length === 0) return
     if (!this.restoreIfPending(sessionId)) return
     try {
       this.checkScratch(sessionId)
       this.checkMemory(sessionId)
       const waiting = this.conversation.waiting(sessionId)
+      const workflow = this.context.activeWorkflow(sessionId)
+      if (workflow !== null) {
+        const own = waiting.filter(
+          (entry) => entry.kind === "notification" && entry.trigger === "context" && entry.workflowId === workflow.id,
+        )
+        if (own.length === 0) return
+        const memory = waiting.filter(
+          (entry) => entry.kind === "notification" && entry.component.name === "memory_restored",
+        )
+        const selected = new Set([...own, ...memory])
+        this.startTurn(sessionId, waiting.filter((entry) => selected.has(entry)), this.currentFiles(sessionId))
+        return
+      }
       const continuation = waiting.find(isContinuation)
-      const [first, ...rest] = waiting
-      const taken =
-        continuation === undefined ? [first!, ...rest.filter(joins)] : [continuation, ...waiting.filter((entry) => entry !== continuation)]
+      const steering = waiting.filter(isIndependent)
+      const queued = waiting.filter((entry) => entry.kind === "user" && entry.mode === "queue")
+      const selected = steering.length > 0 ? steering : queued
+      const context = waiting.filter(isContextInput)
+      const base = selected.length > 0 ? selected : context
+      if (base.length === 0 && continuation === undefined) return
+      const trigger = base.length > 0 ? new Set(base) : new Set([continuation!])
+      const taken = [
+        ...(continuation === undefined ? [] : [continuation]),
+        ...waiting.filter((entry) => trigger.has(entry) || isForkAttach(entry)),
+      ]
       this.startTurn(sessionId, taken, this.currentFiles(sessionId))
     } catch (error) {
       const message = `the turn could not start, and its input stays waiting: ${error instanceof Error ? error.message : String(error)}`
@@ -1004,26 +1141,62 @@ export class SessionHub {
   }
 
   /**
-   * Delivers `taken` waiting entries into `turn`, in the session's current
-   * checkpoint window: in arrival order, with the state components
-   * reconciliation yields before the first user message. Adjoining
-   * components form one developer message with its event; each user
-   * message gets its `INPUT_RECEIVED`. The taken entries stop waiting.
+   * Assembles the admitted batch before the admission transaction: the
+   * waiting entries in arrival order, with the state components
+   * reconciliation yields before the first user message. A fork component
+   * stays immediately before the fork-caused notifications it explains.
    */
-  private deliverInto(sessionId: string, turn: TurnRecord, taken: ReadonlyArray<WaitingEntry>, append: Append) {
+  private assembleDelivery(sessionId: string, taken: ReadonlyArray<WaitingEntry>) {
     const session = this.session(sessionId)
     const window = this.conversation.currentWindow(sessionId)!
     const { components: state, errors } = this.reconcile(session, this.conversation.knownStates(sessionId, window.position))
-    for (const error of errors) append({ type: "SESSION_ERROR", code: error.code, message: error.message, runId: turn.runId })
-    type Delivered = { readonly kind: "component"; readonly component: Component } | Extract<WaitingEntry, { kind: "user" }>
-    const delivered: Array<Delivered> = taken.map((entry) => (entry.kind === "user" ? entry : { kind: "component", component: entry.component }))
-    // The fork component goes directly before the components the fork caused; other state components before the first user message.
-    const forkCaused = taken.findIndex((entry) => entry.kind === "notification" && entry.causedBy === "fork")
-    const fork = forkCaused === -1 ? [] : state.filter((component) => component.name === "fork")
+    type Delivered =
+      | { readonly kind: "component"; readonly inputId: string; readonly component: Component }
+      | { readonly kind: "user"; readonly inputId: string; readonly entry: Extract<WaitingEntry, { kind: "user" }> }
+    const delivered: Array<Delivered> = taken.map((entry) =>
+      entry.kind === "user"
+        ? { kind: "user", inputId: entry.inputId, entry }
+        : { kind: "component", inputId: entry.inputId, component: entry.component },
+    )
+    const firstFork = taken.find(isForkAttach)
+    const fork = firstFork === undefined ? [] : state.filter((component) => component.name === "fork")
     const rest = state.filter((component) => !fork.includes(component))
     const firstUser = delivered.findIndex((entry) => entry.kind === "user")
-    delivered.splice(firstUser === -1 ? delivered.length : firstUser, 0, ...rest.map((component) => ({ kind: "component" as const, component })))
-    if (fork.length > 0) delivered.splice(forkCaused, 0, { kind: "component", component: fork[0]! })
+    delivered.splice(
+      firstUser === -1 ? delivered.length : firstUser,
+      0,
+      ...rest.map((component) => ({ kind: "component" as const, inputId: crypto.randomUUID(), component })),
+    )
+    if (fork.length > 0) {
+      const at = delivered.findIndex((entry) => entry.inputId === firstFork!.inputId)
+      delivered.splice(at < 0 ? delivered.length : at, 0, {
+        kind: "component",
+        inputId: crypto.randomUUID(),
+        component: fork[0]!,
+      })
+    }
+    const membership: Array<TurnInput> = [
+      { kind: "system", inputId: `system:${window.position}` },
+      ...delivered.map((entry) => ({ kind: entry.kind === "component" ? ("developer" as const) : ("user" as const), inputId: entry.inputId })),
+    ]
+    return { delivered, membership, errors }
+  }
+
+  /**
+   * Records an assembled batch in the turn's current checkpoint window.
+   * Adjoining components form one developer message with its event; each
+   * user message gets its `INPUT_RECEIVED`. The taken entries stop waiting.
+   */
+  private deliverInto(
+    sessionId: string,
+    turn: TurnRecord,
+    delivered: ReturnType<SessionHub["assembleDelivery"]>["delivered"],
+    errors: ReturnType<SessionHub["assembleDelivery"]>["errors"],
+    taken: ReadonlyArray<WaitingEntry>,
+    append: Append,
+  ) {
+    const window = this.conversation.currentWindow(sessionId)!
+    for (const error of errors) append({ type: "SESSION_ERROR", code: error.code, message: error.message, runId: turn.runId })
     const owner = { runId: turn.runId, model: turn.model }
     let message: Array<Component> = []
     const closeMessage = () => {
@@ -1039,12 +1212,18 @@ export class SessionHub {
       closeMessage()
       const item = this.conversation.appendItem(sessionId, window.position, owner, {
         kind: "user",
-        inputId: entry.inputId,
-        text: entry.text,
-        sender: entry.sender,
+        inputId: entry.entry.inputId,
+        text: entry.entry.text,
+        sender: entry.entry.sender,
       })
       this.context.userMessage(sessionId, item.position, turn.runId)
-      append({ type: "INPUT_RECEIVED", inputId: entry.inputId, text: entry.text, mode: entry.mode, sender: entry.sender })
+      append({
+        type: "INPUT_RECEIVED",
+        inputId: entry.entry.inputId,
+        text: entry.entry.text,
+        mode: entry.entry.mode,
+        sender: entry.entry.sender,
+      })
     }
     closeMessage()
     for (const entry of taken) this.conversation.removeWaiting(sessionId, entry.position)
@@ -1059,32 +1238,57 @@ export class SessionHub {
     taken: ReadonlyArray<WaitingEntry>,
     snapshot: { readonly research: ReadonlyArray<StoredFile>; readonly refs: ReadonlyArray<FileRef> },
   ) {
+    const cause = takeCause(taken)
+    const admission = startSpan("ashe_agent.turn_admission", { "ashe_agent.turn.cause": cause })
+    let started = false
+    try {
+      const result = otelContext.with(withSpan(admission), () => this.startTurnBody(sessionId, taken, snapshot))
+      started = true
+      return result
+    } finally {
+      endSpan(admission, {}, started ? undefined : "turn_failed")
+    }
+  }
+
+  private startTurnBody(
+    sessionId: string,
+    taken: ReadonlyArray<WaitingEntry>,
+    snapshot: { readonly research: ReadonlyArray<StoredFile>; readonly refs: ReadonlyArray<FileRef> },
+  ) {
     const state = this.state(sessionId)
+    const runId = crypto.randomUUID()
+    const { delivered, membership, errors } = this.assembleDelivery(sessionId, taken)
+    const contextInput = taken.find(isContextInput)
+    const association = contextInput?.kind === "notification" ? this.context.association(contextInput.workflowId) : null
     const { session, turn } = this.commit(sessionId, (append) => {
       const session = this.session(sessionId)
       const userMessageIds = taken.flatMap((entry) => (entry.kind === "user" ? [entry.inputId] : []))
-      const cause = isContinuation(taken[0]!) ? "continuation" : userMessageIds.length > 0 ? "user" : "notification"
+      const cause = takeCause(taken)
       const turn = this.store.insertTurn(
         sessionId,
         {
-          runId: crypto.randomUUID(),
+          runId,
           cause,
+          membership,
           userMessageIds,
           model: session.model,
           reasoningEffort: session.reasoningEffort,
           firstSeq: session.nextSeq,
+          contextWorkflowId: association?.workflowId ?? null,
+          contextStartItem: association?.startItem ?? null,
         },
         this.now(),
       )
       this.fileState.putFiles(snapshot.research)
       this.fileState.recordSnapshot(sessionId, turn.runId, snapshot.refs)
-      this.deliverInto(sessionId, turn, taken, append)
-      append({ type: "RUN_STARTED", threadId: sessionId, runId: turn.runId, model: turn.model, cause, userMessageIds })
+      this.deliverInto(sessionId, turn, delivered, errors, taken, append)
+      append({ type: "RUN_STARTED", threadId: sessionId, runId: turn.runId, model: turn.model, cause, userMessageIds, membership })
+      this.context.turnStarted(turn)
       return { session, turn }
     })
     this.context.afterItems(sessionId, turn)
     const model = this.options.models.find((candidate) => candidate.id === turn.model)
-    const span = startSpan("ashe_agent.turn", { "ashe_agent.model": turn.model })
+    const span = startSpan("ashe_agent.turn", { "ashe_agent.model": turn.model, "ashe_agent.turn.cause": turn.cause })
     const live: Live = { fiber: null as unknown as Fiber.Fiber<TurnOutcome>, turn, cancelled: false, span, startedAt: performance.now() }
     const owner = { runId: turn.runId, model: turn.model }
     const rules = () => this.rules(this.session(sessionId))
@@ -1097,7 +1301,7 @@ export class SessionHub {
         return { harness: window.harnessInstructions, items: this.conversation.items(sessionId, window.position) }
       },
       tools: () => {
-        const tools = this.offeredTools(rules())
+        const tools = this.offeredTools(rules(), sessionId)
         // A cleared context turn keeps only the tools it needs to organize its context.
         return this.context.clearings(turn.runId) === 0 ? tools : tools.filter((tool) => CLEARED_CONTEXT_TOOLS.includes(tool.spec.name))
       },
@@ -1120,25 +1324,21 @@ export class SessionHub {
       deliver: () => {
         this.checkScratch(sessionId)
         this.checkMemory(sessionId)
-        // A context turn holds input for its continuation turn, but a memory restored component reaches it at once.
-        const takes = this.context.isContextTurn(turn.runId)
-          ? (entry: WaitingEntry) => entry.kind === "notification" && entry.component.name === "memory_restored"
-          : joins
-        const taken = this.conversation.waiting(sessionId).filter(takes)
-        if (taken.length === 0) return false
-        this.commit(sessionId, (append) => this.deliverInto(sessionId, turn, taken, append))
-        this.context.afterItems(sessionId, turn)
-        return true
+        const waiting = this.conversation.waiting(sessionId)
+        return this.context.isContextTurn(turn.runId)
+          ? waiting.some((entry) => entry.kind === "notification" && entry.component.name === "memory_restored")
+          : waiting.some(isIndependent) || waiting.some(isContinuation) || waiting.some(isContextInput)
       },
       isCancelled: () => live.cancelled,
       authorize: (toolCallId, check, signal) => this.authorize(sessionId, turn.runId, toolCallId, check, signal),
       trace: withSpan(span),
       offered: (tool) => !whollyDenied(rules(), withholdingName(tool)),
+      toolPolicy: this.toolPolicy,
       checkpointWindowSize: model === undefined ? Number.POSITIVE_INFINITY : checkpointWindowSize(model, session.modelOverrides[model.id]),
       isContextTurn: () => this.context.isContextTurn(turn.runId),
       reserveReached: (signal) => this.context.start(this.session(sessionId), turn, "threshold", signal),
       limitReached: (signal) => this.context.limitReached(this.session(sessionId), turn, signal),
-      idle: () => this.context.idle(this.session(sessionId), turn),
+      idle: (signal) => this.context.idle(this.session(sessionId), turn, signal),
     }
     const fiber = Effect.runFork(this.options.runner(context))
     live.fiber = fiber
@@ -1150,29 +1350,104 @@ export class SessionHub {
     const state = this.state(sessionId)
     state.live = null
     const runId = live.turn.runId
-    for (const [requestId, ask] of [...state.asks.entries()]) if (ask.runId === runId) state.asks.delete(requestId)
-    this.endTurnSpan(live, exit)
-    if (this.stopping) return
-    this.commit(sessionId, (append) => {
-      // No answer can apply to an ended turn, so its open requests are withdrawn with it.
-      for (const requestId of this.openRequests(sessionId, runId)) {
-        append({ type: "PERMISSION_WITHDRAWN", requestId, reason: "canceled" })
+    let finalizationFailure: unknown = null
+    const rememberFailure = (error: unknown) => {
+      finalizationFailure ??= error
+    }
+    const failureText = (error: unknown) => (error instanceof Error ? error.message : String(error))
+    const finalizationMessage = () => `the turn could not be finalized: ${failureText(finalizationFailure)}`
+    const recordFailure = () => {
+      try {
+        this.commit(sessionId, (append) => {
+          this.store.endTurn(sessionId, runId, "failed", this.now())
+          append({ type: "RUN_ERROR", runId, message: finalizationMessage(), code: "state_integrity_failed" })
+        })
+        return
+      } catch (error) {
+        rememberFailure(error)
       }
-      if (Exit.isSuccess(exit) && exit.value.status === "finished") {
-        this.store.endTurn(sessionId, runId, "finished", this.now())
-        append({ type: "RUN_FINISHED", threadId: sessionId, runId, outcome: { type: "success" } })
-      } else if (Exit.isFailure(exit) && live.cancelled) {
-        this.store.endTurn(sessionId, runId, "cancelled", this.now())
-        append({ type: "RUN_FINISHED", threadId: sessionId, runId, outcome: { type: "cancelled" } })
-      } else {
-        const failure =
-          Exit.isSuccess(exit) && exit.value.status === "failed" ? exit.value : { message: "the turn failed", code: "internal" }
-        this.store.endTurn(sessionId, runId, "failed", this.now())
-        append({ type: "RUN_ERROR", runId, message: failure.message, ...(failure.code === undefined ? {} : { code: failure.code }) })
+      // A terminal event write can fail independently of the row transition.
+      try {
+        this.commit(sessionId, () => this.store.endTurn(sessionId, runId, "failed", this.now()))
+      } catch (error) {
+        rememberFailure(error)
       }
-    })
-    this.reportingFailure(sessionId, "memory_publish_failed", () => this.context.ended(sessionId, runId))
-    this.startNext(sessionId)
+    }
+    try {
+      for (const [requestId, ask] of [...state.asks.entries()]) {
+        if (ask.runId !== runId) continue
+        try {
+          if (ask.actionId !== null) this.actions.cancel(ask.actionId, "the turn ended")
+        } catch (error) {
+          rememberFailure(error)
+        }
+        state.asks.delete(requestId)
+        if (!this.stopping) continue
+        try {
+          this.emit(sessionId, {
+            type: "PERMISSION_WITHDRAWN",
+            requestId,
+            reason: "restart",
+          })
+        } catch (error) {
+          rememberFailure(error)
+        }
+      }
+      this.endTurnSpan(live, exit)
+      if (this.stopping) return
+      const baseStatus: "finished" | "cancelled" | "failed" =
+        live.cancelled
+          ? "cancelled"
+          : Exit.isSuccess(exit) && exit.value.status === "finished"
+            ? "finished"
+            : Exit.isFailure(exit) && live.cancelled
+              ? "cancelled"
+              : "failed"
+      let status = finalizationFailure === null ? baseStatus : "failed"
+      try {
+        this.commit(sessionId, (append) => {
+          // No answer can apply to an ended turn, so its open requests are withdrawn with it.
+          for (const requestId of this.openRequests(sessionId, runId)) {
+            append({ type: "PERMISSION_WITHDRAWN", requestId, reason: "canceled" })
+          }
+          if (status === "finished") {
+            this.store.endTurn(sessionId, runId, "finished", this.now())
+            append({ type: "RUN_FINISHED", threadId: sessionId, runId, outcome: { type: "success" } })
+          } else if (status === "cancelled") {
+            this.store.endTurn(sessionId, runId, "cancelled", this.now())
+            append({ type: "RUN_FINISHED", threadId: sessionId, runId, outcome: { type: "cancelled" } })
+          } else {
+            const failure =
+              finalizationFailure !== null
+                ? { message: finalizationMessage(), code: "state_integrity_failed" }
+                : Exit.isSuccess(exit) && exit.value.status === "failed"
+                  ? exit.value
+                  : { message: "the turn failed", code: "internal" }
+            this.store.endTurn(sessionId, runId, "failed", this.now())
+            append({ type: "RUN_ERROR", runId, message: failure.message, ...(failure.code === undefined ? {} : { code: failure.code }) })
+          }
+        })
+      } catch (error) {
+        rememberFailure(error)
+        status = "failed"
+        recordFailure()
+      }
+      try {
+        this.context.turnEnded(sessionId, runId, status)
+      } catch (error) {
+        const message = `settling the context workflow failed: ${failureText(error)}`
+        try {
+          this.commit(sessionId, (append) => append({ type: "SESSION_ERROR", code: "context_workflow_failed", message }))
+        } catch {
+          // The persisted workflow remains active; the next turn or restart settles it.
+        }
+      }
+      if (finalizationFailure === null && !state.controlled) this.startNext(sessionId)
+    } finally {
+      const settled = state.settled
+      state.settled = null
+      settled?.()
+    }
   }
 
   /** Ends the turn's span and records its duration, with how it ended. */
@@ -1193,10 +1468,11 @@ export class SessionHub {
 
 
   /** The turn `runId` when it is a rewind and fork point: a turn whose starting input holds a user message. */
-  private point(sessionId: string, runId: string): TurnRecord {
+  private point(sessionId: string, runId: string, settled = false): TurnRecord {
     const turn = this.store.getTurn(sessionId, runId)
     if (turn === null) throw notFound(`turn ${runId}`)
     if (turn.userMessageIds.length === 0) throw invalid(`turn ${runId} starts with no user message, so it is no rewind or fork point`)
+    if (settled && turn.status === "running") throw invalid(`turn ${runId} has not settled, so it is no fork point`)
     return turn
   }
 
@@ -1212,14 +1488,18 @@ export class SessionHub {
    */
   fork(sessionId: string, runId: string | undefined): SessionSummary {
     const source = this.session(sessionId)
-    if (this.isRunning(sessionId)) throw conflict("a turn is running; fork after it ends")
-    const point = runId === undefined ? null : this.point(sessionId, runId)
+    const turns = this.store.turns(sessionId)
+    const point =
+      runId === undefined
+        ? [...turns].reverse().find((turn) => turn.userMessageIds.length > 0 && turn.status !== "running")
+        : this.point(sessionId, runId, true)
+    if (point === undefined) throw invalid("the session has no settled turn starting with a user message to fork")
     if (!this.restoreIfPending(sessionId)) throw conflict("the session's files are being restored after a rewind; try again")
     const size = this.files.scratchSize(sessionId)
     if (size > SCRATCH_FORK_MAX_BYTES) {
       throw invalid(`the session's scratch holds ${size} bytes, over the fork limit of ${SCRATCH_FORK_MAX_BYTES} bytes`)
     }
-    const next = point === null ? undefined : this.store.turns(sessionId).find((turn) => turn.position > point.position)
+    const next = turns.find((turn) => turn.position > point.position)
     const files =
       next === undefined
         ? this.currentFiles(sessionId)
@@ -1235,14 +1515,12 @@ export class SessionHub {
       const { skipped } = this.files.copyScratch(sessionId, id)
       this.store.db.transaction(() => {
         const createdAt = this.now()
-        this.store.fork(source, { id, createdAt }, runId ?? null)
+        this.store.fork(source, { id, createdAt }, point.runId)
         this.fileState.recordGeneration(id, 1, recorded, createdAt)
         this.fileState.setGenerations(id, { scratch: generations.scratch, memoryRestore: generations.memoryRestore, forkSkipped: skipped })
         this.queueReconciledNotifications(id, "fork")
       })()
     })
-    this.context.historyChanged(sessionId)
-    this.startNext(id)
     return this.summary(id)
   }
 
@@ -1256,9 +1534,10 @@ export class SessionHub {
    * continuation component waits first again. The restore then completes,
    * and its rerun turn starts after it.
    */
-  rewind(sessionId: string, runId: string, text: string | undefined, sender: Sender) {
+  async rewind(sessionId: string, runId: string, text: string | undefined, sender: Sender) {
     this.session(sessionId)
-    if (this.isRunning(sessionId)) throw conflict("a turn is running; rewind after it ends")
+    const state = this.state(sessionId)
+    if (state.controlled) throw conflict("another history operation is changing the session")
     const turn = this.point(sessionId, runId)
     const users = new Map(
       this.conversation.turnItems(sessionId, runId).flatMap((item) => (item.kind === "user" ? [[item.inputId, item.text] as const] : [])),
@@ -1270,21 +1549,39 @@ export class SessionHub {
       .find((item) => item.kind === "component" && item.component.name === "continuation")
     if (!this.restoreIfPending(sessionId)) throw conflict("the session's files are being restored after a rewind; try again")
     const restore = this.fileState.snapshot(sessionId, runId)
-    this.commit(sessionId, (append) => {
-      this.fileState.recordPendingRestore(sessionId, restore, this.now())
-      this.store.removeFrom(sessionId, turn)
-      append({ type: "SESSION_REWOUND", runId: turn.runId, firstRemovedSeq: turn.firstSeq })
-      if (continuation?.kind === "component") this.queue(sessionId, continuation.component)
-      this.queue(sessionId, rewindComponent())
-      this.queueReconciledNotifications(sessionId)
-      for (const message of texts) {
-        const inputId = crypto.randomUUID()
-        this.conversation.addWaiting(sessionId, { kind: "user", inputId, text: message, mode: "steer", sender }, this.now())
-        append({ type: "INPUT_WAITING", inputId, text: message, mode: "steer", sender })
+    state.controlled = true
+    let failed = false
+    try {
+      const live = state.live
+      if (live !== null) {
+        const settled = new Promise<void>((resolve) => (state.settled = resolve))
+        live.cancelled = true
+        await Effect.runPromise(Fiber.interrupt(live.fiber))
+        await settled
       }
-    })
-    this.context.historyChanged(sessionId)
-    this.startNext(sessionId)
+      this.commit(sessionId, (append) => {
+        this.fileState.recordPendingRestore(sessionId, restore, this.now())
+        this.store.removeFrom(sessionId, turn)
+        const cleared = this.conversation.clearWaiting(sessionId)
+        append({ type: "SESSION_REWOUND", runId: turn.runId, firstRemovedSeq: turn.firstSeq, clearedInputIds: [...cleared] })
+        if (continuation?.kind === "component") this.queue(sessionId, continuation.component, "continuation")
+        this.queue(sessionId, rewindComponent())
+        this.queueReconciledNotifications(sessionId)
+        for (const message of texts) {
+          const inputId = crypto.randomUUID()
+          this.conversation.addWaiting(sessionId, { kind: "user", inputId, text: message, mode: "steer", sender }, this.now())
+          append({ type: "INPUT_WAITING", inputId, text: message, mode: "steer", sender })
+        }
+      })
+      this.context.historyChanged(sessionId)
+    } catch (error) {
+      failed = true
+      throw error
+    } finally {
+      state.controlled = false
+      if (failed) this.startNext(sessionId)
+    }
+    if (this.restoreIfPending(sessionId)) this.startNext(sessionId)
   }
 
   /** Stops taking input and interrupts every running turn; their turns stay running for `recover`. */

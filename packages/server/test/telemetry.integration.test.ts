@@ -3,8 +3,10 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, describe, expect, test } from "bun:test"
 import { Redacted } from "effect"
+import { Schema } from "effect"
 import { ModelCallError } from "../src/agent/model.ts"
-import type { Tool } from "../src/agent/tools.ts"
+import { IntegrityFailure } from "../src/agent/failure.ts"
+import { builtinTool, toolPolicy, type Tool } from "../src/agent/tools.ts"
 import { AgentRegistry } from "../src/agents/agents.ts"
 import { fileSetup, InstructionsUnreadable } from "../src/agents/setup.ts"
 import type { UserInstructions } from "../src/sessions/hub.ts"
@@ -14,7 +16,7 @@ import { builtinTools } from "../src/tools/builtin.ts"
 import { executeTool } from "../src/tools/codemode/execute.ts"
 import { McpRegistry } from "../src/tools/mcp/servers.ts"
 import { ShellProcesses } from "../src/tools/shell/index.ts"
-import { AgentHarness, callTools, failWith, hold, say, testTools, type Reply } from "./support/agent.ts"
+import { AgentHarness, callTools, failWith, hold, ManualClock, say, testTools, type Reply } from "./support/agent.ts"
 import { Client, waitFor } from "./support/cli.ts"
 import { contextHarness, publishMemory, windowModel } from "./support/context.ts"
 import { TestServer } from "./support/server.ts"
@@ -130,12 +132,197 @@ const modelCallsTimed = async () =>
     .reduce((total, point) => total + point.value.count, 0)
 
 describe("telemetry", () => {
+  test("a tool deadline reaches its tool span without exporting the call's arguments or output", async () => {
+    const before = new Set(telemetry.spans())
+    const clock = new ManualClock()
+    const slow = builtinTool({
+      name: "slow",
+      permission: null,
+      description: "Waits for the test clock.",
+      args: Schema.Struct({ secret: Schema.String }),
+      run: async (_args, run) => {
+        run.started()
+        await new Promise<void>((resolve) => setTimeout(resolve, 30_000))
+        return { outcome: "success", content: "unexpected" }
+      },
+    })
+    const h = new AgentHarness({ tools: [slow], toolPolicy: toolPolicy(1_000, { slow: 100 }, clock) })
+    try {
+      const id = h.create()
+      h.model.next(callTools([{ name: "slow", args: { secret: marker.command } }]), say("continued"))
+      h.input(id, marker.prompt)
+      await waitFor("the started call", () =>
+        h.types(id).includes("TOOL_EXECUTION_STARTED") ? true : undefined,
+      )
+      await clock.advance(100)
+      await h.turnsEnded(id, 1)
+    } finally {
+      await h.cleanup()
+    }
+    const spans = telemetry.spans().filter((span) => !before.has(span))
+    const call = spans.find(
+      (span) => span.name === "ashe_agent.tool_call" && span.attributes["ashe_agent.tool"] === "slow",
+    )
+    expect(call).toMatchObject({
+      attributes: { "ashe_agent.tool.outcome": "failed", "ashe_agent.tool.timed_out": true },
+    })
+    expect(spans.some((span) => span.name === "ashe_agent.turn_admission")).toBe(true)
+    expect(await offCatalog(telemetry)).toEqual([])
+    const exported = await exportedText(telemetry)
+    for (const value of [marker.command, marker.prompt]) expect(exported).not.toContain(value)
+  })
+
+  test("action unavailability and an owned integrity failure reach their operation spans", async () => {
+    const before = new Set(telemetry.spans())
+    const unavailable = new AgentHarness({ clientActions: false, permission: { edit: "ask" } })
+    try {
+      const id = unavailable.create()
+      unavailable.model.next(callTools([{ name: "touch", args: { paths: ["a"] } }]), say("continued"))
+      unavailable.input(id, marker.prompt)
+      await unavailable.turnsEnded(id, 1)
+    } finally {
+      await unavailable.cleanup()
+    }
+    const brittle = builtinTool({
+      name: "brittle",
+      permission: null,
+      description: "Fails session integrity.",
+      args: Schema.Struct({}),
+      run: async () => {
+        throw new IntegrityFailure("injected state failure")
+      },
+    })
+    const failing = new AgentHarness({ tools: [brittle] })
+    try {
+      const id = failing.create()
+      failing.model.next(callTools([{ name: "brittle", args: {} }]))
+      failing.input(id, marker.prompt)
+      await failing.turnsEnded(id, 1)
+    } finally {
+      await failing.cleanup()
+    }
+    const spans = telemetry.spans().filter((span) => !before.has(span))
+    expect(
+      spans.find((span) => span.name === "ashe_agent.tool_call" && span.attributes["ashe_agent.tool"] === "touch")?.attributes[
+        "ashe_agent.tool.outcome"
+      ],
+    ).toBe("failed")
+    expect(spans.some((span) => span.name === "ashe_agent.action")).toBe(false)
+    expect(spans.some((span) => span.name === "ashe_agent.turn" && span.status.code === 2)).toBe(true)
+    expect(await offCatalog(telemetry)).toEqual([])
+    const exported = await exportedText(telemetry)
+    expect(exported).not.toContain(marker.prompt)
+  })
+
+  test("a question settlement failure reaches its question, action, and turn spans", async () => {
+    const before = new Set(telemetry.spans())
+    const h = new AgentHarness()
+    try {
+      const id = h.create()
+      h.model.next(
+        callTools([
+          {
+            name: "context_ask_question",
+            args: {
+              questions: [
+                {
+                  id: "q",
+                  header: "Pick",
+                  question: marker.prompt,
+                  options: [
+                    { label: "A", description: "First" },
+                    { label: "B", description: "Second" },
+                  ],
+                },
+              ],
+            },
+          },
+        ]),
+        say("must not run"),
+      )
+      h.input(id, marker.prompt)
+      const asked = await waitFor("the question", () => h.events(id).find(({ event }) => event.type === "QUESTIONS_ASKED"), 10_000)
+      const append = h.hub.store.appendEvent.bind(h.hub.store)
+      h.hub.store.appendEvent = (sessionId, body, timestamp) => {
+        if (body.type === "ACTION_SETTLED") throw new Error("injected question settlement failure")
+        return append(sessionId, body, timestamp)
+      }
+      expect(() => h.replyQuestionByMessage(id, (asked.event as any).questionSetId)).toThrow("injected question settlement failure")
+      await h.turnsEnded(id, 1)
+    } finally {
+      await h.cleanup()
+    }
+    const spans = telemetry.spans().filter((span) => !before.has(span))
+    expect(spans.find((span) => span.name === "ashe_agent.question_wait")).toMatchObject({
+      attributes: { "ashe_agent.question.outcome": "canceled", "error.type": "internal" },
+      status: { code: 2 },
+    })
+    expect(spans.find((span) => span.name === "ashe_agent.action")).toMatchObject({
+      attributes: { "ashe_agent.action.outcome": "failed", "error.type": "internal" },
+      status: { code: 2 },
+    })
+    expect(spans.some((span) => span.name === "ashe_agent.turn" && span.status.code === 2)).toBe(true)
+    expect(await offCatalog(telemetry)).toEqual([])
+    expect(await exportedText(telemetry)).not.toContain(marker.prompt)
+  })
+
+  test("a question assignment failure reaches its question, action, and turn spans", async () => {
+    const before = new Set(telemetry.spans())
+    const h = new AgentHarness()
+    try {
+      const id = h.create()
+      h.model.next(
+        callTools([
+          {
+            name: "context_ask_question",
+            args: {
+              questions: [
+                {
+                  id: "q",
+                  header: "Pick",
+                  question: marker.prompt,
+                  options: [
+                    { label: "A", description: "First" },
+                    { label: "B", description: "Second" },
+                  ],
+                },
+              ],
+            },
+          },
+        ]),
+        say("must not run"),
+      )
+      const append = h.hub.store.appendEvent.bind(h.hub.store)
+      h.hub.store.appendEvent = (sessionId, body, timestamp) => {
+        if (body.type === "ACTION_ASSIGNED") throw new Error("injected question assignment failure")
+        return append(sessionId, body, timestamp)
+      }
+      h.input(id, marker.prompt)
+      await h.turnsEnded(id, 1)
+    } finally {
+      await h.cleanup()
+    }
+    const spans = telemetry.spans().filter((span) => !before.has(span))
+    expect(spans.find((span) => span.name === "ashe_agent.question_wait")).toMatchObject({
+      attributes: { "ashe_agent.question.outcome": "canceled", "error.type": "internal" },
+      status: { code: 2 },
+    })
+    expect(spans.find((span) => span.name === "ashe_agent.action")).toMatchObject({
+      attributes: { "ashe_agent.action.outcome": "failed", "error.type": "internal" },
+      status: { code: 2 },
+    })
+    expect(spans.some((span) => span.name === "ashe_agent.turn" && span.status.code === 2)).toBe(true)
+    expect(await offCatalog(telemetry)).toEqual([])
+    expect(await exportedText(telemetry)).not.toContain(marker.prompt)
+  })
+
   test("requests, turns, model calls, and tool calls are traced and timed, and no signal carries content or credentials", async () => {
+    const before = new Set(telemetry.spans())
     const token = await runProtocolRequests()
     await runTurnWithTools()
     await runFailingMcpServer()
 
-    const spans = telemetry.spans()
+    const spans = telemetry.spans().filter((span) => !before.has(span))
     const methods = spans.filter((span) => span.name === "ashe_agent.request").map((span) => span.attributes["rpc.method"])
     expect(methods).toEqual(expect.arrayContaining(["auth.exchange", "auth.authenticate", "session.create", "session.input", "unknown"]))
     expect(spans.some((span) => span.attributes["rpc.method"] === "auth.exchange" && span.attributes["error.type"] === "authentication_failed")).toBe(true)
@@ -148,7 +335,9 @@ describe("telemetry", () => {
     expect(modelCalls).toHaveLength(2)
     for (const call of modelCalls) expect(call.parentSpanContext?.spanId).toBe(turn.spanContext().spanId)
 
-    const toolCalls = spans.filter((span) => span.name === "ashe_agent.tool_call")
+    const toolCalls = spans.filter(
+      (span) => span.name === "ashe_agent.tool_call" && span.spanContext().traceId === turn.spanContext().traceId,
+    )
     const direct = toolCalls.filter((span) => span.attributes["ashe_agent.tool.in_program"] === false)
     expect(direct.map((span) => span.attributes["ashe_agent.tool"]).sort()).toEqual(["execute", "file_read", "shell_exec_command", "web_fetch", "web_search"])
     for (const span of direct) {
@@ -240,9 +429,9 @@ describe("telemetry", () => {
       )
       h.input(id, marker.compaction)
       const first = await asked(id, 1)
-      h.hub.answerQuestion(id, first.questionSetId, [{ id: "q", selection: "A", note: marker.note }], h.sender)
+      h.answerQuestion(id, first.questionSetId, [{ id: "q", selection: "A", note: marker.note }])
       const second = await asked(id, 2)
-      h.hub.answerQuestion(id, second.questionSetId, [{ id: "q" }], h.sender)
+      h.answerQuestion(id, second.questionSetId, [{ id: "q" }])
       await h.turnsEnded(id, 1)
       await ended(id, "TIMELINE_ENTRY", 2)
       const fix = () => writeFileSync(research, `---\ndescription: Topic\n---\n${marker.research}\n`)
@@ -279,6 +468,8 @@ describe("telemetry", () => {
       "ashe_agent.question_wait",
       "ashe_agent.checkpoint_window_construction",
       "ashe_agent.reconciliation",
+      "ashe_agent.turn_admission",
+      "ashe_agent.action",
       "ashe_agent.validation",
       "ashe_agent.memory_check",
       "ashe_agent.memory_publish",
@@ -297,8 +488,23 @@ describe("telemetry", () => {
       "answered",
       "answered",
     ])
+    expect(
+      spans
+        .filter((span) => span.name === "ashe_agent.action")
+        .map((span) => [span.attributes["ashe_agent.action.name"], span.attributes["ashe_agent.action.outcome"]]),
+    ).toEqual([
+      ["questions.answer", "completed"],
+      ["questions.answer", "completed"],
+    ])
     const metrics = (await telemetry.metrics()).scopeMetrics.flatMap((scope) => scope.metrics.map((metric) => metric.descriptor.name))
-    expect(metrics).toEqual(expect.arrayContaining(["ashe_agent.clearing.freed", "ashe_agent.checkpoint_window.size", "ashe_agent.validation.failures"]))
+    expect(metrics).toEqual(
+      expect.arrayContaining([
+        "ashe_agent.clearing.freed",
+        "ashe_agent.checkpoint_window.size",
+        "ashe_agent.validation.failures",
+        "ashe_agent.action.duration",
+      ]),
+    )
 
     expect(await offCatalog(telemetry)).toEqual([])
     const exported = await exportedText(telemetry)

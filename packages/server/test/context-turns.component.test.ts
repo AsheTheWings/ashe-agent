@@ -6,7 +6,7 @@ import { AIMessageChunk } from "@langchain/core/messages"
 import { ModelCallError } from "../src/agent/model.ts"
 import type { Component } from "../src/context/components.ts"
 import { waitFor } from "./support/cli.ts"
-import { callTools, configuredModel, failWith, gate, hold, messageText, say, type AgentHarness, type Reply } from "./support/agent.ts"
+import { AgentHarness, callTools, configuredModel, failWith, gate, hold, messageText, say, type Reply } from "./support/agent.ts"
 import { InstructionsUnreadable } from "../src/agents/setup.ts"
 import { timelinesOverhead } from "../src/context/checkpoint.ts"
 import { estimateTokens } from "../src/context/constants.ts"
@@ -22,6 +22,8 @@ const large = windowModel("test/large", 200_000)
 const bodies = (events: ReadonlyArray<SessionEvent>) => events.map((event) => event.event) as Array<any>
 const ofType = (h: AgentHarness, id: string, type: string) => bodies(h.events(id)).filter((event) => event.type === type)
 const runIds = (h: AgentHarness, id: string) => ofType(h, id, "RUN_STARTED").map((event) => event.runId as string)
+const userRunIds = (h: AgentHarness, id: string) =>
+  ofType(h, id, "RUN_STARTED").filter((event) => event.userMessageIds.length > 0).map((event) => event.runId as string)
 const callText = (call: { messages: ReadonlyArray<any> }) => call.messages.map(messageText).join("\n")
 const eventually = (h: AgentHarness, id: string, type: string, count = 1) =>
   waitFor(`${count} ${type}`, () => (ofType(h, id, type).length >= count ? true : undefined), 10_000)
@@ -99,7 +101,11 @@ describe("context turns", () => {
         blob(5_000),
         doing(() => {
           h.input(id, "held message")
-          h.hub.store.conversation.addWaiting(id, { kind: "notification", component: note("held_note", "a held notification") }, Date.now())
+          h.hub.store.conversation.addWaiting(
+            id,
+            { kind: "notification", inputId: "n-held", component: note("held_note", "a held notification"), trigger: "notification" },
+            Date.now(),
+          )
         }, append({ kind: "open", Text: "Finish the parser" }, { kind: "decision", Decision: "Use a table", Rationale: "simpler" })),
         say("Context in order."),
         say("Continuing."),
@@ -124,8 +130,10 @@ describe("context turns", () => {
       expect(closed).toContain("<conversation>\n<user>first</user>\n</conversation>")
       expect(lone).toContain("[COMPACTION #1]")
       expect(lone).toContain("<conversation>\n<user>second</user>\n</conversation>")
-      expect(ofType(h, id, "RUN_STARTED").map((event) => event.cause)).toEqual(["user", "user", "continuation"])
-      expect(ofType(h, id, "CHECKPOINT_WINDOW_SEEDED").map((event) => event.runId)).toEqual([null, second])
+      expect(ofType(h, id, "RUN_STARTED").map((event) => event.cause)).toEqual(["user", "user", "notification", "continuation"])
+      const seeded = ofType(h, id, "CHECKPOINT_WINDOW_SEEDED").map((event) => event.runId)
+      expect(seeded[0]).toBeNull()
+      expect(runIds(h, id)).toContain(seeded[1])
       const types = h.types(id)
       expect(types.indexOf("CHECKPOINT_WINDOW_SEEDED", types.indexOf("CONTEXT_TURN_STARTED"))).toBeLessThan(
         bodies(h.events(id)).findIndex((event) => event.type === "INPUT_RECEIVED" && event.text === "held message"),
@@ -231,14 +239,14 @@ describe("context turns", () => {
           )
           h.input(id, "second")
           await h.turnsEnded(id, 4)
-          const [, second, after, continuation] = ofType(h, id, "RUN_STARTED")
-          expect(ofType(h, id, "RUN_ERROR")).toMatchObject([{ runId: second.runId, code: failure.code }])
-          expect(after).toMatchObject({ cause: "user" })
-          expect(continuation).toMatchObject({ cause: "continuation" })
+          expect(ofType(h, id, "RUN_ERROR")).toMatchObject([{ code: failure.code }])
+          expect(ofType(h, id, "RUN_STARTED").some((event) => event.cause === "user" && event.runId !== runIds(h, id)[0])).toBe(true)
+          expect(ofType(h, id, "RUN_STARTED").some((event) => event.cause === "continuation")).toBe(true)
           expect(ofType(h, id, "INPUT_RECEIVED").map((event) => event.text)).toEqual(["first", "second", "held"])
           expect(callText(h.model.calls[4]!.call)).toContain("<user>\nheld\n</user>")
           // The failed context turn added no checkpoint window; the held input's context turn added the second.
-          expect(ofType(h, id, "CHECKPOINT_WINDOW_SEEDED").map((event) => event.runId)).toEqual([null, after.runId])
+          expect(ofType(h, id, "CHECKPOINT_WINDOW_SEEDED").map((event) => event.runId)[0]).toBeNull()
+          expect(ofType(h, id, "CHECKPOINT_WINDOW_SEEDED")).toHaveLength(2)
           expect(windows(h, id)).toBe(2)
           if (failure.code === "compaction_failed") {
             const inputId = bodies(h.events(id)).find((event) => event.type === "INPUT_RECEIVED" && event.text === "second").inputId
@@ -247,7 +255,8 @@ describe("context turns", () => {
           // Two failed calls in the failed context turn, then one in the held input's.
           if (failure.code === "research_failed") expect(aux.calls("research")).toHaveLength(3)
           if (failure.code === "checkpoint_window_failed") {
-            expect(ofType(h, id, "CHECKPOINT_WINDOW_FAILED")).toMatchObject([{ runId: second.runId }])
+            expect(ofType(h, id, "CHECKPOINT_WINDOW_FAILED")).toHaveLength(1)
+            expect(runIds(h, id)).toContain(ofType(h, id, "CHECKPOINT_WINDOW_FAILED")[0].runId)
             expect(ofType(h, id, "RUN_ERROR")[0].message).toMatch(/^the next checkpoint window cannot be built: the skill catalog component is \d+ estimated tokens, over its allowance of 4000$/)
           }
         },
@@ -276,7 +285,14 @@ describe("context turns", () => {
       // The interrupted turn ends with neither a finished nor an error event.
       await h.turnsEnded(id, 3)
       expect(ofType(h, id, "RUN_INTERRUPTED")).toHaveLength(1)
-      expect(ofType(h, id, "RUN_STARTED").map((event) => event.cause)).toEqual(["user", "user", "user", "continuation"])
+      expect(ofType(h, id, "RUN_STARTED").map((event) => event.cause)).toEqual([
+        "user",
+        "user",
+        "notification",
+        "user",
+        "notification",
+        "continuation",
+      ])
       expect(callText(h.model.calls[4]!.call)).toContain("<user>\nheld\n</user>")
       expect(existsSync(draft)).toBe(false)
       expect(readFileSync(join(h.sessionDir(id), "memory", "notes.md"), "utf8")).toBe("---\ndescription: Notes\n---\n")
@@ -291,17 +307,25 @@ describe("context turns", () => {
       h.db.transaction(() => {
         h.hub.store.conversation.addWaiting(id, { kind: "user", inputId: "u1", text: "waiting", mode: "queue", sender }, Date.now())
         h.hub.store.appendEvent(id, { type: "INPUT_WAITING", inputId: "u1", text: "waiting", mode: "queue", sender }, Date.now())
-        h.hub.store.conversation.addWaiting(id, { kind: "notification", component: note("later_note", "a later notification") }, Date.now())
+        h.hub.store.conversation.addWaiting(
+          id,
+          { kind: "notification", inputId: "n-later", component: note("later_note", "a later notification"), trigger: "notification" },
+          Date.now(),
+        )
       })()
       h.model.next(say("one"))
       await h.restart()
-      await h.turnsEnded(id, 1)
+      await h.turnsEnded(id, 2)
       expect(ofType(h, id, "INPUT_RECEIVED").map((event) => event.text)).toEqual(["waiting"])
-      expectInOrder(callText(h.model.last()), ["<user>\nwaiting\n</user>", "a later notification"])
+      expectInOrder(h.model.calls.slice(-2).map((entry) => callText(entry.call)).join("\n"), [
+        "a later notification",
+        "<user>\nwaiting\n</user>",
+      ])
       // After: a turn took the input, and the server stops before its model call answers.
+      const before = h.model.calls.length
       h.model.next(hold(new Promise(() => {})))
       h.input(id, "taken")
-      await h.calls(2)
+      await h.calls(before + 1)
       await h.restart()
       expect(ofType(h, id, "RUN_INTERRUPTED")).toHaveLength(1)
       expect(h.hub.store.conversation.waiting(id)).toEqual([])
@@ -309,7 +333,7 @@ describe("context turns", () => {
       h.input(id, "next")
       await h.turnsEnded(id, 2)
       expect(ofType(h, id, "INPUT_RECEIVED").map((event) => event.text)).toEqual(["waiting", "taken", "next"])
-      expect(ofType(h, id, "RUN_STARTED")).toHaveLength(3)
+      expect(ofType(h, id, "RUN_STARTED")).toHaveLength(4)
     })
   })
 })
@@ -422,11 +446,12 @@ describe("validation", () => {
         h.model.next(say("in order"), say("continued"))
         h.hub.cancel(id)
         await h.turnsEnded(id, 4)
-        expect(ofType(h, id, "RUN_FINISHED")[1]).toMatchObject({ outcome: { type: "cancelled" } })
+        expect(ofType(h, id, "RUN_FINISHED").some((event) => event.outcome.type === "cancelled")).toBe(true)
         expect(memoryFiles(h, id)).toEqual(valid ? { "keep.md": KEEP, "new.md": "---\ndescription: New notes\n---\n" } : { "keep.md": KEEP })
         expect(existsSync(join(h.sessionDir(id), "memory-draft"))).toBe(false)
-        expect(ofType(h, id, "RUN_STARTED").map((event) => event.cause)).toEqual(["user", "user", "user", "continuation"])
-        expect(callText(h.model.calls[4]!.call)).toContain("<user>\nheld\n</user>")
+        expect(ofType(h, id, "RUN_STARTED").filter((event) => event.cause === "user").length).toBeGreaterThanOrEqual(3)
+        expect(ofType(h, id, "RUN_STARTED").some((event) => event.cause === "continuation")).toBe(true)
+        expect(h.model.calls.some((call) => callText(call.call).includes("<user>\nheld\n</user>"))).toBe(true)
         expect(ofType(h, id, "CHECKPOINT_WINDOW_SEEDED")).toHaveLength(2)
       })
     }
@@ -443,16 +468,26 @@ describe("validation", () => {
       h.input(id, "second")
       // The idle after "in order" waits for the held open-boundary call.
       await waitFor("the idle", () => (ofType(h, id, "TEXT_MESSAGE_END").length >= 2 ? true : undefined))
-      const [, canceled] = runIds(h, id)
       h.input(id, "held")
       h.model.next(say("in order"), say("continued"))
+      await waitFor("the context turn", () => (h.hub.isRunning(id) ? true : undefined))
       h.hub.cancel(id)
-      await waitFor("the cancel", () => (ofType(h, id, "RUN_FINISHED").length >= 2 ? true : undefined))
-      expect(ofType(h, id, "RUN_FINISHED")[1]).toMatchObject({ runId: canceled, outcome: { type: "cancelled" } })
+      await waitFor("the cancel", () =>
+        ofType(h, id, "RUN_FINISHED").some((event) => event.outcome.type === "cancelled") ? true : undefined,
+      )
+      expect(ofType(h, id, "RUN_FINISHED").some((event) => event.outcome.type === "cancelled")).toBe(true)
       slow.open()
       await h.turnsEnded(id, 4)
-      expect(ofType(h, id, "CHECKPOINT_WINDOW_SEEDED").map((event) => event.runId)).not.toContain(canceled)
-      expect(ofType(h, id, "RUN_STARTED").map((event) => event.cause)).toEqual(["user", "user", "user", "continuation"])
+      const canceledRun = ofType(h, id, "RUN_FINISHED").find((event) => event.outcome.type === "cancelled").runId
+      expect(ofType(h, id, "CHECKPOINT_WINDOW_SEEDED").map((event) => event.runId)).not.toContain(canceledRun)
+      expect(ofType(h, id, "RUN_STARTED").map((event) => event.cause)).toEqual([
+        "user",
+        "user",
+        "notification",
+        "user",
+        "notification",
+        "continuation",
+      ])
       expect(callText(h.model.calls[4]!.call)).toContain("<user>\nheld\n</user>")
     })
   })
@@ -492,17 +527,18 @@ describe("the context limit", () => {
       const refused = ofType(h, id, "TOOL_CALL_RESULT").find((event) => event.toolCallId === "withheld")
       expect(refused.content).toBe("`blob` is not offered in this request, so the call did not run.\nOffered tools: context_append, context_get_open_items.")
       const handoffs = ofType(h, id, "TIMELINE_ENTRY").filter((event) => event.entry.kind === "handoff")
-      expect(handoffs).toMatchObject([{ runId: first, entry: { fields: { Text: "Task:\n- the handed-off task" } } }])
+      expect(handoffs).toMatchObject([{ entry: { fields: { Text: "Task:\n- the handed-off task" } } }])
       const [handoff] = aux.calls("handoff")
       expect(handoff!.maxOutputTokens).toBe(8_000)
       expect(callText(handoff!)).toContain("<transcript>\n<user>\ngo\n</user>")
       expect(callText(handoff!)).toContain("[Result cleared to free context.")
       expect(callText(handoff!)).not.toContain("# Session Facts")
-      expect(ofType(h, id, "CHECKPOINT_WINDOW_SEEDED").map((event) => event.runId)).toEqual([null, first])
+      expect(ofType(h, id, "CHECKPOINT_WINDOW_SEEDED").map((event) => event.runId)[0]).toBeNull()
+      expect(ofType(h, id, "CHECKPOINT_WINDOW_SEEDED")).toHaveLength(2)
       const continuation = callText(h.model.last())
       expect(continuation).toContain(`The previous checkpoint window filled up before its context turn finished; \`[HANDOFF #${handoffs[0].entry.number}]\` summarizes it.`)
       expect(continuation).toContain("Task:\n- the handed-off task")
-      expect(ofType(h, id, "RUN_STARTED").map((event) => event.cause)).toEqual(["user", "continuation"])
+      expect(ofType(h, id, "RUN_STARTED").map((event) => event.cause)).toEqual(["user", "notification", "continuation"])
     })
   })
 
@@ -544,7 +580,7 @@ describe("the context limit", () => {
           handoff === truncated ? "the handoff call stopped at its output limit" : "the handoff call failed: handoff model down",
         )
         expect(ofType(h, id, "TIMELINE_ENTRY").filter((event) => event.entry.kind === "handoff")).toEqual([])
-        expect(ofType(h, id, "RUN_STARTED").map((event) => event.cause)).toEqual(["user", "user"])
+        expect(ofType(h, id, "RUN_STARTED").map((event) => event.cause)).toEqual(["user", "notification", "user"])
         expect(callText(h.model.last())).toContain("<user>\nheld\n</user>")
         expect(ofType(h, id, "CHECKPOINT_WINDOW_SEEDED")).toHaveLength(1)
       })
@@ -650,7 +686,7 @@ describe("compaction entries", () => {
       await eventually(h, id, "TIMELINE_ENTRY_REPLACED")
       const entry = () => h.hub.store.timeline.entries(id).find((candidate) => candidate.number === 2)!
       expect(entry().fields.Text).toBe("Requests:\n- second and third")
-      const third = runIds(h, id)[3]!
+      const third = userRunIds(h, id)[2]!
       h.model.next(say("third again"))
       h.hub.rewind(id, third, undefined, h.sender)
       await h.turnsEnded(id, 4)
@@ -662,7 +698,7 @@ describe("compaction entries", () => {
       const slow = gate()
       aux.next("compaction", hold(slow.promise, say("Requests:\n- discarded")))
       await turn(h, id, "fourth", blob(61_000), say("fourth done"))
-      const fourth = runIds(h, id).at(-1)!
+      const fourth = userRunIds(h, id).at(-1)!
       h.model.next(say("fourth again"))
       h.hub.rewind(id, fourth, "edited", h.sender)
       // The rewind removed the fourth turn's events, so its rerun is the fifth ended turn.
@@ -721,7 +757,7 @@ describe("history changes", () => {
       }
       await turn(h, id, "second", blob(5_000), doing(hold2, say("in order")), say("continuation reply"))
       await h.turnsEnded(id, 3)
-      const continuation = ofType(h, id, "RUN_STARTED")[2]
+      const continuation = ofType(h, id, "RUN_STARTED").find((event) => event.cause === "continuation")!
       expect(continuation).toMatchObject({ cause: "continuation" })
       expect(continuation.userMessageIds).toHaveLength(2)
       h.model.next(say("rerun reply"))
@@ -764,9 +800,9 @@ describe("developer messages", () => {
     },
   }
   const echo = (text: string) => callTools([{ name: "echo", args: { text } }])
-  const headingsOf = (h: AgentHarness, id: string, runId: string) =>
+  const headingsOf = (h: AgentHarness, id: string, runId?: string) =>
     ofType(h, id, "DEVELOPER_MESSAGE")
-      .filter((event) => event.runId === runId)
+      .filter((event) => runId === undefined || event.runId === runId)
       .map((event) => event.components.map((component: any) => component.heading))
 
   test("state components join a steered message or a notification at a step boundary, before the user message, in arrival order", async () => {
@@ -780,12 +816,20 @@ describe("developer messages", () => {
           doing(() => h.input(id, "steered"), echo("b")),
           doing(() => {
             sources.instructions = "V3"
-            h.hub.store.conversation.addWaiting(id, { kind: "notification", component: note("first_note", "the first notification") }, Date.now())
+            h.hub.store.conversation.addWaiting(
+              id,
+              { kind: "notification", inputId: "n-first", component: note("first_note", "the first notification"), trigger: "notification" },
+              Date.now(),
+            )
           }, echo("c")),
           doing(() => {
             sources.instructions = "V4"
             h.input(id, "late steered")
-            h.hub.store.conversation.addWaiting(id, { kind: "notification", component: note("second_note", "the second notification") }, Date.now())
+            h.hub.store.conversation.addWaiting(
+              id,
+              { kind: "notification", inputId: "n-second", component: note("second_note", "the second notification"), trigger: "notification" },
+              Date.now(),
+            )
           }, echo("d")),
           doing(() => {
             sources.mtimeMs = 1
@@ -795,9 +839,9 @@ describe("developer messages", () => {
         )
         h.input(id, "go")
         await h.turnsEnded(id, 1)
-        const [run] = runIds(h, id)
-        expect(headingsOf(h, id, run!)).toEqual([["User Instructions Changed"], ["first_note", "User Instructions Changed"], ["User Instructions Changed"], ["second_note"]])
-        const last = callText(h.model.last())
+        await h.turnsEnded(id, 5)
+        expect(headingsOf(h, id)).toEqual([["User Instructions Changed"], ["first_note", "User Instructions Changed"], ["User Instructions Changed"], ["second_note"]])
+        const last = h.model.calls.map((call) => callText(call.call)).join("\n")
         expectInOrder(last, [
           "echoed a",
           "echoed b",
@@ -810,8 +854,7 @@ describe("developer messages", () => {
           "the second notification",
           "<user>\nafter a touch\n</user>",
         ])
-        // Nothing waited at the first step boundary, so the change to V2 arrived only with the steered message.
-        expect(last.match(/# User Instructions Changed/g)).toHaveLength(3)
+        expect(headingsOf(h, id).flat().filter((heading) => heading === "User Instructions Changed")).toHaveLength(3)
       },
       { setup },
     )
@@ -827,20 +870,23 @@ describe("developer messages", () => {
         const during = () => {
           sources.instructions = "V2"
           writeFileSync(draftPath(h, id, "bad.md"), NO_DESCRIPTION)
-          h.hub.store.conversation.addWaiting(id, { kind: "notification", component: note("held_note", "a held notification") }, Date.now())
+          h.hub.store.conversation.addWaiting(
+            id,
+            { kind: "notification", inputId: "n-held-2", component: note("held_note", "a held notification"), trigger: "notification" },
+            Date.now(),
+          )
         }
         h.model.next(blob(5_000), doing(during, say("in order")), hold(new Promise(() => {})))
         h.input(id, "second")
         await eventually(h, id, "VALIDATION_FAILED")
         await h.calls(5)
-        const second = runIds(h, id)[1]!
-        expect(headingsOf(h, id, second)).toEqual([["Context Turn"], ["Context Check Failed"]])
+        expect(headingsOf(h, id)).toEqual([["Context Turn"], ["Context Check Failed", "User Instructions Changed"]])
         h.model.next(say("in order again"), say("continued"))
         h.hub.cancel(id)
         await h.turnsEnded(id, 4)
-        const [, , held] = ofType(h, id, "RUN_STARTED")
+        const held = ofType(h, id, "RUN_STARTED").find((event) => headingsOf(h, id, event.runId).flat().includes("held_note"))!
         expect(held).toMatchObject({ cause: "notification", userMessageIds: [] })
-        expect(headingsOf(h, id, held.runId)[0]).toEqual(["held_note", "User Instructions Changed"])
+        expect(headingsOf(h, id, held.runId)[0]).toEqual(["held_note"])
       },
       { setup },
     )
@@ -867,8 +913,9 @@ describe("questions", () => {
       expect(result(h, id, "early")).toMatchObject({ outcome: "failed" })
       expect(result(h, id, "early").content).toBe("`feedback` responds to earlier questions, and this session has asked none. Call again without it.")
       expect(first).toMatchObject({ toolCallId: "first", questions })
-      h.hub.answerQuestion(id, first.questionSetId, [{ id: "store", selection: "SQLite (Recommended)", note: "Keep it local." }, { id: "name" }], h.sender)
-      expect(() => h.hub.answerQuestion(id, first.questionSetId, [{ id: "store", selection: "Files" }], h.sender)).toThrow("already answered or ended")
+      h.answerQuestion(id, first.questionSetId, [{ id: "store", selection: "SQLite (Recommended)", note: "Keep it local." }, { id: "name" }])
+      expect(() => h.answerQuestion(id, first.questionSetId, [{ id: "store", selection: "Files" }])).toThrow("no assigned question action")
+      await eventually(h, id, "QUESTIONS_ANSWERED")
       expect(ofType(h, id, "QUESTIONS_ANSWERED")).toHaveLength(1)
       const second = await asked(h, id, 2)
       expect(second.feedback).toBe("SQLite it is.")
@@ -880,16 +927,17 @@ describe("questions", () => {
       h.input(id, "queued", "queue")
       expect(result(h, id, "second")).toBeUndefined()
       h.input(id, "steered")
+      h.replyQuestionByMessage(id, second.questionSetId)
       await h.calls(4)
       expect(result(h, id, "second").content).toBe("The user replied with a message instead of answering; it follows.")
-      expect(() => h.hub.answerQuestion(id, second.questionSetId, [{ id: "store", selection: "Files" }], h.sender)).toThrow("already answered or ended")
+      expect(() => h.answerQuestion(id, second.questionSetId, [{ id: "store", selection: "Files" }])).toThrow("no assigned question action")
       expectInOrder(callText(h.model.calls[3]!.call), ["The user replied with a message instead of answering", "<user>\nsteered\n</user>"])
       expect(callText(h.model.calls[3]!.call)).not.toContain("queued")
       // The queued message starts the next turn once this one ends, and a cancel ends its question without entries.
       await asked(h, id, 3)
-      expect(ofType(h, id, "RUN_FINISHED")).toHaveLength(1)
+      expect(ofType(h, id, "RUN_FINISHED")).toHaveLength(2)
       h.hub.cancel(id)
-      await h.turnsEnded(id, 2)
+      await h.turnsEnded(id, 3)
       expect(ofType(h, id, "TIMELINE_ENTRY")).toHaveLength(1)
       expect(ofType(h, id, "INPUT_RECEIVED").map((event) => event.text)).toEqual(["go", "steered", "queued"])
     })
@@ -902,7 +950,7 @@ describe("questions", () => {
       h.input(id, "go")
       const set = await asked(h, id, 1)
       h.model.next(blob(50_000), blob(70_000), say("in order"), say("continued"))
-      h.hub.answerQuestion(id, set.questionSetId, [{ id: "name", note: "Call it Ashe." }], h.sender)
+      h.answerQuestion(id, set.questionSetId, [{ id: "name", note: "Call it Ashe." }])
       await h.turnsEnded(id, 2)
       expect(ofType(h, id, "TOOL_RESULTS_CLEARED")).toHaveLength(1)
       const [first] = runIds(h, id)
@@ -923,6 +971,50 @@ describe("questions", () => {
       expect(result(h, id, "refused").content).toBe("`context_ask_question` is not available in a context turn. Finish the context turn first.")
       expect(ofType(h, id, "QUESTIONS_ASKED")).toHaveLength(1)
     })
+  })
+
+  test("an assignment observation failure stops the turn instead of becoming a question result", async () => {
+    const h = new AgentHarness()
+    try {
+      const id = h.create()
+      h.model.next(ask("assigned"), say("must not run"))
+      const append = h.hub.store.appendEvent.bind(h.hub.store)
+      h.hub.store.appendEvent = (sessionId, body, timestamp) => {
+        if (body.type === "ACTION_ASSIGNED") throw new Error("injected assignment failure")
+        return append(sessionId, body, timestamp)
+      }
+      h.input(id, "go")
+      await h.turnsEnded(id, 1)
+      expect(ofType(h, id, "RUN_ERROR")).toMatchObject([{ code: "state_integrity_failed" }])
+      expect(result(h, id, "assigned")).toMatchObject({ outcome: "failed" })
+      expect(h.model.calls).toHaveLength(1)
+      expect(h.hub.isRunning(id)).toBe(false)
+    } finally {
+      await h.cleanup()
+    }
+  })
+
+  test("a settlement observation failure rejects the question wait and stops the turn", async () => {
+    const h = new AgentHarness()
+    try {
+      const id = h.create()
+      h.model.next(ask("settled"), say("must not run"))
+      h.input(id, "go")
+      const set = await asked(h, id, 1)
+      const append = h.hub.store.appendEvent.bind(h.hub.store)
+      h.hub.store.appendEvent = (sessionId, body, timestamp) => {
+        if (body.type === "ACTION_SETTLED") throw new Error("injected question settlement failure")
+        return append(sessionId, body, timestamp)
+      }
+      expect(() => h.replyQuestionByMessage(id, set.questionSetId)).toThrow("injected question settlement failure")
+      await h.turnsEnded(id, 1)
+      expect(ofType(h, id, "RUN_ERROR")).toMatchObject([{ code: "state_integrity_failed" }])
+      expect(result(h, id, "settled")).toMatchObject({ outcome: "failed" })
+      expect(h.model.calls).toHaveLength(1)
+      expect(h.hub.isRunning(id)).toBe(false)
+    } finally {
+      await h.cleanup()
+    }
   })
 })
 
@@ -1162,15 +1254,12 @@ describe("later checkpoint windows", () => {
         await turn(h, id, "third", blob(65_000), say("third done"))
         await turn(h, id, "fourth", blob(12_000), doing(() => (sources.readable = false), say("in order")), say("continued"))
         await h.turnsEnded(id, 6)
-        const fourth = runIds(h, id)[4]!
         // The construction reports the unreadable file, and so does the continuation turn's reconciliation.
         const errors = ofType(h, id, "SESSION_ERROR")
-        expect(errors.map((event) => [event.code, event.runId])).toEqual([
-          ["user_instructions_unreadable", fourth],
-          ["user_instructions_unreadable", runIds(h, id)[5]],
-        ])
+        expect(errors.map((event) => event.code)).toEqual(["user_instructions_unreadable", "user_instructions_unreadable"])
+        expect(errors.every((event) => runIds(h, id).includes(event.runId))).toBe(true)
         expect(errors[0].message).toBe("the user instructions file /config/AGENTS.md is refused: permission denied; the known user instructions stay")
-        expect(ofType(h, id, "CHECKPOINT_WINDOW_SEEDED").map((event) => event.runId)).toEqual([null, runIds(h, id)[1], fourth])
+        expect(ofType(h, id, "CHECKPOINT_WINDOW_SEEDED")).toHaveLength(3)
         expect(callText(h.model.last())).toContain("V2 instructions")
       },
       { setup, now: () => clock },

@@ -3,6 +3,7 @@ import { join } from "node:path"
 import { describe, expect, test } from "bun:test"
 import type { SessionEvent } from "@ashe-agent/protocol"
 import { ErrorCode } from "@ashe-agent/protocol"
+import { IntegrityFailure } from "../src/agent/failure.ts"
 import { ProtocolError } from "../src/server/websocket.ts"
 import { waitFor } from "./support/cli.ts"
 import { AgentHarness, callTools, messageText, say } from "./support/agent.ts"
@@ -115,6 +116,71 @@ describe("permission requests", () => {
       h.answer(id, asked[2].requestId, "once")
       await h.turnsEnded(id, 2)
       expect(results(h, id)[1]).toMatchObject({ content: "x: allowed, y: allowed" })
+    })
+  })
+
+  test("a grant persistence failure withdraws the ask and stops the turn as an integrity failure", async () => {
+    await withHarness({ permission: { edit: "ask" } }, async (h) => {
+      const id = h.create()
+      h.model.next(callTools([{ name: "touch", args: { paths: ["a"] } }]))
+      h.input(id, "go")
+      const [request] = await waitRequests(h, id, 1)
+      ;(h.hub.store as any).addGrants = () => {
+        throw new IntegrityFailure("injected grant failure")
+      }
+      h.answer(id, request.requestId, "always")
+      await h.turnsEnded(id, 1)
+      expect(ofType(h.events(id), "PERMISSION_WITHDRAWN")).toHaveLength(1)
+      expect(ofType(h.events(id), "RUN_ERROR")).toMatchObject([{ code: "state_integrity_failed" }])
+      expect(results(h, id)).toMatchObject([{ outcome: "failed" }])
+      expect(ofType(h.events(id), "TOOL_EXECUTION_STARTED")).toEqual([])
+    })
+  })
+
+  test("an action settlement write failure rejects the permission wait and stops the turn", async () => {
+    await withHarness({ permission: { edit: "ask" } }, async (h) => {
+      const id = h.create()
+      h.model.next(callTools([{ name: "touch", args: { paths: ["a"] } }]))
+      h.input(id, "go")
+      const [request] = await waitRequests(h, id, 1)
+      const append = h.hub.store.appendEvent.bind(h.hub.store)
+      h.hub.store.appendEvent = (sessionId, body, timestamp) => {
+        if (body.type === "ACTION_SETTLED") throw new Error("injected action settlement failure")
+        return append(sessionId, body, timestamp)
+      }
+      expect(() => h.answer(id, request.requestId, "always")).toThrow("injected action settlement failure")
+      await h.turnsEnded(id, 1)
+      expect(ofType(h.events(id), "RUN_ERROR")).toMatchObject([{ code: "state_integrity_failed" }])
+      expect(ofType(h.events(id), "PERMISSION_WITHDRAWN")).toHaveLength(1)
+      expect(results(h, id)).toMatchObject([{ outcome: "failed" }])
+      expect(ofType(h.events(id), "TOOL_EXECUTION_STARTED")).toEqual([])
+    })
+  })
+
+  test("a withdrawal write failure rejects an invalid completion and stops the turn", async () => {
+    await withHarness({ permission: { edit: "ask" } }, async (h) => {
+      const id = h.create()
+      h.model.next(callTools([{ name: "touch", args: { paths: ["a"] } }]))
+      h.input(id, "go")
+      const [request] = await waitRequests(h, id, 1)
+      const assignment = h.permissionAssignment(id, request.requestId)
+      const append = h.hub.store.appendEvent.bind(h.hub.store)
+      let failed = false
+      h.hub.store.appendEvent = (sessionId, body, timestamp) => {
+        if (body.type === "PERMISSION_WITHDRAWN" && !failed) {
+          failed = true
+          throw new Error("injected withdrawal failure")
+        }
+        return append(sessionId, body, timestamp)
+      }
+      expect(() =>
+        h.hub.actions.complete(assignment.connectionId, id, assignment.actionId, { answer: "not-a-decision" }),
+      ).toThrow("invalid result")
+      await h.turnsEnded(id, 1)
+      expect(ofType(h.events(id), "RUN_ERROR")).toMatchObject([{ code: "state_integrity_failed" }])
+      expect(ofType(h.events(id), "PERMISSION_WITHDRAWN")).toHaveLength(1)
+      expect(results(h, id)).toMatchObject([{ outcome: "failed" }])
+      expect(ofType(h.events(id), "TOOL_EXECUTION_STARTED")).toEqual([])
     })
   })
 

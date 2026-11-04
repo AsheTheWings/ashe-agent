@@ -120,6 +120,7 @@ export const renderWindow = (harness: string, items: ReadonlyArray<Item>, model:
   let blocks: Array<string> = [systemBlock(harness)]
   let components: Array<{ text: string }> = []
   let foreign: Array<Item> = []
+  let inputOwner: string | null | undefined
   const closeComponents = () => {
     if (components.length > 0) blocks.push(developerBlock(components))
     components = []
@@ -141,6 +142,9 @@ export const renderWindow = (harness: string, items: ReadonlyArray<Item>, model:
       continue
     }
     closeForeign()
+    const input = !seed && (item.kind === "component" || item.kind === "user")
+    if (input && item.runId !== null && inputOwner !== undefined && inputOwner !== null && item.runId !== inputOwner) flush()
+    if (input && item.runId !== null) inputOwner = item.runId
     switch (item.kind) {
       case "component":
         components.push(item.component)

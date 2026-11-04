@@ -3,7 +3,7 @@ import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages"
 import { Schema } from "effect"
 import { escapeTags, lowerHeadings } from "../src/agent/blocks.ts"
 import { isContextOverflow } from "../src/agent/model.ts"
-import { builtinTool } from "../src/agent/tools.ts"
+import { builtinTool, systemToolClock } from "../src/agent/tools.ts"
 import { renderTranscript, renderWindow, unansweredCalls } from "../src/agent/window.ts"
 import { developerBlock, type Component, type InstructionsState } from "../src/context/components.ts"
 import { instructionsChange, instructionsState } from "../src/context/seed.ts"
@@ -50,12 +50,19 @@ describe("windows", () => {
       item("a", user("three"), "r3"),
     ]
     const asA = renderWindow("HARNESS", items, "a", false)
-    expect(asA.map((message) => message.constructor)).toEqual([HumanMessage, AIMessage, ToolMessage, HumanMessage])
+    expect(asA.map((message) => message.constructor)).toEqual([
+      HumanMessage,
+      AIMessage,
+      ToolMessage,
+      HumanMessage,
+      HumanMessage,
+    ])
     expect(asA[0]!.content).toBe("<system>\nHARNESS\n</system>\n<developer>\n# Seed\n\nabout Seed\n</developer>\n<user>\none\n</user>")
-    const last = asA[3]!.content as string
-    expect(last).toStartWith("<developer>\n# Transcript\n")
-    expect(last).toContain('<agent model="b">\nb says\n</agent>')
-    expect(last).toEndWith("# Dates Changed\n\nabout Dates Changed\n</developer>\n<user>\nthree\n</user>")
+    expect(asA[3]!.content).toStartWith("<developer>\n# Transcript\n")
+    expect(asA[3]!.content).toContain('<agent model="b">\nb says\n</agent>')
+    expect(asA[4]!.content).toStartWith(
+      "<developer>\n# Dates Changed\n\nabout Dates Changed\n</developer>\n<user>\nthree\n</user>",
+    )
     const asB = renderWindow("HARNESS", items, "b", false)
     expect(asB.map((message) => message.constructor)).toEqual([HumanMessage, AIMessage, HumanMessage])
     expect(asB[0]!.content).toContain('<tool_call name="echo" id="c1">')
@@ -81,6 +88,18 @@ describe("windows", () => {
       { type: "image", mimeType: "image/png", data: "AAAA" },
     ])
     expect(renderWindow("H", items, "a", false)[2]!.content).toBe("see\n[image: /w/p.png]")
+  })
+
+  test("adjacent admitted UserTurns with no assistant output keep their explicit user boundaries", () => {
+    const items = [
+      item(null, { kind: "component", component: component("Seed") }),
+      item("a", user("one"), "r1"),
+      item("a", user("two"), "r2"),
+    ]
+    const rendered = renderWindow("HARNESS", items, "a", false)
+    expect(rendered).toHaveLength(2)
+    expect(rendered[0]!.content).toContain("<user>\none\n</user>")
+    expect(rendered[1]!.content).toBe("<user>\ntwo\n</user>")
   })
 
   test("unanswered calls are the assistant items' calls without a result item", () => {
@@ -135,7 +154,7 @@ describe("tools and providers", () => {
       },
     })
     expect(tool.spec.parameters).toMatchObject({ type: "object", required: ["path"], properties: { path: { type: "string" } } })
-    const run = { sessionId: "s", runId: "r", toolCallId: "c", cwd: "/", signal: new AbortController().signal, authorize: async () => {}, started: () => {}, imageInput: false, onCancel: () => {}, programCall: () => {}, offered: () => true }
+    const run = { sessionId: "s", runId: "r", toolCallId: "c", cwd: "/", signal: new AbortController().signal, deadline: Number.POSITIVE_INFINITY, clock: systemToolClock, note: () => undefined, authorize: async () => {}, started: () => {}, imageInput: false, onCancel: () => {}, programCall: () => {}, offered: () => true }
     expect((await tool.run({ path: 1 }, run)).outcome).toBe("failed")
     expect(ran).toBe(0)
     expect(await tool.run({ path: "p" }, run)).toEqual({ outcome: "success", content: "ok" })

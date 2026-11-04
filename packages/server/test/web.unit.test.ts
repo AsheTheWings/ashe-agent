@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { ToolRun } from "../src/agent/tools.ts"
+import { systemToolClock, type ToolRun } from "../src/agent/tools.ts"
 import { exaClient, webTools, type ExaClient } from "../src/tools/web/index.ts"
 
 const run: ToolRun = {
@@ -14,6 +14,9 @@ const run: ToolRun = {
   onCancel: () => {},
   programCall: () => {},
   offered: () => true,
+  deadline: Number.POSITIVE_INFINITY,
+  clock: systemToolClock,
+  note: () => undefined,
 }
 
 describe("web tools", () => {

@@ -77,8 +77,8 @@ const convertItem = (item: Item, pending: Pending): ThreadMessageLike => {
       return {
         role: "user",
         id: item.id,
-        content: [{ type: "text", text: item.text }],
-        metadata: { custom: { runId: item.runId, mode: item.mode } },
+        content: [{ type: "text", text: item.messages.map((message) => message.text).join("\n\n") }],
+        metadata: { custom: { runId: item.runId, modes: item.messages.map((message) => message.mode) } },
       }
     case "assistant":
       return {
@@ -112,12 +112,13 @@ export const useSessionRuntime = (client: SessionClient, inputMode: InputMode | 
     state.activeSessionId === null ? undefined : state.views[state.activeSessionId],
   )
   const connected = useStore(client.store, (state) => state.status === "connected")
+  const ownedPermissions = useStore(client.store, (state) => state.owned.permissions)
   const running = view?.runId != null
 
   const adapter = useMemo((): ExternalStoreAdapter<Item> => {
     const send = (message: AppendMessage) => void client.send(textOf(message), inputMode).catch(() => {})
     // The first pending request of each tool call; the permission queue shows the others.
-    const pending = splitPending(view?.permissions ?? []).byToolCall
+    const pending = splitPending((view?.permissions ?? []).filter((request) => ownedPermissions.includes(request.requestId))).byToolCall
     return {
       messages: view?.items ?? NO_ITEMS,
       convertMessage: (item) => convertItem(item, pending),
@@ -143,7 +144,7 @@ export const useSessionRuntime = (client: SessionClient, inputMode: InputMode | 
         remove: () => {},
       },
     }
-  }, [client, view, running, connected, inputMode])
+  }, [client, view, running, connected, inputMode, ownedPermissions])
 
   return useExternalStoreRuntime(adapter)
 }

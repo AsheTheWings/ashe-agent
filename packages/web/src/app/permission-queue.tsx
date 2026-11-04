@@ -8,10 +8,17 @@ import { useClient, useClientState } from "./client-context.tsx"
 
 const NONE: ReadonlyArray<PendingPermission> = []
 
-const QueuedRequest = ({ request }: { request: PendingPermission }) => {
+const QueuedRequest = ({ request, owned }: { request: PendingPermission; owned: boolean }) => {
   const client = useClient()
   const [message, setMessage] = useState("")
   const answer = (choice: PermissionAnswer) => void client.answerPermission(request.requestId, choice, message).catch(() => {})
+  if (!owned) {
+    return (
+      <li className="text-muted-foreground rounded-lg border p-2">
+        Waiting on another connected client: {request.permission}: {request.subjects.join(", ")}
+      </li>
+    )
+  }
   return (
     <li className="flex flex-col gap-2 rounded-lg border p-2">
       <span className="font-mono text-xs break-all">
@@ -47,6 +54,7 @@ export const PermissionQueue = () => {
   const permissions = useClientState((state) =>
     state.activeSessionId === null ? NONE : (state.views[state.activeSessionId]?.permissions ?? NONE),
   )
+  const owned = useClientState((state) => state.owned.permissions)
   const { queued } = splitPending(permissions)
   if (queued.length === 0) return null
   return (
@@ -54,7 +62,7 @@ export const PermissionQueue = () => {
       <h2 className="text-muted-foreground mb-2 text-xs">Further permission requests of a waiting tool call</h2>
       <ul className="flex flex-col gap-2">
         {queued.map((request) => (
-          <QueuedRequest key={request.requestId} request={request} />
+          <QueuedRequest key={request.requestId} request={request} owned={owned.includes(request.requestId)} />
         ))}
       </ul>
     </section>

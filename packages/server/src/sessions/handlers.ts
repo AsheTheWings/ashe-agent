@@ -19,6 +19,11 @@ export const sessionHandlers = (hub: SessionHub) => {
   }
 
   const handlers: Handlers = {
+    "actions.list": async () => ({ actions: [...hub.actions.declarations()] }),
+    "client.setActions": async (params, context) => {
+      hub.actions.setCapabilities(context.connection, context.principal, params.actions, context.notify)
+      return {}
+    },
     "models.list": async () => {
       const { models, defaultModel } = hub.models()
       return { models: [...models], defaultModel }
@@ -43,6 +48,7 @@ export const sessionHandlers = (hub: SessionHub) => {
         else held.push(event)
       })
       mine.set(params.sessionId, unsubscribe)
+      hub.actions.subscribed(context.connection, context.principal, params.sessionId, context.notify)
       context.afterResponse(() => {
         for (const event of held) deliver(event)
         held.length = 0
@@ -54,11 +60,20 @@ export const sessionHandlers = (hub: SessionHub) => {
       const mine = of(context.connection)
       mine.get(params.sessionId)?.()
       mine.delete(params.sessionId)
+      hub.actions.unsubscribed(context.connection, params.sessionId)
       return {}
     },
     "session.input": async (params, context) => ({
       inputId: hub.input(params.sessionId, params.text, params.mode, context.principal),
     }),
+    "session.resume": async (params) => {
+      hub.resume(params.sessionId)
+      return {}
+    },
+    "action.complete": async (params, context) => {
+      hub.actions.complete(context.connection.id, params.sessionId, params.actionId, params.result)
+      return {}
+    },
     "session.cancel": async (params) => {
       hub.cancel(params.sessionId)
       return {}
@@ -69,15 +84,7 @@ export const sessionHandlers = (hub: SessionHub) => {
     },
     "session.fork": async (params) => ({ session: hub.fork(params.sessionId, params.runId) }),
     "session.rewind": async (params, context) => {
-      hub.rewind(params.sessionId, params.runId, params.text, context.principal)
-      return {}
-    },
-    "session.answerQuestion": async (params, context) => {
-      hub.answerQuestion(params.sessionId, params.questionSetId, params.answers, context.principal)
-      return {}
-    },
-    "permission.answer": async (params, context) => {
-      hub.answer(params.sessionId, params.requestId, params.answer, params.message, context.principal)
+      await hub.rewind(params.sessionId, params.runId, params.text, context.principal)
       return {}
     },
   }
@@ -85,6 +92,7 @@ export const sessionHandlers = (hub: SessionHub) => {
   const onClose = (connection: Connection) => {
     for (const unsubscribe of subscriptions.get(connection.id)?.values() ?? []) unsubscribe()
     subscriptions.delete(connection.id)
+    hub.actions.disconnect(connection.id)
   }
 
   return { handlers, onClose }

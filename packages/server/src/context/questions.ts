@@ -11,7 +11,7 @@ import {
 import { codePoints, type NewEntry } from "./entries.ts"
 import type { AskArgs } from "./tools.ts"
 
-/** One answer of a `session.answerQuestion` request: an option's label, a note, or both; neither skips the question. */
+/** One answer of a question action: an option's label, a note, or both; neither skips the question. */
 export interface Answer {
   readonly id: string
   readonly selection?: string

@@ -44,6 +44,13 @@ type Pending = {
 
 export type ConnectionHandlers = {
   readonly onEvent: (event: SessionEvent) => void
+  readonly onActionExecute: (params: {
+    readonly actionId: string
+    readonly sessionId: string
+    readonly name: string
+    readonly arguments: unknown
+  }) => void
+  readonly onActionCancel: (params: { readonly actionId: string; readonly sessionId: string; readonly reason: string }) => void
   readonly onClose: (code: number, reason: string) => void
 }
 
@@ -99,7 +106,12 @@ export class Connection {
     const decoded = decodeMessage(parsed)
     if (Result.isFailure(decoded)) return this.violate()
     const message = decoded.success
-    if ("method" in message) return handlers.onEvent(message.params)
+    if ("method" in message) {
+      if (message.method === "session.event") handlers.onEvent(message.params)
+      else if (message.method === "action.execute") handlers.onActionExecute(message.params)
+      else handlers.onActionCancel(message.params)
+      return
+    }
     if (typeof message.id !== "number") return
     const request = this.pending.get(message.id)
     if (request === undefined) return
