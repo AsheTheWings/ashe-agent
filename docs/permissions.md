@@ -82,10 +82,20 @@ configuration, and the turn goes on. A call starts, with
 `TOOL_EXECUTION_STARTED`, only once the rules or an answer allow it.
 
 A call that asks emits `PERMISSION_REQUESTED` to every subscriber and
-waits inside the running turn. Any authenticated client answers with
-`permission.answer`; the first answer resolves the request with
-`PERMISSION_RESOLVED`, and a later answer gets the `alreadyResolved`
-error.
+waits inside the running turn. Like questions, the decision is a declared
+client action: only an authenticated connection subscribed to the session
+and advertising `permission.decide` can receive the assignment, and only
+that connection can complete it with `action.complete`. The action result
+is the once, always, or reject decision and its optional message. The
+first completion resolves the request with `PERMISSION_RESOLVED`;
+duplicate, cross-session, unassigned, and malformed completions cannot
+change the decision.
+
+If no eligible connection exists when collection starts, the call fails
+immediately without running its effect. The model sees an unavailable
+failed result and may continue. This absence does not withhold a
+server-executed tool from the model: allow and deny rules still decide
+what is offered, and only an actual ask needs an executor.
 
 - `once` runs the call.
 - `always` runs the call and adds a session grant: an allow rule for each
@@ -101,8 +111,11 @@ A `reject` rejects every other pending request of the session too, with
 the same message if any.
 
 A pending request lives only in the running turn. A turn that ends, by
-cancel or otherwise, and a server restart withdraw its unanswered requests
-with `PERMISSION_WITHDRAWN`, as [sessions](sessions.md) describes.
+cancel or otherwise, and a server restart cancel its assigned action,
+settle it as canceled or disconnected, and withdraw its unanswered request
+with `PERMISSION_WITHDRAWN`; late answers cannot create a grant or
+authorize an effect. The elapsed tool budget, not a separate human-decision
+timeout, bounds the wait ([tools](tools.md#execution-budget)).
 
 ## Session grants
 

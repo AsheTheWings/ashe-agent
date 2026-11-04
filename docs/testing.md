@@ -55,8 +55,9 @@ commit, and packages them as `bin/ashe-agent` and `web/` into
 that file, or the bundle it is given: it checks that `web/` holds
 `index.html` and a `revision.txt` equal to the revision the binary's
 `--version` prints, then
-migrates, creates an API token, authenticates over WebSocket, and runs a turn with
-a shell command and a `file_read` of a docx.
+migrates, creates an API token, authenticates over WebSocket, and exercises a
+steering-created turn boundary, one exclusively assigned permission action, a
+shell timeout followed by model continuation, and a `file_read` of a docx.
 
 `bun run release-gate` is the release gate: the fast gate, then the
 bundle built and qualified, then the web image built with

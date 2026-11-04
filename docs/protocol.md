@@ -17,7 +17,8 @@ Ids are strings or integers. A method whose params define no fields, such
 as `models.list`, may omit `params`; otherwise `params` is an object.
 `ClientRequest` in the JSON Schema lists every method with its `params`,
 and the `<method>.result` definitions give each method's result. The
-server sends responses and `session.event` notifications, together
+server sends responses, replayable `session.event` notifications, and
+directed `action.execute` and `action.cancel` notifications, together
 `ServerMessage`. A response holds either `result` or `error`, and an
 error response to a request whose id could not be read has id `null`.
 
@@ -62,30 +63,51 @@ the next section explains, and then sends any of these:
 - `session.subscribe` streams a session's events, as
   [session events](#session-events) explains, and `session.unsubscribe`
   stops them.
-- `session.input` sends input. Without a mode it starts a turn on an idle
-  session or steers the running turn at its next step boundary; with mode
-  `queue` it waits for the running turn to end and then starts the next.
-  `session.cancel` cancels the running turn.
+- `session.input` sends input: without a mode it is steering delivery, and
+  with mode `queue` it waits for idle. [Session input](sessions.md#input)
+  owns admission and lane priority. `session.cancel` cancels the running
+  turn.
+- `session.resume` starts a continuation on an idle session. It is refused
+  while execution or a context workflow is active.
 - `session.setModel` switches the session's selected model and reasoning
   effort, which the next turn uses; without an effort, the selection is
   cleared. The `MODEL_CHANGED` event records it.
-- `session.answerQuestion` answers a `QUESTIONS_ASKED` event's question
-  set by its `questionSetId`: each answer names a question's `id` and an
-  option's `label` as its `selection`, a `note`, both, or neither, which
-  skips the question. The first answer settles the set for every client
-  with `QUESTIONS_ANSWERED`; a later one, or an answer to a set whose
-  call ended, is refused. [Model context](model-context.md#questions)
-  explains the limits and what the agent receives.
-- `permission.answer` answers a `PERMISSION_REQUESTED` event with `once`,
-  `always`, or `reject`, and a message that a rejection returns as the
-  call's result. The first answer resolves the request for every client;
-  [permissions](permissions.md) explains the rules and grants.
-- `session.fork` copies a session through the fork point `runId`, or
-  entirely, into a new session. `session.rewind` removes the rewind point
-  `runId` and every later turn, then reruns its user messages or the
-  given `text`.
+- `actions.list` gives each registered action's name, description, and
+  argument and result JSON schemas. `client.setActions` replaces the
+  authenticated connection's advertised support with a list of declared
+  names; disconnecting discards it.
+- `action.complete` settles the live action `actionId` in `sessionId` with
+  its declared `result`. Only the assigned, authenticated connection may
+  complete it. Stale, duplicate, cross-session, and unassigned completions
+  fail without settling it; an invalid result settles it as failed.
+- `session.fork` copies a settled prefix through the fork point `runId`,
+  or the latest settled point, into an idle session. `session.rewind`
+  removes the rewind point `runId` and every later turn, then reruns its
+  user messages or the given `text`.
 
 [Sessions](sessions.md) explains turns, input, fork, and rewind in full.
+
+## Client actions
+
+Question and permission interactions are client actions. The server
+declares their schemas; a client advertises the names its connection
+handles. For each new action, the server selects only an authenticated
+connection currently subscribed to the session and supporting the name,
+choosing the connection whose server-recorded subscription is newest. It
+assigns one executor before sending that connection `action.execute` with
+the action id, name, session id, and arguments. Execution is never
+broadcast or replayed.
+
+`ACTION_ASSIGNED` and `ACTION_SETTLED` are ordinary session observations.
+Their settlement outcomes are `completed`, `canceled`, `timedOut`,
+`disconnected`, or `failed`. `action.cancel` is directed only to the
+assigned connection when its invocation ends. Unsubscribe and capability
+withdrawal do not invalidate an existing assignment; disconnect does, and
+the server does not reassign it. If no eligible executor exists, the tool
+call gets an unavailable failure immediately.
+
+[Model context](model-context.md#questions) owns question arguments and
+results; [permissions](permissions.md) owns permission decisions.
 
 ## Session events
 
@@ -110,10 +132,12 @@ cover what AG-UI does not:
 | `SESSION_ERROR` | An error that ends nothing, such as unreadable user instructions, with a code, a message, and the run it arose in. |
 | `TIMELINE_ENTRY` | A timeline entry recorded in a run: its number, kind, fields, and for a `done` entry the entries it resolves. |
 | `TIMELINE_ENTRY_REPLACED` | A compaction entry's text replaced, keeping its number and place. |
-| `CONTEXT_TURN_STARTED` | The rest of a run is a context turn, with its trigger: `threshold` when the reserve ran short, `limit` at the context limit. |
+| `CONTEXT_TURN_STARTED` | The run is a context turn, with its trigger: `threshold` when the reserve ran short, `limit` at the context limit. |
 | `TOOL_RESULTS_CLEARED` | A context turn's clearing, its attempt from 1 to 3, and the estimated tokens it freed. |
 | `VALIDATION_FAILED` | A context turn's check of `research/` and `memory-draft/` found violations, with its attempt and each violation. |
 | `CHECKPOINT_WINDOW_FAILED` | A context turn could not build the next checkpoint window, and the session keeps its current one. |
+| `ACTION_ASSIGNED` | A declared client action assigned to one executor, with its action id and name. |
+| `ACTION_SETTLED` | That action's one terminal outcome. |
 | `QUESTIONS_ASKED` | A `context_ask_question` call's question set, with its id, the tool call, the questions, and `feedback` on the session's previous set. |
 | `QUESTIONS_ANSWERED` | The first answer to a question set, with its sender. |
 | `RUN_INTERRUPTED` | A run the server was still running when it stopped. |
@@ -123,15 +147,16 @@ cover what AG-UI does not:
 | `PROGRAM_CALL_FINISHED` | A tool call made by the code mode program of an `execute` call ended. |
 | `PERMISSION_REQUESTED`, `PERMISSION_RESOLVED`, `PERMISSION_WITHDRAWN` | A tool call waiting for an answer, and its end. |
 
-`RUN_STARTED` adds to AG-UI's fields the run's `model`, its `cause`, and
-`userMessageIds`, the user messages its starting input holds. The cause
+`RUN_STARTED` adds to AG-UI's fields the run's `model`, its `cause`,
+`membership`, the immutable ordered content identities admitted with the
+turn, and `userMessageIds`, the user messages its starting input holds. The cause
 is `continuation` for the run that starts a checkpoint window after a
 context turn, `user` for one whose starting input holds a user message,
 and `notification` for one a developer message started on its own, such
 as a memory restored component.
 
 A user message is waiting from its `INPUT_WAITING` until its
-`INPUT_RECEIVED`. A context turn holds the messages that arrive during
+`INPUT_RECEIVED`. A context workflow holds the messages that arrive during
 it, so they stay waiting until its continuation run receives them.
 
 A client applying `SESSION_REWOUND` drops its events numbered

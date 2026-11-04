@@ -34,6 +34,31 @@ changed while the call waited for an answer, `file_read` does not read
 that file and `file_patch` changes nothing. A change between that last
 check and the read or write itself is not detected.
 
+## Execution budget
+
+Every direct call and every call made by a code mode program has one
+elapsed-time execution budget, measured from before argument validation
+through permission collection, execution, and settlement. It does not
+pause while a person decides a request. The global limit is 300,000 ms;
+`ASHE_AGENT_TOOL_TIMEOUT_OVERRIDES` maps exact registered tool names to a
+positive limit or to `null`, which removes only that tool's local limit.
+`ASHE_AGENT_TOOL_TIMEOUT_MS` changes the global default. The input schema
+owns the names, shapes, and profile defaults, as
+[configuration](configuration.md#finite-execution-budgets) explains.
+
+A code mode child is bounded by the earlier of its own deadline and its
+parent's remaining deadline; `null` does not remove an ancestor's limit
+or the turn's cancellation. Delegated client actions inherit the calling
+tool's remaining budget.
+
+Expiry aborts the invocation and its actions, settles one failed result,
+and permits the model's normal next step. The result says whether
+execution had started, so the model can distinguish an invocation that
+changed nothing from one whose external effects may be partial. It also
+reports a known continuation handle, such as a shell `process_id`, when
+one exists, and never promises rollback or remote termination. Late
+callbacks after settlement change no result or conversation state.
+
 A path a patch deletes, or moves a file away from, is decided as the
 directory entry it names, so deleting a symlink removes the link without
 reading its target. A move is also decided for the file its content is
@@ -131,7 +156,10 @@ A command returns when it exits, with its exit code, or after
 `chars` to it and returns the output since the last result. After a write
 it waits 250 ms by default and at most 30,000 ms; with empty `chars` it
 polls for 5,000 to 300,000 ms. Writing `\u0003` interrupts the process.
-No command has a timeout of its own.
+The execution budget covers the invocation and collection of output, not
+the lifetime of a process left running after the call yields. A timeout
+or cancellation returns the known `process_id`; it does not kill that
+process.
 
 A result reads:
 

@@ -29,10 +29,12 @@ file exists but cannot be read.
 A turn runs as a loop in its own Effect fiber, with no step limit. Each
 step is a model call, then the tool calls it made, one after another in
 the order the model made them. A step boundary comes after the results
-of a step's tool calls and after a reply without tool calls. At a step
-boundary, steered user messages and notification components that are
-waiting join the turn. After a reply without tool calls, the turn ends
-when nothing joins; a plain reject also ends it.
+of a step's tool calls and after a reply without tool calls. At a complete
+step, a waiting steering UserMessage or independently triggering
+notification ends that AgentTurn and is admitted as the next UserTurn;
+[sessions](sessions.md#input) owns the lane rules. After a reply without
+tool calls, the turn ends when nothing is eligible; a plain reject also
+ends it.
 
 The loop records the conversation as it goes. An assistant message is
 committed as an item in one transaction with the events that end its
@@ -120,9 +122,9 @@ A developer component is typed by how it is injected:
   configured user time zone, UTC by default, and no path.
 - A state component rides on a delivery of user messages or notification
   components, and never starts a turn.
-- A notification component, such as the one a rewind queues, joins the
-  running turn at its next step boundary, or starts a turn in an idle
-  session. Scratch lost and memory restored components report a lost
+- A notification component, such as the one a rewind queues, starts the
+  next UserTurn at a complete step, or starts a turn in an idle session.
+  Scratch lost and memory restored components report a lost
   scratch target and a republished memory generation; a rewind or fork
   whose kept history predates such a report queues it again, without the
   memory paths.
@@ -228,22 +230,28 @@ and 2 or 3 options of a `label` of 1 to 40 characters and a
 `description` of 1 to 120. A call may carry `feedback` of 1 to 2,000
 characters, the agent's response to the answers of its previous call;
 a session that has asked no questions refuses it. The call is decided
-under the `context_ask_question` permission, emits `QUESTIONS_ASKED`,
-and waits without a timeout.
+under the `context_ask_question` permission and emits `QUESTIONS_ASKED`.
+It then waits through the `questions.answer` client action, whose result
+carries each question's answer: an option's label, a note of 1 to 2,000
+characters, both, or neither, which skips it. The action is exclusively
+assigned to one capable session subscriber, and only its connection can
+complete it. The wait counts toward the shared elapsed tool budget; no
+separate question timeout applies.
 
-`session.answerQuestion` answers each question with an option's label, a
-note of 1 to 2,000 characters, both, or neither, which skips it. The
-first answer to a question set settles it with `QUESTIONS_ANSWERED`, and
-a later one is refused. Each answered question becomes an `answer`
+The first completion settles the question set with a tool-side
+`QUESTIONS_ANSWERED` observation. Each answered question becomes an `answer`
 entry holding `Question`, `Selection` as the label and its description
 joined by `: `, and `UserNote`. The call's result holds those entries and
 a `Skipped:` line naming each skipped question.
 
-A steered user message ends a waiting call with a result saying the user
-replied with a message instead, and the message joins the turn at the
-next step boundary; a queued message leaves the call waiting. A cancel
-or a server stop ends the call without entries. A context turn refuses
-the call.
+The assigned web client may complete a waiting call with the
+`repliedByMessage` result when the user sends a steering message. That
+message remains ordinary input and joins the next UserTurn; the server
+does not infer completion from steering, and queued input leaves the
+action open. A cancel, timeout, disconnect, or server stop cancels the
+action and ends the call without entries. A context turn refuses the
+call. The broker itself does not validate question semantics; the tool
+validates the argument and answer domains before writing timeline state.
 
 ## Chat boundaries and compaction entries
 
@@ -304,18 +312,20 @@ boundary to 240 code points with `…`.
 ## Context turns
 
 Before a model call that leaves less than the reserve within the
-checkpoint window size, the server delivers a context turn component,
-and the rest of the turn is a context turn, marked by
-`CONTEXT_TURN_STARTED`. The server writes `memory-draft/` as a copy of
+checkpoint window size, the server ends the current AgentTurn and admits
+the context component as a new UserTurn, whose AgentTurn is marked by
+`CONTEXT_TURN_STARTED`. The context workflow spans those turn aggregates.
+The server writes `memory-draft/` as a copy of
 the current memory generation, and the component asks the agent to
 record its state with `context_append`, to file entries in
 `memory-draft/`, and to fix the research and memory problems it lists.
 Research and compaction calls start with it. Until its first clearing, a
 context turn offers the same tools as before.
 
-User messages and notification components that arrive during a context
-turn wait for its continuation turn, except its own components and
-memory restored components.
+User messages and unrelated notification components that arrive during a
+context workflow wait for its continuation turn, except the workflow's own
+components and memory restored components. The continuation joins held
+steering input before held queued input, or becomes a developer-only turn.
 
 A reply without tool calls is an idle. Each idle appends research
 entries first. Then, when the primary timeline is over its allowance,
@@ -419,7 +429,11 @@ the files in `packages/server/src/context/checkpoint/`.
 
 The continuation turn starts the new window with the continuation
 component, which forms one developer message with the seed, followed by
-all the input held for it; its start event's cause is `continuation`.
+one selected steering batch, else one queued batch; its start event's
+cause is `continuation`. The workflow's draft, validation and clearing
+counts, research work, and construction state persist across every
+participating turn and settle once on cancellation, failure, or restart
+interruption. An ordinary turn handoff does not settle them.
 The continuation component names the handoff entry after a handoff and
 the unsorted file after a fallback. A rewind to a continuation turn
 reruns it in its checkpoint window with its continuation component, and
