@@ -74,13 +74,16 @@ test262 by `bun run test:test262`.
 
 ## Limits
 
-The code mode limits input bounds each program's time, tool calls, and
-retained output bytes; each limit is unlimited when absent. Images count
-toward the output bytes by their encoded data: they are kept in order
-while they fit, and the result says how many were left out. Notices of
-truncated output or left-out images, and the headings of warnings and
-logs, are added beyond the limit. The time
-limit counts only time when none of the program's calls waits for a
-permission answer, so a program waiting on an ask does not run out of
-time. Canceling the turn interrupts a running program and its pending
-calls whether or not it waits.
+The code mode limits input bounds each program's tool calls and retained
+output bytes; each limit is unlimited when absent. Images count toward
+the output bytes by their encoded data: they are kept in order while they
+fit, and the result says how many were left out. Notices of truncated
+output or left-out images, and the headings of warnings and logs, are
+added beyond the limit.
+
+Program time is governed by the shared elapsed tool budget in
+[tools](tools.md#execution-budget), not a separate code-mode wall-clock
+limit. Permission waits count toward that budget. Each child call is
+bounded by the earlier of its own exact-name deadline and the `execute`
+call's remaining deadline. Canceling or timing out the parent interrupts
+the program and its calls; late program callbacks do not settle again.

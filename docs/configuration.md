@@ -176,6 +176,22 @@ Title files, the global instructions file, and the skills are read when a
 session is created and again with each delivery into a turn, as
 [agents and skills](agents-and-skills.md) explains.
 
+## Finite execution budgets
+
+The tool timeout inputs configure one elapsed-time policy for every tool
+invocation. `toolTimeoutMs` is a positive integer in milliseconds with a
+default of 300000. `toolTimeoutOverrides` is a JSON object keyed by exact
+registered tool name; each value is a positive integer or `null`. An exact
+override replaces the global limit, and `null` removes only that local
+limit, not an ancestor's deadline or cancellation. The schema owns the
+input names, shapes, and profile defaults.
+
+The budget runs from before validation through permission collection,
+execution, and settlement. A code mode child inherits the earlier of its
+own and its parent's deadline. [Tools](tools.md#execution-budget) owns the
+observable timeout and partial-effect behavior; [code mode](code-mode.md#limits)
+owns its call and output limits.
+
 ## What else the inputs configure
 
 The schema names every input; these docs explain what each group does:
@@ -188,8 +204,8 @@ The schema names every input; these docs explain what each group does:
   time, output budget, and environment file, and the processes a session
   may hold; the Exa API key file, whose presence offers the web tools; and
   the MCP servers, each reached over stdio or Streamable HTTP.
-- [Code mode](code-mode.md): the limits on each program's time, tool
-  calls, and output.
+- [Code mode](code-mode.md): the limits on each program's tool calls
+  and output.
 - [Telemetry](telemetry.md): the exporter for each signal, the OTLP
   endpoint and its protocol, the protected file of export headers, and
   the deployment environment every signal reports.

@@ -15,23 +15,25 @@ The terms these docs use, with the meaning they have in AsheAgent.
 - **Session**: a durable conversation: its history of events, its session
   directory, which is its starting working directory, its shell
   processes, and its permission grants.
-- **Turn**: one run of the turn loop for a session, from the input that
-  starts it until the model answers without tool calls and nothing joins,
-  or the turn is canceled, fails, or is interrupted by a server stop.
+- **UserTurn**: one admitted, ordered input bundle.
+- **AgentTurn**: the model and tool activity following a UserTurn until the
+  next admitted UserTurn or settlement to idle.
+- **Turn**: one UserTurn and its following AgentTurn; see
+  [session input](sessions.md#input).
 - **Identity**: the speaker a block stands for: system, developer, user,
   or agent. It is distinct from a message's Responses role and from a
   connection's authenticated sender.
 - **User message**: the text of the user identity, in a `<user>` block.
 - **User input**: a Responses user-role message, holding any blocks.
-- **User turn**: a turn started by user input of developer messages, user
-  messages, or both.
+- **User turn**: a Turn whose UserTurn holds at least one user message,
+  possibly with developer content.
 - **Rewind point** and **fork point**: a turn whose starting input holds a
   user message; only these can be rewound or forked at.
-- **Step boundary**: the point after the results of a model call's tool
-  calls and after a reply without tool calls, where waiting steers join
-  the turn.
-- **Steer**: a user message or notification component that joins the
-  running turn at its next step boundary.
+- **Step boundary**: the complete-step admission point after a model call
+  and its tool results, or after a reply without tool calls; see
+  [sessions](sessions.md#input).
+- **Steer**: a user message or notification component admitted as the
+  next UserTurn at that boundary.
 - **Queued input**: a user message held until the running turn ends,
   which then starts the next turn.
 - **Checkpoint window**: one instance of a session's model context, from
@@ -94,8 +96,8 @@ The terms these docs use, with the meaning they have in AsheAgent.
 - **Seed**, **state**, **notification**, and **transcript** components:
   developer components typed by how they are injected. A seed component is
   rendered when a checkpoint window is built; a state component rides on a
-  delivery; a notification component is steered into a turn or starts
-  one; a transcript component renders another model's items when a
+  delivery; a notification component starts a UserTurn under the steering
+  lane; a transcript component renders another model's items when a
   checkpoint window is rendered for the turn's model.
 - **Reconciliation**: comparing each source's current state, such as the
   user instructions or the dates, with the state the checkpoint window

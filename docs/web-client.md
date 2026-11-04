@@ -92,7 +92,11 @@ token and sign the login out.
 
 When the connection drops, the client reconnects after a delay that
 doubles from one second up to thirty, and resubscribes to the open
-session from the last event it saw.
+session from the last event it saw. After authentication it advertises the
+client actions it handles and repeats that registration on every new
+connection. Historical session events replay only conversation state;
+directed action execution and cancellation are processed separately and
+are never replayed.
 
 ## Sessions
 
@@ -108,16 +112,20 @@ shows along with its selected model and effort. Choosing another model
 there switches the session's model from its next turn, at the model's
 default effort; choosing another effort keeps the model.
 
-Input steers the running turn, or starts one when the session is idle.
-With the queue switch on, input waits for the running turn to end
-instead. The stop button cancels the running turn. A message shows as
-waiting above the composer until a turn receives it, as one held for a
-context turn's continuation does.
+Input is steering delivery unless the queue switch is on, which holds it
+for idle; [session input](sessions.md#input) owns admission. The stop button
+cancels the running turn. Continue is offered only while execution is idle
+and requests an explicit continuation. A
+message shows as waiting above the composer until a turn receives it, as
+one held for a context workflow's continuation does. UserMessages admitted
+in one turn are grouped into one chat bubble from the turn's membership.
 
 A tool call waiting on a permission shows the request inside the call,
 with allow once, always allow, and reject. A note typed beside the
-request goes with a rejection, as the call's result; the request
-disappears once answered here or by another client, or withdrawn. A call
+request goes with a rejection, as the call's result. Controls appear only
+when this connection owns the assigned `permission.decide` action; other
+subscribers see the request read-only. The request disappears once
+answered here or by its executor, canceled, timed out, or withdrawn. A call
 can wait on several requests at once, as a code mode program's
 concurrent calls do: the call shows the first, and a list above the
 conversation shows the others, with the same answers.
@@ -142,20 +150,24 @@ window included, with the context work between them:
 - each session error with its message.
 
 A question set the agent asks shows its feedback first, then each
-question's header and text with its options, a note, and skip. Sending
-it answers the set for every client; a note over 2,000 characters keeps
-the form from sending and says so. Once answered, or once its call
-ends, the set shows what was answered.
+question's header and text with its options, a note, and skip. Controls
+appear only when this connection owns the assigned `questions.answer`
+action. Sending it completes that action with each answer; a note over
+2,000 characters keeps the form from sending and says so. Sending a
+steering message while a set is waiting completes it as
+`repliedByMessage`; queued input leaves it open. Once answered, canceled,
+or ended with its call, the set shows its recorded result and no controls.
 
 ## Rewind and fork
 
-Each input that started a turn offers rerun, edit and rerun, and fork
-through that turn, while no turn runs. An input that steered a running
-turn has no turn of its own, and a turn a developer message started
-holds no input, so neither offers them. Rerun and edit remove that turn
-and every later one from the session before running the input, or the
-edited text, again. Research and memory files return to their state
-when that turn started, while scratch, other files, and other effects of
-the removed turns stay as they are; the client says so before it
-rewinds. Fork copies the session through that turn into a new session
-and opens it.
+Each settled turn that started with a UserMessage offers fork. Fork copies
+that settled prefix into a new idle session and opens it; the controls
+are withheld when the session has no eligible turn. Each such turn also
+offers rerun and edit-and-rerun, including while it or a later turn runs.
+An active rewind stops execution before reconstructing the selected
+UserMessages. A turn that a developer message started holds no input and
+offers neither operation. Rerun and edit remove that turn and every later
+one from the session before running the input, or the edited text, again.
+Research and memory files return to their state when that turn started,
+while scratch, other files, shell processes, and other effects of the
+removed turns stay as they are; the client says so before it rewinds.

@@ -19,18 +19,25 @@ checkpoint window's research baseline versions, the newest kept one
 current. The content store keeps text that components refer to by
 SHA-256, such as each version of the user instructions and of each
 research file a baseline names. A turn records the position of its
-context turn component and what started the context turn. Every row a
-turn makes names that turn and references its
-`turns` row with a cascading foreign key; rows made at session creation,
-such as the first window and its seed, name no turn.
+context turn component and what started the context turn. Each `turns` row
+also records its cause, immutable ordered input membership, starting user
+message ids, captured model and reasoning effort, settlement, first event,
+and context workflow association. `context_workflows` keeps one workflow's
+trigger, participating turn, start position, clearing and validation
+counts, clearing allowance, and construction state across turn aggregates.
+Every row a turn makes names that turn and references its `turns` row with
+a cascading foreign key; rows made at session creation, such as the first
+window and its seed, name no turn.
 
 A rewind deletes the removed turns' rows, and the foreign keys delete
 every row they own with them, so the conversation is again what the kept
 turns and creation made: a removed context turn's checkpoint window,
 clearings, trims, and compaction texts go, so the kept results are
 uncleared and each compaction entry has its earlier text again. A fork
-copies the rows that no turn owns and those of the turns it copies into
-the new session.
+copies the rows that no turn owns and those owned by its settled prefix,
+excluding rows created by the next UserTurn and later work. A context
+workflow's durable state follows its participating turns without making a
+later window or auxiliary result part of an earlier prefix.
 
 ## Session files
 
@@ -65,7 +72,8 @@ removes each entry of the sessions directory, the memory directory, and
 the scratch root that is named like a session id without a session row,
 following no symlink and keeping every other entry.
 
-Before each turn starts, the server snapshots the research files and the
+Before each admitted UserTurn starts, including a steering-created turn,
+the server snapshots the research files and the
 current memory generation's files: their bytes go to the content store
 and the turn's snapshot rows name each file and its digest. A rewind
 records a pending restore of the removed turn's snapshot in its
@@ -76,8 +84,8 @@ the pending restore with the stored contents nothing references any
 longer. A restore that fails or that a stop interrupts stays pending: the
 session starts no turn and refuses rewinds and forks until a later
 request or server start completes it. A fork writes the research and
-memory files of the snapshot of the source's first turn after the fork
-point, or the source's current files without one, and copies the
+memory files of the snapshot of the source's first turn after the selected
+pair, or the source's stable current files when no later turn exists, and copies the
 source's scratch, keeping symlinks, skipping sockets, FIFOs, and devices,
 and refusing a scratch over 2 GiB.
 
@@ -101,6 +109,12 @@ Reading the status opens the database read-only and writes nothing.
 
 An applied migration is never edited, renamed, or deleted; a change to the
 schema is a new migration.
+
+The turn-membership and context-workflow transition discards disposable
+session history, including sessions without a current window, rather than
+converting old turn shapes. It preserves authentication identities,
+logins, API tokens, permission configuration, and the migration ledger.
+There is no compatibility shim for discarded session state.
 
 ## Dumps
 
