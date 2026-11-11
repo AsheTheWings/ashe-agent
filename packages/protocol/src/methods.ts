@@ -1,16 +1,24 @@
 import { Schema } from "effect"
 import {
   Agent,
+  Count,
   Id,
   InputMode,
   Model,
   ProtocolVersion,
+  SelectionPatch,
   Sender,
   SessionSummary,
   Seq,
   Timestamp,
 } from "./shared.ts"
 import { ActionDeclaration } from "./actions.ts"
+import {
+  ApprovalGrant,
+  RetainedAttachmentRef,
+  RetainedContent,
+  UploadStatus,
+} from "./owner.ts"
 
 /** An object with no fields this protocol defines; unknown fields are ignored. */
 const Empty = Schema.Record(Schema.String, Schema.Unknown)
@@ -60,10 +68,8 @@ export const methods = {
     Schema.Struct({
       /** Refused when present: each session starts in its own session directory. */
       cwd: Schema.optionalKey(Schema.Never),
-      model: Schema.optionalKey(Id),
-      agent: Schema.optionalKey(Schema.String),
-      /** A reasoning effort the starting model lists; without one, the model's default applies. */
-      reasoningEffort: Schema.optionalKey(Schema.String),
+      /** Optional initial selection. Omission applies the configured title defaults. */
+      selection: Schema.optionalKey(SelectionPatch),
     }),
     Schema.Struct({ session: SessionSummary }),
   ),
@@ -78,7 +84,14 @@ export const methods = {
   "session.unsubscribe": method(Schema.Struct({ sessionId: Id }), Empty),
   /** Without a mode, input is admitted as a later UserTurn at the running turn's next complete step, or starts one when idle. */
   "session.input": method(
-    Schema.Struct({ sessionId: Id, text: Schema.String, mode: Schema.optionalKey(InputMode) }),
+    Schema.Struct({
+      sessionId: Id,
+      text: Schema.String,
+      attachments: Schema.optionalKey(Schema.Array(RetainedAttachmentRef)),
+      /** Requested selection changes applied with this input at admission. */
+      selection: Schema.optionalKey(SelectionPatch),
+      mode: Schema.optionalKey(InputMode),
+    }),
     Schema.Struct({ inputId: Id }),
   ),
   /** Completes the action assigned to this connection with its declared result. */
@@ -86,10 +99,15 @@ export const methods = {
   /** Starts an idle session with continuation input, alone or joined to its next eligible batch. */
   "session.resume": method(Schema.Struct({ sessionId: Id }), Empty),
   "session.cancel": method(Schema.Struct({ sessionId: Id }), Empty),
-  /** Selects the model and, optionally, a reasoning effort it lists; without one, the selection is cleared. */
-  "session.setModel": method(
-    Schema.Struct({ sessionId: Id, model: Id, reasoningEffort: Schema.optionalKey(Schema.String) }),
-    Empty,
+  /** Owner-client access to persisted always approvals, independent of agent tools. */
+  "session.grants.list": method(
+    Schema.Struct({ sessionId: Id }),
+    Schema.Struct({ grants: Schema.Array(ApprovalGrant) }),
+  ),
+  /** Clears this branch's persisted always approvals for one title. */
+  "session.grants.clear": method(
+    Schema.Struct({ sessionId: Id, agentTitle: Id }),
+    Schema.Struct({ cleared: Count }),
   ),
   /** Copies the session through the user turn `runId`, or entirely, into a new session. */
   "session.fork": method(
@@ -101,8 +119,37 @@ export const methods = {
    * every later turn, then reruns its user messages, or `text` instead.
    */
   "session.rewind": method(
-    Schema.Struct({ sessionId: Id, runId: Id, text: Schema.optionalKey(Schema.String) }),
+    Schema.Struct({
+      sessionId: Id,
+      runId: Id,
+      text: Schema.optionalKey(Schema.String),
+      /** New selection changes submitted with the reconstructed input. */
+      selection: Schema.optionalKey(SelectionPatch),
+    }),
     Empty,
+  ),
+  /** Authenticated owner-client metadata for retained content and its representations. */
+  "content.get": method(
+    Schema.Struct({ sessionId: Id, contentId: Id, referenceId: Id }),
+    Schema.Struct({ content: RetainedContent }),
+  ),
+  /** Creates a draft-owned staging upload that survives disconnects. */
+  "upload.create": method(
+    Schema.Struct({ draftId: Id, name: Schema.String, mediaType: Schema.String, size: Count }),
+    Schema.Struct({ upload: UploadStatus }),
+  ),
+  "upload.status": method(
+    Schema.Struct({ uploadId: Id }),
+    Schema.Struct({ upload: UploadStatus }),
+  ),
+  /** Appends a chunk at a repeat-safe offset. `data` is standard base64. */
+  "upload.append": method(
+    Schema.Struct({ uploadId: Id, offset: Count, data: Schema.String }),
+    Schema.Struct({ upload: UploadStatus }),
+  ),
+  "upload.finalize": method(
+    Schema.Struct({ uploadId: Id, size: Count, digest: Schema.String }),
+    Schema.Struct({ upload: UploadStatus }),
   ),
 } as const
 

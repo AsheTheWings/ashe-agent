@@ -381,7 +381,9 @@ describe("agents over a real WebSocket", () => {
           defaultAgent: "helper",
         })
         const created = await client.request("session.create", {})
-        expect(created.result.session).toMatchObject({ agent: "helper", model: "test/model" })
+        expect(created.result.session).toMatchObject({
+          identity: { agentTitle: "helper", modelId: "test/model" },
+        })
         client.close()
       },
       { env: { ASHE_AGENT_AGENTS: JSON.stringify({ helper: { model: "test/model" }, broken: {} }), ASHE_AGENT_DEFAULT_AGENT: "helper" } },

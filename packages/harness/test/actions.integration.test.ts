@@ -195,8 +195,8 @@ describe("exclusive client actions over WebSocket", () => {
       ).toBe(ErrorCode.alreadyResolved)
       expect(observerView.events.some((event) => event.event.type === "PERMISSION_RESOLVED")).toBe(false)
       expect(
-        (await control.request("session.list")).result.sessions.find((session: any) => session.id === id).running,
-      ).toBe(false)
+        (await control.request("session.list")).result.sessions.find((session: any) => session.id === id).activity,
+      ).toBe("idle")
       server.script.release("ask ls race")
     })
   })

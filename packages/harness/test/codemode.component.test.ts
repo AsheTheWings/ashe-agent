@@ -75,7 +75,12 @@ describe("code mode programs", () => {
       const [result] = results(h, id)
       expect(result.outcome).toBe("success")
       expect(JSON.parse(result.content)).toEqual(["echoed a", "echoed b"])
-      expect(ofType(h.events(id), "PROGRAM_CALL_FINISHED")).toEqual([
+      expect(ofType(h.events(id), "PROGRAM_CALL_FINISHED").map(({ type, toolCallId, tool, outcome }) => ({
+        type,
+        toolCallId,
+        tool,
+        outcome,
+      }))).toEqual([
         { type: "PROGRAM_CALL_FINISHED", toolCallId: result.toolCallId, tool: "srv_echo", outcome: "success" },
         { type: "PROGRAM_CALL_FINISHED", toolCallId: result.toolCallId, tool: "srv_echo", outcome: "success" },
       ])

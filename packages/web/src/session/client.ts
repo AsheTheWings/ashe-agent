@@ -17,6 +17,7 @@ import {
   type ParamsOf,
   type PermissionAnswer,
   type ResultOf,
+  type SelectionPatch,
   type Sender,
   type SessionEvent,
   type SessionSummary,
@@ -40,6 +41,8 @@ export type ClientState = {
   readonly agents: ReadonlyArray<Agent>
   readonly sessions: ReadonlyArray<SessionSummary>
   readonly activeSessionId: string | null
+  /** Selection changes this client will submit with the next input or rewind. */
+  readonly requestedSelections: Readonly<Record<string, SelectionPatch>>
   readonly views: Readonly<Record<string, SessionView>>
   /** Question set and permission request ids whose live action this connection owns. */
   readonly owned: { readonly questions: ReadonlyArray<string>; readonly permissions: ReadonlyArray<string> }
@@ -75,6 +78,27 @@ type AccessToken = { readonly token: string; readonly expiresAt: number }
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
+/** Merges a requested patch into accumulated local changes, distinguishing omission from explicit null. */
+export const mergeSelectionPatch = (
+  current: SelectionPatch | undefined,
+  patch: SelectionPatch,
+): SelectionPatch => {
+  const agentTitle = Object.hasOwn(patch, "agentTitle") ? patch.agentTitle : current?.agentTitle
+  let modelSettings: { modelId?: string | null; reasoningEffort?: string | null } | undefined =
+    current?.modelSettings === undefined ? undefined : { ...current.modelSettings }
+  if (patch.modelSettings !== undefined) {
+    modelSettings ??= {}
+    if (Object.hasOwn(patch.modelSettings, "modelId")) modelSettings.modelId = patch.modelSettings.modelId!
+    if (Object.hasOwn(patch.modelSettings, "reasoningEffort")) {
+      modelSettings.reasoningEffort = patch.modelSettings.reasoningEffort!
+    }
+  }
+  return {
+    ...(agentTitle === undefined ? {} : { agentTitle }),
+    ...(modelSettings === undefined ? {} : { modelSettings }),
+  }
+}
+
 /** Tokens that arrived after a sign-in or sign-out began a new generation; they are dropped unstored. */
 class Superseded extends Error {
   constructor() {
@@ -109,6 +133,7 @@ export class SessionClient {
       agents: [],
       sessions: [],
       activeSessionId: null,
+      requestedSelections: {},
       views: {},
       owned: { questions: [], permissions: [] },
     }))
@@ -185,7 +210,15 @@ export class SessionClient {
   signOut() {
     this.disconnect()
     this.ports.storage.removeItem(storageKeys.refreshToken(this.state.serverUrl))
-    this.set({ status: "signedOut", principal: null, activeSessionId: null, views: {}, sessions: [], owned: { questions: [], permissions: [] } })
+    this.set({
+      status: "signedOut",
+      principal: null,
+      activeSessionId: null,
+      views: {},
+      sessions: [],
+      requestedSelections: {},
+      owned: { questions: [], permissions: [] },
+    })
   }
 
   private disconnect() {
@@ -448,8 +481,26 @@ export class SessionClient {
     await this.subscribe(connection, sessionId)
   }
 
-  async createSession(options: { readonly model?: string; readonly agent?: string; readonly reasoningEffort?: string }) {
-    const { session } = await this.call("session.create", options)
+  async createSession(options: {
+    readonly model?: string | null
+    readonly agent?: string
+    readonly reasoningEffort?: string | null
+  }) {
+    const selection: SelectionPatch = {
+      ...(options.agent === undefined ? {} : { agentTitle: options.agent }),
+      ...(options.model === undefined && options.reasoningEffort === undefined
+        ? {}
+        : {
+            modelSettings: {
+              ...(options.model === undefined ? {} : { modelId: options.model }),
+              ...(options.reasoningEffort === undefined ? {} : { reasoningEffort: options.reasoningEffort }),
+            },
+          }),
+    }
+    const { session } = await this.call(
+      "session.create",
+      Object.keys(selection).length === 0 ? {} : { selection },
+    )
     this.upsert(session)
     await this.open(session.id)
     return session
@@ -461,7 +512,18 @@ export class SessionClient {
     const question = [...this.pendingActions.values()].find(
       (action) => action.sessionId === sessionId && action.name === QUESTIONS_ACTION,
     )
-    await this.call("session.input", mode === undefined ? { sessionId, text } : { sessionId, text, mode })
+    const selection = this.state.requestedSelections[sessionId]
+    await this.call("session.input", {
+      sessionId,
+      text,
+      ...(mode === undefined ? {} : { mode }),
+      ...(selection === undefined ? {} : { selection }),
+    })
+    if (selection !== undefined && this.state.requestedSelections[sessionId] === selection) {
+      const requestedSelections = { ...this.state.requestedSelections }
+      delete requestedSelections[sessionId]
+      this.set({ requestedSelections })
+    }
     if (question !== undefined && mode !== "queue") {
       await this.completeAction(question, { kind: "repliedByMessage" }).catch(() => {})
     }
@@ -476,10 +538,36 @@ export class SessionClient {
     await this.call("session.resume", { sessionId: this.activeId() })
   }
 
-  /** Selects the open session's model and reasoning effort; without an effort, the model's default applies. */
-  async setModel(model: string, reasoningEffort?: string) {
+  /** Accumulates a local selection change until the next message or rewind submission. */
+  async setSelection(patch: SelectionPatch) {
     const sessionId = this.activeId()
-    await this.call("session.setModel", reasoningEffort === undefined ? { sessionId, model } : { sessionId, model, reasoningEffort })
+    const current = this.state.requestedSelections[sessionId]
+    this.set({
+      requestedSelections: {
+        ...this.state.requestedSelections,
+        [sessionId]: mergeSelectionPatch(current, patch),
+      },
+    })
+  }
+
+  /** Requests a title change without changing an omitted model or effort. */
+  async setAgentTitle(agentTitle: string) {
+    await this.setSelection({ agentTitle })
+  }
+
+  /** Requests a model change, starting at its default effort unless one is given. */
+  async setModel(model: string, reasoningEffort?: string) {
+    await this.setSelection({ modelSettings: { modelId: model, reasoningEffort: reasoningEffort ?? null } })
+  }
+
+  /** Requests an explicit effort, or null for the requested model's default. */
+  async setReasoningEffort(reasoningEffort: string | null) {
+    await this.setSelection({ modelSettings: { reasoningEffort } })
+  }
+
+  /** Requests the explicitly unconfigured model state. */
+  async clearModel() {
+    await this.setSelection({ modelSettings: { modelId: null, reasoningEffort: null } })
   }
 
   /** Answers the open session's question set; a question without a selection or note is skipped. */
@@ -502,7 +590,18 @@ export class SessionClient {
   /** Removes the turn `runId` and every later one, then reruns its input, or `text` instead. */
   async rewind(runId: string, text?: string) {
     const sessionId = this.activeId()
-    await this.call("session.rewind", text === undefined ? { sessionId, runId } : { sessionId, runId, text })
+    const selection = this.state.requestedSelections[sessionId]
+    await this.call("session.rewind", {
+      sessionId,
+      runId,
+      ...(text === undefined ? {} : { text }),
+      ...(selection === undefined ? {} : { selection }),
+    })
+    if (selection !== undefined && this.state.requestedSelections[sessionId] === selection) {
+      const requestedSelections = { ...this.state.requestedSelections }
+      delete requestedSelections[sessionId]
+      this.set({ requestedSelections })
+    }
   }
 
   /** Copies the open session through the turn `runId` into a new session and opens it. */

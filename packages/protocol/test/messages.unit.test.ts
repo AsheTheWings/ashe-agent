@@ -66,7 +66,7 @@ describe("server messages", () => {
     sessionId: "s1",
     seq: 3,
     timestamp: 1_700_000_000_000,
-    event: { type: "TEXT_MESSAGE_CONTENT", messageId: "m1", delta: "hi" },
+    event: { type: "TEXT_MESSAGE_CONTENT", modelCallId: "mc1", messageId: "m1", delta: "hi" },
   }
   const error = { code: -32004, message: "not found" }
 

@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite"
 import { join } from "node:path"
-import type { SessionEvent, SessionEventBody, SessionSummary, TurnInput } from "@ashe-agent/protocol"
+import type { AgentProfile, SessionEvent, SessionEventBody, SessionSummary, TurnInput } from "@ashe-agent/protocol"
+import { UNTITLED_AGENT_TITLE } from "@ashe-agent/protocol"
 import type { ModelOverrides, Permission } from "../inputs/shapes.ts"
 import { Conversation } from "./conversation.ts"
 import { FileState } from "./file-state.ts"
@@ -93,6 +94,14 @@ const toSession = (row: SessionRow, sessionsDir: string): SessionRecord => ({
   permission: row.permission === null ? null : JSON.parse(row.permission),
   createdAt: row.created_at,
   nextSeq: row.next_seq,
+})
+
+const profile = (session: SessionRecord): AgentProfile => ({
+  agentTitle: session.agent ?? UNTITLED_AGENT_TITLE,
+  modelSettings: {
+    modelId: session.model,
+    reasoningEffort: session.reasoningEffort,
+  },
 })
 
 interface TurnRow {
@@ -194,27 +203,48 @@ export class SessionStore {
     return row === null ? null : toSession(row, this.sessionsDir)
   }
 
-  listSessions(running: (id: string) => boolean): ReadonlyArray<SessionSummary> {
+  listSessions(activeTurn: (id: string) => TurnRecord | null): ReadonlyArray<SessionSummary> {
     return this.db
       .query<SessionRow, []>("SELECT * FROM sessions ORDER BY created_at DESC, id")
       .all()
-      .map((row) => this.summary(toSession(row, this.sessionsDir), running(row.id)))
+      .map((row) => this.summary(toSession(row, this.sessionsDir), activeTurn(row.id)))
   }
 
-  summary(session: SessionRecord, running: boolean): SessionSummary {
+  summary(session: SessionRecord, activeTurn: TurnRecord | null): SessionSummary {
     const last = this.db
       .query<{ seq: number | null }, [string]>("SELECT max(seq) AS seq FROM events WHERE session_id = ?")
       .get(session.id)
     return {
       id: session.id,
       sessionDir: session.sessionDir,
-      agent: session.agent,
-      model: session.model,
-      reasoningEffort: session.reasoningEffort,
+      identity: {
+        sessionId: session.id,
+        agentTitle: session.agent ?? UNTITLED_AGENT_TITLE,
+        modelId: session.model,
+      },
+      selection: profile(session),
+      activeSelection:
+        activeTurn === null
+          ? null
+          : (this.startedSelection(session.id, activeTurn.runId) ?? {
+              agentTitle: session.agent ?? UNTITLED_AGENT_TITLE,
+              modelSettings: { modelId: activeTurn.model, reasoningEffort: activeTurn.reasoningEffort },
+            }),
+      activity: activeTurn === null ? "idle" : "working",
       createdAt: session.createdAt,
-      running,
       lastSeq: last?.seq ?? 0,
     }
+  }
+
+  /** The immutable selection a turn's RUN_STARTED event recorded. */
+  private startedSelection(sessionId: string, runId: string): AgentProfile | null {
+    const row = this.db
+      .query<{ body: string }, [string, string]>(
+        `SELECT body FROM events WHERE session_id = ? AND json_extract(body, '$.type') = 'RUN_STARTED'
+          AND json_extract(body, '$.runId') = ? ORDER BY seq DESC LIMIT 1`,
+      )
+      .get(sessionId, runId)
+    return row === null ? null : (JSON.parse(row.body).selection as AgentProfile)
   }
 
   /** Creates a session with its `SESSION_CREATED` event as event 1. */
@@ -243,9 +273,7 @@ export class SessionStore {
         {
           type: "SESSION_CREATED",
           sessionDir: this.sessionDir(session.id),
-          agent: session.agent,
-          model: session.model,
-          reasoningEffort: session.reasoningEffort,
+          selection: profile({ ...session, sessionDir: this.sessionDir(session.id), nextSeq: 1 }),
           forkedFrom,
         },
         session.createdAt,
@@ -516,9 +544,7 @@ export class SessionStore {
       const created: SessionEventBody = {
         type: "SESSION_CREATED",
         sessionDir: this.sessionDir(target.id),
-        agent: source.agent,
-        model: source.model,
-        reasoningEffort: source.reasoningEffort,
+        selection: profile(source),
         forkedFrom: { sessionId: source.id, runId: throughRunId },
       }
       const insert = this.db.query("INSERT INTO events (session_id, seq, timestamp, body) VALUES (?, ?, ?, ?)")
@@ -527,7 +553,7 @@ export class SessionStore {
       const taken = new Set(copied.flatMap(({ event }) => (event.type === "INPUT_RECEIVED" ? [event.inputId] : [])))
       for (const event of copied) {
         const type = event.event.type
-        if (type === "SESSION_REWOUND" || type === "MODEL_CHANGED") continue
+        if (type === "SESSION_REWOUND" || type === "SELECTION_CHANGED") continue
         if (event.event.type === "INPUT_WAITING" && !taken.has(event.event.inputId)) continue
         const body = type === "SESSION_CREATED" ? created : withThread(event.event, target.id)
         insert.run(target.id, event.seq, type === "SESSION_CREATED" ? target.createdAt : event.timestamp, JSON.stringify(body))

@@ -65,10 +65,18 @@ export class ScriptedRunner {
       const text = first?.kind === "user" ? first.text : ""
       self.started.push(text)
       const say = (message: string) => {
+        const modelCallId = crypto.randomUUID()
         const messageId = crypto.randomUUID()
-        context.emit({ type: "TEXT_MESSAGE_START", messageId, role: "assistant" })
-        context.emit({ type: "TEXT_MESSAGE_CONTENT", messageId, delta: message })
-        context.emit({ type: "TEXT_MESSAGE_END", messageId })
+        context.emit({ type: "MODEL_CALL_STARTED", runId: context.turn.runId, modelCallId, ordinal: 1 })
+        context.emit({ type: "TEXT_MESSAGE_START", modelCallId, messageId, role: "assistant" })
+        context.emit({ type: "TEXT_MESSAGE_CONTENT", modelCallId, messageId, delta: message })
+        context.emit({ type: "TEXT_MESSAGE_END", modelCallId, messageId })
+        context.emit({
+          type: "MODEL_CALL_COMMITTED",
+          runId: context.turn.runId,
+          modelCallId,
+          inputBoundaryId: crypto.randomUUID(),
+        })
       }
       say(`echo: ${text}`)
       if (text.startsWith("fail")) return { status: "failed" as const, message: "scripted failure" }

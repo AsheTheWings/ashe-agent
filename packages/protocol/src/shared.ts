@@ -25,6 +25,58 @@ export const Sender = Schema.Union([
 
 export type Sender = typeof Sender.Type
 
+/** The always-available title that applies the global model and instruction defaults. */
+export const UNTITLED_AGENT_TITLE = "untitled" as const
+
+export const AgentTitle = Schema.NonEmptyString
+
+export type AgentTitle = typeof AgentTitle.Type
+
+/** The selected model and effort. A null model is explicitly unconfigured; null effort is the model default. */
+export const ModelSettings = Schema.Struct({
+  modelId: Schema.NullOr(Id),
+  reasoningEffort: Schema.NullOr(Schema.String),
+})
+
+export type ModelSettings = typeof ModelSettings.Type
+
+/** A session's applied title and model selection. */
+export const AgentProfile = Schema.Struct({
+  agentTitle: AgentTitle,
+  modelSettings: ModelSettings,
+})
+
+export type AgentProfile = typeof AgentProfile.Type
+
+/**
+ * A request to change selected values. Omitted fields inherit. A null
+ * model clears the model, and a null effort returns to its model default.
+ */
+export const SelectionPatch = Schema.Struct({
+  agentTitle: Schema.optionalKey(AgentTitle),
+  modelSettings: Schema.optionalKey(
+    Schema.Struct({
+      modelId: Schema.optionalKey(Schema.NullOr(Id)),
+      reasoningEffort: Schema.optionalKey(Schema.NullOr(Schema.String)),
+    }),
+  ),
+})
+
+export type SelectionPatch = typeof SelectionPatch.Type
+
+/** A session address with its applied title and model; effort is not part of identity. */
+export const AgentIdentity = Schema.Struct({
+  sessionId: Id,
+  agentTitle: AgentTitle,
+  modelId: Schema.NullOr(Id),
+})
+
+export type AgentIdentity = typeof AgentIdentity.Type
+
+export const Activity = Schema.Literals(["working", "idle"])
+
+export type Activity = typeof Activity.Type
+
 /** A configured model: its `<provider>/<model>` id, display name, capabilities, and reasoning effort setting. */
 export const Model = Schema.Struct({
   id: Id,
@@ -46,13 +98,14 @@ export const SessionSummary = Schema.Struct({
   id: Id,
   /** The session's own directory, its starting working directory. */
   sessionDir: Schema.String,
-  /** The title of the session's agent, or null for the implicit agent. */
-  agent: Schema.NullOr(Schema.String),
-  model: Id,
-  /** The reasoning effort selected for the session's model, or null for its default. */
-  reasoningEffort: Schema.NullOr(Schema.String),
+  identity: AgentIdentity,
+  /** The currently applied selection, including an explicitly null model. */
+  selection: AgentProfile,
+  /** The selection a running AgentTurn is using, or null while idle. */
+  activeSelection: Schema.NullOr(AgentProfile),
+  /** Current coordinated activity, distinct from historical turn outcomes. */
+  activity: Activity,
   createdAt: Timestamp,
-  running: Schema.Boolean,
   /** The number of the session's last persisted event; a subscriber that received it is caught up. */
   lastSeq: Count,
 })
