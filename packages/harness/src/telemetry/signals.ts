@@ -6,7 +6,7 @@ import { logs, SeverityNumber } from "@opentelemetry/api-logs"
  * with its attributes, units, and error classes. Bump the version whenever
  * a name, attribute, unit, or error class changes.
  */
-export const SIGNAL_CATALOG_VERSION = 8
+export const SIGNAL_CATALOG_VERSION = 9
 
 /** The instrumentation scope of every signal. */
 export const SCOPE = "ashe-agent"
@@ -151,6 +151,13 @@ export const ATTRIBUTES = {
     values: ["message", "subscribe", "unsubscribe", "fork", "wait", "list"] as const,
     description: "The session communication operation.",
   },
+  "web.operation": { type: "string", description: "A built-in web operation: sync, renew, command, snapshot, read, or filing." },
+  "web.outcome": { type: "string", description: "The bounded outcome class of a built-in web operation." },
+  "web.view": { type: "string", values: ["chat", "session", "checkpoint"] as const, description: "The selected built-in web view." },
+  "web.error_type": { type: "string", description: "A bounded renderer or content failure class." },
+  "web.revision_gap": { type: "boolean", description: "Whether a web-state update required snapshot reconciliation." },
+  "web.queue_depth": { type: "int", description: "The bounded number of queued browser diagnostics." },
+  "web.protocol_version": { type: "int", description: "The built-in web-state protocol version." },
 } as const
 
 export type AttributeName = keyof typeof ATTRIBUTES
@@ -300,7 +307,32 @@ export const LOGS = {
     description: "Full captured output could not be retained; the tool outcome is preserved with explicit loss.",
     attributes: ["ashe_agent.content.operation", "error.type"],
   },
-} as const satisfies Record<string, { severity: "ERROR" | "WARN"; description: string; attributes: ReadonlyArray<AttributeName> }>
+  "web.sync": {
+    severity: "INFO",
+    description: "A built-in web synchronization operation completed or failed.",
+    attributes: ["web.operation", "web.outcome", "web.revision_gap", "web.protocol_version"],
+  },
+  "web.interaction": {
+    severity: "INFO",
+    description: "A built-in web composer, history, or attention interaction completed or failed.",
+    attributes: ["web.operation", "web.outcome", "web.view"],
+  },
+  "web.render_failure": {
+    severity: "WARN",
+    description: "A typed web renderer failed and its block used the generic fallback.",
+    attributes: ["web.error_type", "web.view"],
+  },
+  "web.draft": {
+    severity: "WARN",
+    description: "A browser draft operation could not persist or restore its local state.",
+    attributes: ["web.operation", "web.outcome"],
+  },
+  "web.auth": {
+    severity: "INFO",
+    description: "A built-in web credential validation or same-socket renewal completed.",
+    attributes: ["web.operation", "web.outcome"],
+  },
+} as const satisfies Record<string, { severity: "ERROR" | "WARN" | "INFO"; description: string; attributes: ReadonlyArray<AttributeName> }>
 
 export type SpanName = keyof typeof SPANS
 type MetricName = keyof typeof METRICS
@@ -434,7 +466,7 @@ export const emitLog = (name: LogName, attributes: Partial<Record<AttributeName,
   logs.getLogger(SCOPE).emit({
     eventName: name,
     body: LOGS[name].description,
-    severityNumber: LOGS[name].severity === "ERROR" ? SeverityNumber.ERROR : SeverityNumber.WARN,
+    severityNumber: LOGS[name].severity === "ERROR" ? SeverityNumber.ERROR : LOGS[name].severity === "WARN" ? SeverityNumber.WARN : SeverityNumber.INFO,
     severityText: LOGS[name].severity,
     attributes,
   })

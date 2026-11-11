@@ -63,6 +63,20 @@ boundary. A message sent with mode `queue` waits until execution is idle
 and no steering input is waiting, then joins the other eligible queued
 messages as one UserTurn. Steering therefore precedes older queued input.
 
+A caller-owned `submissionId` makes input acceptance repeat-safe. The
+harness stores one receipt with the pending input and its attachment
+claims. Retrying the same key and payload returns that input after
+admission, rewind or restart without claiming expired staging again;
+reusing the key with changed content, mode, attachments or selection is
+refused. `session.input.receipt` reports the receipt's pending, admitted or
+removed disposition, and no receipt is reported as not observed rather than
+as a definite rejection.
+
+`session.cancel` takes the observed `expectedTurnId`. A matching live turn
+is cancelled; a settled or replaced target reports no-longer-current and
+does not cancel the turn that is running now. Cancellation ends execution
+only, leaving pending input to follow its ordinary admission rules.
+
 At admission, the batch's requested settings apply in arrival order. An
 immutable `session_settings` revision is written for each effective change,
 and the AgentTurn references the final revision established at its UserTurn
@@ -181,6 +195,21 @@ recipient's attachment references for the discarded input, and admitted
 notifications remain in recipient history. Rewinding a source does not remove
 copies already published to recipients.
 
+`session.observe` reads one coherent owner snapshot without changing the
+session. It lists ordered pending user and developer input with requested
+selection and attachment references, active execution,
+continuation/rewind/fork eligibility, context and restore state,
+the applied selection, validated attention hints, and the latest successful boundary, with the last
+persisted event cursor. `OBSERVATION_CHANGED` carries the canonical revision
+when pending membership, history or eligibility changes; no observation
+creates a UserTurn, model input, developer notification or agent wakeup.
+
+An assigned client action can also report a human-interaction need through
+`action.reportInteraction`. The broker validates the reporting connection
+against the live assignment and publishes only a presentation hint;
+withdrawal, settlement and disconnect clear it. The report neither completes
+nor reassigns the action.
+
 ## Database discovery
 
 `session_list` includes a read-only database guide with the resolved
@@ -248,6 +277,17 @@ content, and the source's
 client actions, and shell processes are not copied. Its first eligible
 delivery carries the fork component, which reconciles identity and file
 generations without starting a model call by itself.
+
+`session.history.inspect` issues a confirmation scope for the selected
+boundary. It covers the retained-history revision, ordered pending input,
+active execution and context/restore state, plus the target's rewind and
+fork eligibility; provisional stream chunks and organization writes do not
+change it. A confirmed rewind or fork presents that scope and a stable
+`operationId`. The harness refuses a changed scope before stopping or
+mutating execution, persists one admitted operation per identity, and
+exposes its result through `session.history.result` after restart. Reusing
+an operation identity with a different payload is refused, and a started
+operation without a result is reported unresolved rather than repeated.
 
 The agent-facing `session_fork` tool forks the calling session and
 continues the copied AgentTurn. Its branch keeps the source turn's

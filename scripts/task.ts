@@ -61,8 +61,9 @@ const test = async (testClass: TestClass, inputs: Record<string, string> = {}, o
   try {
     const ignored = ownTaskSuites.map((suite) => `--path-ignore-patterns=${suite}`)
     const selection = only === undefined ? [...ignored, `.${testClass}.test.ts`] : [only]
+    const timeout = testClass === "integration" ? ["--timeout", "15000"] : []
     return await run(
-      [process.execPath, "test", "--define", `ASHE_AGENT_TEST_SEED=${JSON.stringify(seed)}`, ...selection],
+      [process.execPath, "test", ...timeout, "--define", `ASHE_AGENT_TEST_SEED=${JSON.stringify(seed)}`, ...selection],
       { ...testEnvironment(home), ...inputs },
     )
   } finally {
@@ -111,12 +112,14 @@ const test262 = async () => {
   }
 }
 
-/** Checks the workspace, then the web client's browser sources under their own config. */
+/** Checks the workspace, then the separated browser and backend web configs. */
 const typecheck = async () => {
   process.stdout.write("\n== typecheck ==\n")
   const tsc = join(root, "node_modules/.bin/tsc")
   const code = await run([tsc, "-p", "tsconfig.json"])
-  return code !== 0 ? code : await run([tsc, "-p", "packages/web/tsconfig.json"])
+  if (code !== 0) return code
+  const client = await run([tsc, "-p", "packages/web/tsconfig.client.json"])
+  return client !== 0 ? client : await run([tsc, "-p", "packages/web/tsconfig.backend.json"])
 }
 
 const git = (...args: Array<string>) => Bun.spawnSync(["git", ...args], { cwd: root }).stdout.toString().trim()

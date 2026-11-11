@@ -69,6 +69,17 @@ Every signal carries `service.namespace` `ashe-agent`, `service.name`
 `service.instance.id` new for each process, and
 `deployment.environment.name` from the server's input.
 
+The built-in web backend starts the same SDK with `service.name`
+`ashe-agent-web`. Its browser diagnostic intake accepts only a bounded
+allowlist from the versioned catalog: `web.sync`, `web.interaction`,
+`web.render_failure`, `web.draft`, and `web.auth`, with only the attributes
+the catalog assigns each name. It rejects message bodies, unknown fields,
+oversized records, excess batches and disallowed origins. Accepted records
+are emitted as log records through the backend's OTLP exporters; the
+backend holds the only OTLP credentials, and no console or file sink is a
+fallback. Browser drafts, messages, attachments, tokens and tool payloads
+never enter this path.
+
 ## Export
 
 Each signal's exporter is `otlp`, `console`, or `none`, with one selection

@@ -18,10 +18,10 @@ A test's class is the suffix of its file name.
 | Class | File suffix | Command | Boundary |
 | --- | --- | --- | --- |
 | unit | `.unit.test.ts` | `bun run test:unit` | pure functions: no filesystem, sockets, processes, process configuration, or waits |
-| component | `.component.test.ts` | `bun run test:component` | the session hub and turn loop in the test's process, with a fake model port and fake tools, on a SQLite file in the test's own temporary directory; code mode programs in the interpreter, in the test's process; the web client's session client over a scripted fake server behind its socket port |
-| integration | `.integration.test.ts` | `bun run test:integration` | real SQLite files, `ashe-agent` and bash processes, WebSocket connections, and fake upstream APIs on loopback ports that the test creates, with files in its own temporary directory |
+| component | `.component.test.ts` | `bun run test:component` | the session hub and turn loop in the test's process, with a fake model port and fake tools, on a SQLite file in the test's own temporary directory; code mode programs in the interpreter, in the test's process; Chat, Session, and Checkpoint rendering through fake client ports |
+| integration | `.integration.test.ts` | `bun run test:integration` | real SQLite files, `ashe-agent`, web backend, shared-state synchronization, bash processes, WebSocket connections, and fake upstream APIs on loopback ports the test creates, with files in its own temporary directory |
 | conformance | `.conformance.test.ts` | `bun run test:conformance` | read-only checks that generated files, pins, and versions match their sources |
-| qualification | `.qualification.test.ts` | `bun run test:qualification [<bundle>]` | the binary and web build of a built bundle, extracted into the test's own directory; the binary runs as the server against a run-owned state directory and a fake Responses API on a loopback port |
+| qualification | `.qualification.test.ts` | `bun run test:qualification [<bundle>]` | the harness binary, web backend, and browser build of a built bundle, extracted into the test's own directory; the binaries run against run-owned state and fake loopback services |
 
 CI runs the integration tests after the fast gate. The GitHub sign-in
 suite uses a run-owned fake GitHub to exercise the owner, rejection,
@@ -72,7 +72,14 @@ stdin is read.
   peer-session submission, subscription and wait delivery, SQL discovery,
   conversion isolation, reaping, and main-server survival. The test class
   uses only the extracted artifact and a fake model service on a run-owned
-  loopback port.
+  loopback port. The web backend qualification serves the built shell,
+  validates credential authority, observes without a browser, commits shared
+  organization, survives replacement, and publishes a consistent dump. The
+  web artifact qualification also drives its served browser through a
+  run-owned Caddy edge and fake harness: GitHub callback, session selection,
+  Ctrl+I view cycling, Escape, and type-to-focus. It needs `caddy` and
+  `google-chrome` on `PATH`. The web image qualification runs the exact
+  container against a run-owned fake harness.
 
 `bun run test:test262` fetches tc39/test262 at the revision
 `packages/codemode/test/test262/manifest.json` pins, into a directory of
@@ -83,7 +90,7 @@ integration commands leave that suite out. It needs network access, so it
 stays out of the fast gate; CI runs it after the integration tests.
 
 `bun run typecheck` runs the TypeScript checker alone, over the workspace
-and then over the web client's browser sources with their own config.
+and then separately over the web client's browser and backend configs.
 
 Each test command prints the seed of its randomized tests, which also
 appears in their names. Supplying the reported seed through the explicit
@@ -93,10 +100,11 @@ environment.
 
 ## Bundle and release gate
 
-`bun run bundle` builds, from a worktree without changes, the server as
-one `bun build --compile` executable for linux-x64 and the web client's
-production build (see [web client](web-client.md)), both stamped with the
-commit, and packages them as `bin/ashe-agent`, `web/`, and the content
+`bun run bundle` builds, from a worktree without changes, the server and
+web backend as `bun build --compile` executables for linux-x64, the web
+client's production build and migrations (see [web client](web-client.md)),
+all stamped with the commit, and packages them as `bin/ashe-agent`, `web/`,
+and the content
 worker's `NOTICE-content`, `PDFIUM_LICENSE`, `PDFIUM_THIRD_PARTY_NOTICES`,
 `LICENSE-pngjs`, `LICENSE-pdfium-wrapper`, `NOTICE-shell`, `LICENSE-shell`,
 and `LICENSE-codemode` into

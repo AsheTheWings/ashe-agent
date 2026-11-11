@@ -6,16 +6,20 @@ import {
   type AgentSender,
   type AgentProfile,
   ErrorCode,
+  type HistoryTarget,
   type InputMode,
   type MessageCategory,
   type MessageSender,
   type Model,
+  type MutationScope,
   PERMISSION_ACTION,
   type PermissionActionResult,
   type RepresentationRef,
   type RetainedAttachmentRef,
   type SelectionPatch,
   type SemanticHistory,
+  type SemanticEntry,
+  type SemanticPage,
   type Sender,
   type SessionEvent,
   type SessionEventBody,
@@ -337,6 +341,108 @@ const conflict = (message: string) => new ProtocolError({ code: ErrorCode.confli
 const invalid = (message: string) => new ProtocolError({ code: ErrorCode.invalidInput, message })
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
 const senderOwner = (sender: Sender) => (sender.kind === "token" ? `token:${sender.tokenId}` : `login:${sender.loginId}`)
+
+const present = <A>(value: A | undefined) => (value === undefined ? { present: false } : { present: true, value })
+
+/**
+ * The durable identity of one submitted payload. Omitted selection fields
+ * stay distinct from explicit nulls, and attachment order is significant.
+ */
+const submissionFingerprint = (input: {
+  readonly text: string
+  readonly mode: InputMode | undefined
+  readonly selection: SelectionPatch | undefined
+  readonly attachments: ReadonlyArray<RetainedAttachmentRef> | undefined
+}) =>
+  new Bun.CryptoHasher("sha256")
+    .update(
+      JSON.stringify({
+        text: input.text,
+        mode: present(input.mode),
+        attachments:
+          input.attachments === undefined
+            ? { present: false }
+            : {
+                present: true,
+                items: input.attachments.map((attachment) => ({
+                  attachmentId: attachment.attachmentId,
+                  contentId: attachment.contentId,
+                  representationId: attachment.representationId,
+                  name: attachment.name,
+                  mediaType: attachment.mediaType,
+                  digest: attachment.digest,
+                })),
+              },
+        selection:
+          input.selection === undefined
+            ? { present: false }
+            : {
+                present: true,
+                agentTitle: present(input.selection.agentTitle),
+                modelSettings:
+                  input.selection.modelSettings === undefined
+                    ? { present: false }
+                    : {
+                        present: true,
+                        modelId: present(input.selection.modelSettings.modelId),
+                        reasoningEffort: present(input.selection.modelSettings.reasoningEffort),
+                      },
+              },
+      }),
+    )
+    .digest("hex")
+
+/** The identity of one owner history operation: its target, confirmation and requested changes. */
+const historyFingerprint = (
+  action: "rewind" | "fork",
+  runId: string | undefined,
+  historyScope: string,
+  changes: { readonly text?: string; readonly selection?: SelectionPatch },
+) =>
+  new Bun.CryptoHasher("sha256")
+    .update(
+      JSON.stringify({
+        action,
+        runId: runId ?? null,
+        historyScope,
+        text: present(changes.text),
+        selection: present(changes.selection),
+      }),
+    )
+    .digest("hex")
+
+/** Bodies larger than this are returned by reference instead of inline in a page. */
+const SEMANTIC_INLINE_BODY_BYTES = 8 * 1024
+
+const omitEntryBody = (entry: SemanticEntry): SemanticEntry => {
+  switch (entry.kind) {
+    case "system":
+      return { ...entry, content: { ...entry.content, text: "" } }
+    case "developer":
+      return { ...entry, components: entry.components.map((component) => ({ ...component, text: "" })) }
+    case "user":
+      return { ...entry, parts: [] }
+    case "agent":
+      return { ...entry, parts: [] }
+    case "agent-thought":
+      return { ...entry, text: "" }
+    case "agent-tool":
+      return {
+        ...entry,
+        tool: {
+          ...entry.tool,
+          arguments: { ...entry.tool.arguments, value: null },
+          result:
+            entry.tool.result === null
+              ? null
+              : { ...entry.tool.result, content: [], structured: null },
+        },
+      }
+  }
+}
+
+const turnOutcome = (status: string): "completed" | "failed" | "cancelled" | "interrupted" | null =>
+  status === "running" ? null : status === "finished" ? "completed" : (status as "failed" | "cancelled" | "interrupted")
 
 const SESSION_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
 /** The largest multiple of the alphabet's size below 256: bytes from it on are discarded, so each character is uniform. */
@@ -945,7 +1051,7 @@ export class SessionHub {
         const action = this.actions.run<PermissionActionResult>(
           PERMISSION_ACTION,
           { requestId, permission: check.permission, subjects: [...decision.asked], patterns: [...check.patterns] },
-          { sessionId, clock: this.toolPolicy.clock, signal, onAssigned: (id) => (ask.actionId = id) },
+          { sessionId, runId, clock: this.toolPolicy.clock, signal, onAssigned: (id) => (ask.actionId = id) },
         )
         void action.then(
           (outcome) => {
@@ -1080,13 +1186,37 @@ export class SessionHub {
     const appended: Array<SessionEvent> = []
     let result: A
     try {
-      result = this.store.db.transaction(() =>
-        write((body) => {
+      result = this.store.db.transaction(() => {
+        const before = this.observationRevision(sessionId)
+        const value = write((body) => {
           const event = this.store.appendEvent(sessionId, body, this.now())
           appended.push(event)
           return event
-        }),
-      )()
+        })
+        const after = this.observationRevision(sessionId)
+        const signaled = appended.some((event) =>
+          [
+            "INPUT_WAITING",
+            "INPUT_RECEIVED",
+            "SESSION_REWOUND",
+            "SELECTION_CHANGED",
+            "RUN_STARTED",
+            "RUN_FINISHED",
+            "RUN_ERROR",
+            "RUN_INTERRUPTED",
+            "SESSION_ERROR",
+            "DEVELOPER_MESSAGE",
+            "CONTEXT_TURN_STARTED",
+            "CHECKPOINT_WINDOW_SEEDED",
+            "OBSERVATION_CHANGED",
+          ].includes(event.event.type),
+        )
+        if (after !== before && !signaled) {
+          const event = this.store.appendEvent(sessionId, { type: "OBSERVATION_CHANGED", revision: after }, this.now())
+          appended.push(event)
+        }
+        return value
+      })()
     } catch (error) {
       if (error instanceof ProtocolError || error instanceof IntegrityFailure || error instanceof AttachmentError) throw error
       throw new IntegrityFailure(`the session state transaction failed: ${errorText(error)}`)
@@ -1154,15 +1284,311 @@ export class SessionHub {
           modelSettings: { modelId: turn.model, reasoningEffort: turn.reasoningEffort },
         },
         settingsRevision: turn.settingsRevision,
-        outcome: turn.status === "running"
-          ? null
-          : turn.status === "finished"
-            ? "completed"
-            : turn.status,
+        outcome: turnOutcome(turn.status),
         contextMaintenance: turn.contextWorkflowId !== null,
       })),
       entries: this.store.conversation.semanticEntries(sessionId),
       boundaries: this.store.conversation.semanticBoundaries(sessionId),
+    }
+  }
+
+  /** One bounded, revision-bound page of a semantic collection. */
+  semanticPage(
+    sessionId: string,
+    object: "turns" | "entries" | "boundaries",
+    requestedRevision: string | undefined,
+    cursor: string | undefined,
+    limit = 50,
+  ): SemanticPage {
+    this.session(sessionId)
+    const revision = this.conversation.historyRevision(sessionId)
+    if (cursor !== undefined && requestedRevision === undefined) {
+      throw invalid("a semantic page cursor requires its revision")
+    }
+    if (requestedRevision !== undefined && requestedRevision !== revision) {
+      throw conflict("the semantic page revision is stale; restart from the current revision")
+    }
+    const after = (() => {
+      if (cursor === undefined) return 0
+      const match = /^(turns|entries|boundaries):(\d+)$/.exec(cursor)
+      if (match === null || match[1] !== object) throw invalid("the semantic page cursor does not name this collection")
+      return Number(match[2])
+    })()
+    const latestSuccessfulBoundaryId = this.conversation.latestBoundaryId(sessionId)
+    if (object === "turns") {
+      const all = this.store.turns(sessionId).filter((turn) => turn.position > after)
+      const page = all.slice(0, limit)
+      return {
+        object,
+        revision,
+        items: page.map((turn) => ({
+          id: turn.runId,
+          position: turn.position,
+          admittedAt: turn.startedAt,
+          inputEntryIds: turn.membership.map((input) => input.inputId),
+          userMessageIds: [...turn.userMessageIds],
+          profile: {
+            agentTitle: turn.agentTitle,
+            modelSettings: { modelId: turn.model, reasoningEffort: turn.reasoningEffort },
+          },
+          settingsRevision: turn.settingsRevision,
+          outcome: turnOutcome(turn.status),
+          contextMaintenance: turn.contextWorkflowId !== null,
+        })),
+        nextCursor: all.length > page.length ? `turns:${page.at(-1)!.position}` : null,
+        latestSuccessfulBoundaryId,
+      }
+    }
+    if (object === "entries") {
+      const all = this.store.conversation.semanticEntries(sessionId).filter((entry) => entry.position > after)
+      const page = all.slice(0, limit)
+      return {
+        object,
+        revision,
+        items: page.map((entry) => {
+          const bytes = this.conversation.contentBytes(entry.contentId)?.byteLength ?? 0
+          return bytes <= SEMANTIC_INLINE_BODY_BYTES
+            ? { entry, body: null }
+            : {
+                entry: omitEntryBody(entry),
+                body: { contentId: entry.contentId, referenceId: entry.id, byteLength: bytes },
+              }
+        }),
+        nextCursor: all.length > page.length ? `entries:${page.at(-1)!.position}` : null,
+        latestSuccessfulBoundaryId,
+      }
+    }
+    const all = this.store.conversation.semanticBoundaries(sessionId)
+    const page = all.slice(after, after + limit)
+    return {
+      object,
+      revision,
+      items: page.map((boundary) => {
+        const body = this.conversation.boundaryBodyRef(sessionId, boundary.id)
+        if (body === null) throw new IntegrityFailure(`boundary ${boundary.id} has no retained body`)
+        return {
+          id: boundary.id,
+          modelCallId: boundary.modelCallId,
+          turnId: boundary.turnId,
+          windowPosition: boundary.windowPosition,
+          committedAt: boundary.committedAt,
+          contributionCount: boundary.contributions.length,
+          body: { contentId: body.contentId, referenceId: boundary.id, byteLength: body.byteLength },
+        }
+      }),
+      nextCursor: all.length > after + page.length ? `boundaries:${after + page.length}` : null,
+      latestSuccessfulBoundaryId,
+    }
+  }
+
+  /** One full typed entry whose body a page omitted. */
+  semanticBody(sessionId: string, entryId: string, contentId: string) {
+    const entry = this.store.conversation.semanticEntry(sessionId, entryId)
+    if (entry === null || entry.contentId !== contentId) throw notFound(`retained entry ${entryId}`)
+    return { entry }
+  }
+
+  /** One full successful request boundary whose body a page summarized. */
+  semanticBoundary(sessionId: string, manifestId: string) {
+    const boundary = this.store.conversation.semanticBoundary(sessionId, manifestId)
+    if (boundary === null) throw notFound(`retained boundary ${manifestId}`)
+    return { boundary }
+  }
+
+  /** Stored provider counts for the requested calls, never reconstructed estimates. */
+  modelCallUsage(sessionId: string, modelCallIds: ReadonlyArray<string>) {
+    this.session(sessionId)
+    return { usage: this.conversation.providerUsage(sessionId, modelCallIds) }
+  }
+
+  /** A bounded chunk of an entry-owned retained capture. */
+  retainedCapture(sessionId: string, entryId: string, contentId: string, offset: number, length: number) {
+    this.session(sessionId)
+    const capture = this.contentReferences.read(sessionId, entryId, contentId, offset, length)
+    if (capture === null) throw notFound(`retained capture ${contentId}`)
+    return {
+      capture: {
+        sessionId: capture.sessionId,
+        entryId: capture.entryId,
+        contentId: capture.contentId,
+        name: capture.name,
+        mediaType: capture.mediaType,
+        byteLength: capture.byteLength,
+        captureLossBytes: capture.captureLossBytes,
+        offset: capture.offset,
+        data: Buffer.from(capture.bytes).toString("base64"),
+      },
+    }
+  }
+
+  /** The canonical facts a history confirmation covers, and its harness-issued token. */
+  private mutationScope(sessionId: string, runId: string | undefined): { scope: MutationScope; target: HistoryTarget | null } {
+    const turns = this.store.turns(sessionId)
+    const selected =
+      runId === undefined
+        ? [...turns].reverse().find((turn) => turn.userMessageIds.length > 0 && turn.status !== "running")
+        : turns.find((turn) => turn.runId === runId)
+    const pendingInputIds = this.conversation.waiting(sessionId).map((entry) => entry.inputId)
+    const activeTurnId = this.state(sessionId).live?.turn.runId ?? null
+    const contextActive = this.context.activeWorkflow(sessionId) !== null
+    const restorePending = this.fileState.pendingRestore(sessionId) !== null
+    const readRevision = this.conversation.historyRevision(sessionId)
+    const target: HistoryTarget | null =
+      selected === undefined
+        ? null
+        : {
+            runId: selected.runId,
+            position: selected.position,
+            userMessageIds: [...selected.userMessageIds],
+            affectedTurnIds: turns.filter((turn) => turn.position >= selected.position).map((turn) => turn.runId),
+            pendingInputIds,
+            rewindEligible: selected.userMessageIds.length > 0,
+            forkEligible: selected.userMessageIds.length > 0 && selected.status !== "running",
+          }
+    const facts = {
+      sessionId,
+      readRevision,
+      activeTurnId,
+      pendingInputIds,
+      contextActive,
+      restorePending,
+      targetRunId: target?.runId ?? null,
+      targetPosition: target?.position ?? null,
+      targetStatus: selected?.status ?? null,
+      targetUserMessageIds: target?.userMessageIds ?? [],
+      affectedTurnIds: target?.affectedTurnIds ?? [],
+    }
+    const token = new Bun.CryptoHasher("sha256").update(JSON.stringify(facts)).digest("hex")
+    return {
+      scope: {
+        token,
+        sessionId,
+        targetRunId: target?.runId ?? null,
+        readRevision,
+        activeTurnId,
+        pendingInputIds,
+        contextActive,
+        restorePending,
+      },
+      target,
+    }
+  }
+
+  /** Inspects one boundary and issues the scope a confirmed rewind or fork presents. */
+  historyInspect(sessionId: string, runId: string | undefined) {
+    this.session(sessionId)
+    return this.mutationScope(sessionId, runId)
+  }
+
+  /** Refuses a confirmation whose displayed boundary, pending input or eligibility changed. */
+  private verifyMutationScope(sessionId: string, runId: string | undefined, token: string) {
+    const current = this.mutationScope(sessionId, runId)
+    if (current.scope.token !== token) {
+      throw conflict("the history confirmation is stale; inspect the boundary again")
+    }
+    return current
+  }
+
+  /** The durable result of one accepted history operation. */
+  historyResult(sessionId: string, operationId: string) {
+    this.session(sessionId)
+    const operation = this.store.historyOperation(sessionId, operationId)
+    if (operation === null) return { kind: "not_observed" as const, operationId }
+    return operation.status === "succeeded"
+      ? {
+          kind: "observed" as const,
+          operationId,
+          action: operation.action,
+          status: "succeeded" as const,
+          result: operation.result,
+        }
+      : { kind: "unresolved" as const, operationId, action: operation.action }
+  }
+
+  /** A revision of the facts owner observation reports, without entry bodies or stream chunks. */
+  private observationRevision(sessionId: string): string {
+    const session = this.session(sessionId)
+    const pending = this.conversation.waiting(sessionId).map((entry) =>
+      entry.kind === "user"
+        ? [
+            "user",
+            entry.inputId,
+            entry.submissionId ?? null,
+            entry.text,
+            entry.mode,
+            entry.attachments?.map((attachment) => attachment.attachmentId) ?? [],
+            entry.selection ?? null,
+          ]
+        : ["developer", entry.inputId, entry.trigger, entry.component.type, entry.component.name, entry.component.heading],
+    )
+    const turns = this.store.turns(sessionId).map((turn) => [turn.runId, turn.position, turn.status, turn.userMessageIds])
+    return new Bun.CryptoHasher("sha256")
+      .update(
+        JSON.stringify({
+          pending,
+          turns,
+          selection: session.settingsRevision,
+          restore: this.fileState.pendingRestore(sessionId) !== null,
+          context: this.store.contextWorkflow(sessionId)?.id ?? null,
+          attention: this.actions.attentionForSession(sessionId),
+        }),
+      )
+      .digest("hex")
+  }
+
+  /** A coherent owner snapshot of ordered pending input and coordinated eligibility. */
+  observe(sessionId: string) {
+    const session = this.session(sessionId)
+    const summary = this.summary(sessionId)
+    const waiting = this.conversation.waiting(sessionId)
+    const turns = this.store.turns(sessionId)
+    const active = this.state(sessionId).live
+    const contextWorkflow = this.store.contextWorkflow(sessionId)
+    const restorePending = this.fileState.pendingRestore(sessionId) !== null
+    return {
+      sessionId,
+      revision: this.observationRevision(sessionId),
+      cursor: this.store.lastEventSeq(sessionId),
+      selection: summary.selection,
+      activeSelection: summary.activeSelection,
+      pending: waiting.map((entry) =>
+        entry.kind === "user"
+          ? {
+              kind: "user" as const,
+              inputId: entry.inputId,
+              submissionId: entry.submissionId ?? null,
+              text: entry.text,
+              mode: entry.mode,
+              sender: entry.sender,
+              attachments: entry.attachments ?? [],
+              selection: entry.selection ?? null,
+            }
+          : {
+              kind: "developer" as const,
+              inputId: entry.inputId,
+              trigger: entry.trigger,
+              componentType: entry.component.type,
+              componentName: entry.component.name,
+              heading: entry.component.heading,
+            },
+      ),
+      execution: {
+        activeTurnId: active?.turn.runId ?? null,
+        activity: active === null ? ("idle" as const) : ("working" as const),
+        canResume:
+          active === null &&
+          !this.state(sessionId).controlled &&
+          contextWorkflow === null &&
+          !restorePending &&
+          !waiting.some(isContinuation),
+        canRewind: !restorePending && turns.some((turn) => turn.userMessageIds.length > 0),
+        canFork: !restorePending && turns.some((turn) => turn.userMessageIds.length > 0 && turn.status !== "running"),
+        contextWorkflowActive: contextWorkflow !== null,
+        restorePending,
+      },
+      userTurnIds: turns.filter((turn) => turn.userMessageIds.length > 0).map((turn) => turn.runId),
+      latestSuccessfulBoundaryId: this.conversation.latestBoundaryId(sessionId),
+      attention: this.actions.attentionForSession(sessionId),
     }
   }
 
@@ -1472,6 +1898,8 @@ export class SessionHub {
     mode: InputMode | undefined,
     sender: MessageSender,
     options: {
+      /** The caller's stable identity for this submission; a retry reuses it and its payload. */
+      readonly submissionId?: string
       readonly selection?: SelectionPatch
       readonly attachments?: ReadonlyArray<RetainedAttachmentRef>
       /** The sending session for a peer submission, whose retained attachments it owns. */
@@ -1484,14 +1912,29 @@ export class SessionHub {
       /** Leaves activity notification and turn start to the caller after an enclosing transaction commits. */
       readonly deferStart?: boolean
     } = {},
-  ): string {
+  ): { readonly inputId: string; readonly submissionId: string } {
     this.session(sessionId)
+    const submissionId = options.submissionId ?? crypto.randomUUID()
+    const fingerprint = submissionFingerprint({
+      text,
+      mode,
+      selection: options.selection,
+      attachments: options.attachments,
+    })
+    const accepted = this.store.inputReceipt(sessionId, submissionId)
+    if (accepted !== null) {
+      if (accepted.fingerprint !== fingerprint) {
+        throw conflict(`submission ${submissionId} already accepted a different payload`)
+      }
+      return { inputId: accepted.inputId, submissionId }
+    }
     if (this.stopping) throw conflict("the server is stopping")
     if (this.state(sessionId).controlled) throw conflict("the session's history is being changed")
     const inputId = crypto.randomUUID()
     const entry = {
       kind: "user" as const,
       inputId,
+      submissionId,
       text,
       mode: mode ?? "steer",
       sender,
@@ -1499,6 +1942,7 @@ export class SessionHub {
       ...(options.attachments === undefined || options.attachments.length === 0 ? {} : { attachments: options.attachments }),
     }
     this.commit(sessionId, (append) => {
+      this.store.acceptInput(sessionId, submissionId, inputId, fingerprint, this.now())
       if (options.subscribeTo !== undefined) {
         if (
           options.fromSessionId === undefined ||
@@ -1524,17 +1968,31 @@ export class SessionHub {
         }
       }
       this.conversation.addWaiting(sessionId, entry, this.now())
-      append({ type: "INPUT_WAITING", inputId, text, mode: entry.mode, sender })
+      append({ type: "INPUT_WAITING", inputId, submissionId, text, mode: entry.mode, sender })
     })
     if (options.deferStart !== true) {
       this.notifyActivity(sessionId)
       this.startNext(sessionId)
     }
-    return inputId
+    return { inputId, submissionId }
   }
 
   private notifyActivity(sessionId: string) {
     for (const listener of [...(this.activityWaiters.get(sessionId) ?? [])]) listener()
+  }
+
+  /** The accepted receipt of one submission, or null when no input accepted it. */
+  inputReceipt(sessionId: string, submissionId: string) {
+    this.session(sessionId)
+    const receipt = this.store.inputReceipt(sessionId, submissionId)
+    return receipt === null
+      ? null
+      : {
+          submissionId: receipt.submissionId,
+          inputId: receipt.inputId,
+          disposition: receipt.disposition,
+          acceptedAt: receipt.acceptedAt,
+        }
   }
 
   /**
@@ -1734,7 +2192,7 @@ export class SessionHub {
             ...(args.subscribe === undefined
               ? {}
               : { subscribeTo: args.subscribe.messages ?? (["agent_final"] as const) }),
-          })
+          }).inputId
         })()
       } catch (error) {
         if (fresh !== undefined) {
@@ -1774,7 +2232,7 @@ export class SessionHub {
       ...(args.subscribe === undefined
         ? {}
         : { subscribeTo: args.subscribe.messages ?? (["agent_final"] as const) }),
-    })
+    }).inputId
     return Promise.resolve({
       outcome: "success",
       content: JSON.stringify({ sessionId: recipient, inputId, created }),
@@ -2041,12 +2499,17 @@ export class SessionHub {
     return branch!
   }
 
-  cancel(sessionId: string) {
+  /** Stops the observed turn, or reports that another turn is current. */
+  cancel(sessionId: string, expectedTurnId?: string) {
     this.session(sessionId)
     const live = this.state(sessionId).live
-    if (live === null) throw conflict("no turn is running")
+    if (live === null) return { outcome: "no_longer_current" as const, currentTurnId: null }
+    if (expectedTurnId !== undefined && live.turn.runId !== expectedTurnId) {
+      return { outcome: "no_longer_current" as const, currentTurnId: live.turn.runId }
+    }
     live.cancelled = true
     Effect.runFork(Fiber.interrupt(live.fiber))
+    return { outcome: "cancelled" as const, currentTurnId: live.turn.runId }
   }
 
   /** Starts an idle session with continuation content, which joins its next eligible batch. */
@@ -2263,6 +2726,7 @@ export class SessionHub {
       const item = this.conversation.appendItem(sessionId, window.position, owner, {
         kind: "user",
         inputId: entry.entry.inputId,
+        ...(entry.entry.submissionId === undefined ? {} : { submissionId: entry.entry.submissionId }),
         text: entry.entry.text,
         sender: entry.entry.sender,
         ...(entry.entry.attachments === undefined ? {} : { attachments: entry.entry.attachments }),
@@ -2271,6 +2735,7 @@ export class SessionHub {
       append({
         type: "INPUT_RECEIVED",
         inputId: entry.entry.inputId,
+        ...(entry.entry.submissionId === undefined ? {} : { submissionId: entry.entry.submissionId }),
         text: entry.entry.text,
         mode: entry.entry.mode,
         sender: entry.entry.sender,
@@ -2769,7 +3234,28 @@ export class SessionHub {
    * fork component, and scratch lost and memory restored components the
    * copied history does not know start a turn.
    */
-  fork(sessionId: string, runId: string | undefined): SessionSummary {
+  fork(
+    sessionId: string,
+    runId: string | undefined,
+    options?: { readonly historyScope: string; readonly operationId: string },
+  ): SessionSummary {
+    this.session(sessionId)
+    const fingerprint = options === undefined ? null : historyFingerprint("fork", runId, options.historyScope, {})
+    const existing = options === undefined ? null : this.store.historyOperation(sessionId, options.operationId)
+    if (existing !== null) {
+      if (existing.action !== "fork" || existing.fingerprint !== fingerprint) {
+        throw conflict(`operation ${options?.operationId} already accepted a different history action`)
+      }
+      if (existing.status === "started") throw conflict(`operation ${options?.operationId} is unresolved`)
+      const result = existing.result as { readonly sessionId?: string } | null
+      if (result?.sessionId === undefined) throw new IntegrityFailure(`operation ${options?.operationId} has no branch`)
+      return this.summary(result.sessionId)
+    }
+    if (options !== undefined) {
+      const inspected = this.verifyMutationScope(sessionId, runId, options.historyScope)
+      if (inspected.target === null) throw invalid("the session has no settled turn starting with a user message to fork")
+      if (!inspected.target.forkEligible) throw invalid(`turn ${inspected.target.runId} has not settled, so it is no fork point`)
+    }
     const source = this.session(sessionId)
     const turns = this.store.turns(sessionId)
     const point =
@@ -2791,6 +3277,9 @@ export class SessionHub {
     const memory = this.fileState.files(files.refs.filter((ref) => ref.area === "memory"))
     const generations = this.fileState.generations(sessionId)
     const id = this.newSessionId()
+    if (options !== undefined && fingerprint !== null) {
+      this.store.beginHistoryOperation(sessionId, options.operationId, "fork", fingerprint, this.now())
+    }
     this.withSessionFiles(id, () => {
       this.files.writeResearch(id, research)
       const recorded = this.files.writeGeneration(id, 1, memory)
@@ -2806,6 +3295,9 @@ export class SessionHub {
         this.queueReconciledNotifications(id, "fork")
       })()
     })
+    if (options !== undefined) {
+      this.store.completeHistoryOperation(sessionId, options.operationId, { sessionId: id }, this.now())
+    }
     return this.summary(id)
   }
 
@@ -2824,12 +3316,33 @@ export class SessionHub {
     runId: string,
     text: string | undefined,
     sender: Sender,
-    options: { readonly selection?: SelectionPatch } = {},
+    options: { readonly historyScope?: string; readonly operationId?: string; readonly selection?: SelectionPatch } = {},
   ) {
     this.session(sessionId)
+    const fencing = options.historyScope !== undefined && options.operationId !== undefined
+    const fingerprint = fencing
+      ? historyFingerprint("rewind", runId, options.historyScope!, {
+          ...(text === undefined ? {} : { text }),
+          ...(options.selection === undefined ? {} : { selection: options.selection }),
+        })
+      : null
+    const existing = fencing ? this.store.historyOperation(sessionId, options.operationId!) : null
+    if (existing !== null) {
+      if (existing.action !== "rewind" || existing.fingerprint !== fingerprint) {
+        throw conflict(`operation ${options.operationId} already accepted a different history action`)
+      }
+      if (existing.status === "started") throw conflict(`operation ${options.operationId} is unresolved`)
+      return
+    }
     const state = this.state(sessionId)
     if (state.controlled) throw conflict("another history operation is changing the session")
     const turn = this.point(sessionId, runId)
+    if (fencing) {
+      const inspected = this.verifyMutationScope(sessionId, runId, options.historyScope!)
+      if (inspected.target === null || !inspected.target.rewindEligible) {
+        throw invalid(`turn ${runId} is no rewind point`)
+      }
+    }
     const users = new Map(
       this.conversation
         .turnItems(sessionId, runId)
@@ -2859,6 +3372,7 @@ export class SessionHub {
       .find((item) => item.kind === "component" && item.component.name === "continuation")
     if (!this.restoreIfPending(sessionId)) throw conflict("the session's files are being restored after a rewind; try again")
     const restore = this.fileState.snapshot(sessionId, runId)
+    if (fencing) this.store.beginHistoryOperation(sessionId, options.operationId!, "rewind", fingerprint!, this.now())
     state.controlled = true
     let failed = false
     try {
@@ -2911,6 +3425,7 @@ export class SessionHub {
       state.controlled = false
       if (failed) this.startNext(sessionId)
     }
+    if (fencing) this.store.completeHistoryOperation(sessionId, options.operationId!, { runId: turn.runId }, this.now())
     if (this.restoreIfPending(sessionId)) this.startNext(sessionId)
   }
 

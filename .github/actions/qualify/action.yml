@@ -38,7 +38,7 @@ runs:
       shell: bash
       run: |
         sudo apt-get update
-        sudo apt-get install --yes sqlite3
+        sudo apt-get install --yes sqlite3 caddy
 
     - name: Qualify the bundle
       shell: bash

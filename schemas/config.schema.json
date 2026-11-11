@@ -735,6 +735,75 @@
       "type": "string",
       "minLength": 1,
       "description": "Value of the deployment.environment.name telemetry attribute."
+    },
+    "webStateDir": {
+      "type": "string",
+      "pattern": "^\\/",
+      "description": "Directory holding the built-in web application's SQLite state and dumps."
+    },
+    "webListenHost": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Address the built-in web backend listens on."
+    },
+    "webListenPort": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535,
+      "description": "Port the built-in web backend listens on; 0 picks a free port."
+    },
+    "webHarnessUrl": {
+      "type": "string",
+      "description": "WebSocket URL of the harness whose sessions the web backend observes and validates credentials against."
+    },
+    "webOrigins": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Browser origins allowed to use the built-in web backend."
+    },
+    "webObserverCredentialFile": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^\\/"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Path of the protected file holding the harness credential the web backend observes with."
+    },
+    "webAssetsDir": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^\\/"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Root of the immutable built browser assets the web backend serves."
+    },
+    "webMigrationsDir": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^\\/"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Directory of the web backend's ordered SQLite migrations."
+    },
+    "webInactivityDays": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3650,
+      "description": "Days without observed work before the web inbox files an unpinned session; 0 disables filing."
     }
   },
   "additionalProperties": false

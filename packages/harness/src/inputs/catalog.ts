@@ -22,7 +22,7 @@ import {
 } from "./shapes.ts"
 
 /** The processes an entry point can start; each validates only its own inputs. */
-export type Process = "serve" | "migrate" | "db" | "token" | "devWeb"
+export type Process = "serve" | "migrate" | "db" | "token" | "devWeb" | "webServe" | "webMigrate" | "webDb"
 
 /** Platform directories that path defaults are built from. */
 export interface Dirs {
@@ -59,9 +59,12 @@ export interface ProtectedInput<S extends Schema.Top> extends Base<S> {
 
 export type Input = ConfigurationInput<Schema.Top> | ProtectedInput<Schema.Top>
 
-const all: ReadonlyArray<Process> = ["serve", "migrate", "db", "token", "devWeb"]
+const all: ReadonlyArray<Process> = ["serve", "migrate", "db", "token", "devWeb", "webServe", "webMigrate", "webDb"]
 const withState: ReadonlyArray<Process> = ["serve", "migrate", "db", "token"]
 const serve: ReadonlyArray<Process> = ["serve"]
+const web: ReadonlyArray<Process> = ["webServe"]
+const withWebState: ReadonlyArray<Process> = ["webServe", "webMigrate", "webDb"]
+const serveAndWeb: ReadonlyArray<Process> = ["serve", "webServe"]
 
 const configuration = <S extends Schema.Top>(
   input: Omit<ConfigurationInput<S>, "class" | "configFile"> & { readonly configFile?: boolean },
@@ -610,7 +613,7 @@ export const catalog = {
     env: "OTEL_TRACES_EXPORTER",
     codec: "string",
     schema: ExporterSelection,
-    processes: serve,
+    processes: serveAndWeb,
     defaults: both(() => "otlp" as const),
   }),
   metricsExporter: configuration({
@@ -618,7 +621,7 @@ export const catalog = {
     env: "OTEL_METRICS_EXPORTER",
     codec: "string",
     schema: ExporterSelection,
-    processes: serve,
+    processes: serveAndWeb,
     defaults: both(() => "otlp" as const),
   }),
   logsExporter: configuration({
@@ -626,7 +629,7 @@ export const catalog = {
     env: "OTEL_LOGS_EXPORTER",
     codec: "string",
     schema: ExporterSelection,
-    processes: serve,
+    processes: serveAndWeb,
     defaults: both(() => "otlp" as const),
   }),
   otlpEndpoint: configuration({
@@ -634,7 +637,7 @@ export const catalog = {
     env: "OTEL_EXPORTER_OTLP_ENDPOINT",
     codec: "string",
     schema: HttpUrl,
-    processes: serve,
+    processes: serveAndWeb,
     defaults: { development: () => "http://127.0.0.1:4318" },
   }),
   otlpProtocol: configuration({
@@ -642,7 +645,7 @@ export const catalog = {
     env: "OTEL_EXPORTER_OTLP_PROTOCOL",
     codec: "string",
     schema: OtlpProtocol,
-    processes: serve,
+    processes: serveAndWeb,
     defaults: both(() => "http/protobuf" as const),
   }),
   otlpHeadersFile: configuration({
@@ -650,7 +653,7 @@ export const catalog = {
     env: "ASHE_AGENT_OTLP_HEADERS_FILE",
     codec: "string",
     schema: NullablePath,
-    processes: serve,
+    processes: serveAndWeb,
     defaults: both(() => null),
   }),
   otlpHeaders: {
@@ -658,15 +661,94 @@ export const catalog = {
     description: "OTLP export headers, which may carry credentials.",
     file: "otlpHeadersFile",
     schema: Schema.String,
-    processes: serve,
+    processes: serveAndWeb,
   } satisfies ProtectedInput<typeof Schema.String>,
   deploymentEnvironment: configuration({
     description: "Value of the deployment.environment.name telemetry attribute.",
     env: "ASHE_AGENT_DEPLOYMENT_ENVIRONMENT",
     codec: "string",
     schema: Schema.NonEmptyString,
-    processes: serve,
+    processes: serveAndWeb,
     defaults: { development: () => "development" },
+  }),
+  webStateDir: configuration({
+    description: "Directory holding the built-in web application's SQLite state and dumps.",
+    env: "ASHE_AGENT_WEB_STATE_DIR",
+    codec: "string",
+    schema: AbsolutePath,
+    processes: withWebState,
+    defaults: both((dirs) => `${dirs.stateHome}/ashe-agent/web`),
+  }),
+  webListenHost: configuration({
+    description: "Address the built-in web backend listens on.",
+    env: "ASHE_AGENT_WEB_LISTEN_HOST",
+    codec: "string",
+    schema: Schema.NonEmptyString,
+    processes: web,
+    defaults: both(() => "127.0.0.1"),
+  }),
+  webListenPort: configuration({
+    description: "Port the built-in web backend listens on; 0 picks a free port.",
+    env: "ASHE_AGENT_WEB_LISTEN_PORT",
+    codec: "json",
+    schema: Port,
+    processes: web,
+    defaults: { development: () => 7430 },
+  }),
+  webHarnessUrl: configuration({
+    description: "WebSocket URL of the harness whose sessions the web backend observes and validates credentials against.",
+    env: "ASHE_AGENT_WEB_HARNESS_URL",
+    codec: "string",
+    schema: WebSocketUrl,
+    processes: web,
+    defaults: { development: () => "ws://127.0.0.1:7420/v1/ws" },
+  }),
+  webOrigins: configuration({
+    description: "Browser origins allowed to use the built-in web backend.",
+    env: "ASHE_AGENT_WEB_ORIGINS",
+    codec: "json",
+    schema: Schema.Array(Origin),
+    processes: web,
+    defaults: { development: () => ["http://127.0.0.1:5173", "http://127.0.0.1:7430"] },
+  }),
+  webObserverCredentialFile: configuration({
+    description: "Path of the protected file holding the harness credential the web backend observes with.",
+    env: "ASHE_AGENT_WEB_OBSERVER_CREDENTIAL_FILE",
+    codec: "string",
+    schema: NullablePath,
+    processes: web,
+    defaults: both(() => null),
+  }),
+  webObserverCredential: {
+    class: "protected",
+    description: "Harness credential used by the web backend's observer connection.",
+    file: "webObserverCredentialFile",
+    schema: Schema.String,
+    processes: web,
+  } satisfies ProtectedInput<typeof Schema.String>,
+  webAssetsDir: configuration({
+    description: "Root of the immutable built browser assets the web backend serves.",
+    env: "ASHE_AGENT_WEB_ASSETS_DIR",
+    codec: "string",
+    schema: NullablePath,
+    processes: web,
+    defaults: both(() => null),
+  }),
+  webMigrationsDir: configuration({
+    description: "Directory of the web backend's ordered SQLite migrations.",
+    env: "ASHE_AGENT_WEB_MIGRATIONS_DIR",
+    codec: "string",
+    schema: NullablePath,
+    processes: withWebState,
+    defaults: both(() => null),
+  }),
+  webInactivityDays: configuration({
+    description: "Days without observed work before the web inbox files an unpinned session; 0 disables filing.",
+    env: "ASHE_AGENT_WEB_INACTIVITY_DAYS",
+    codec: "json",
+    schema: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 3650 })),
+    processes: web,
+    defaults: both(() => 3),
   }),
 } as const satisfies Record<string, Input>
 

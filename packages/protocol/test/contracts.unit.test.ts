@@ -84,6 +84,7 @@ describe("owned semantic content", () => {
         content: [{ id: "text-1", kind: "text", text: "hi" }],
         structured: { id: "result-1", kind: "structured", value: { exitCode: 0 } },
       },
+      captures: [],
     }
     expect(decodes(AgentTool, tool)).toBe(true)
     expect(decodes(AgentTool, { ...tool, providerCallId: null })).toBe(true)
@@ -213,8 +214,8 @@ describe("owned semantic content", () => {
 describe("owner contracts", () => {
   test("API credentials have an explicit null expiry", () => {
     const principal = { kind: "token", tokenId: "t1", name: "client" } as const
-    expect(decodes(OwnerIdentity, { principal, credentialExpiresAt: null })).toBe(true)
-    expect(decodes(OwnerIdentity, { principal, credentialExpiresAt: 10 })).toBe(true)
+    expect(decodes(OwnerIdentity, { principal, credentialExpiresAt: null, harnessId: "h1" })).toBe(true)
+    expect(decodes(OwnerIdentity, { principal, credentialExpiresAt: 10, harnessId: "h1" })).toBe(true)
   })
 
   test("resumable upload identity is stable across offset and finalization states", () => {
@@ -246,6 +247,8 @@ describe("method contracts", () => {
     expect(decodes(methods["session.rewind"].params, {
       sessionId: "s1",
       runId: "r1",
+      historyScope: "scope",
+      operationId: "operation",
       selection: { modelSettings: { modelId: null } },
     })).toBe(true)
   })

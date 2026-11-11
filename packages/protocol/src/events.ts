@@ -189,6 +189,8 @@ export const SessionCreated = event("SESSION_CREATED", {
 /** A user message stored to wait for a turn; its `INPUT_RECEIVED` follows when a turn takes it. */
 export const InputWaiting = event("INPUT_WAITING", {
   inputId: Id,
+  /** The caller-owned submission that produced this input, when the sender named one. */
+  submissionId: Schema.optionalKey(Id),
   text: Schema.String,
   mode: InputMode,
   sender: MessageSender,
@@ -197,6 +199,8 @@ export const InputWaiting = event("INPUT_WAITING", {
 /** A user message entering an admitted UserTurn. Inputs of each mode enter in arrival order. */
 export const InputReceived = event("INPUT_RECEIVED", {
   inputId: Id,
+  /** The caller-owned submission that produced this input, when the sender named one. */
+  submissionId: Schema.optionalKey(Id),
   text: Schema.String,
   mode: InputMode,
   sender: MessageSender,
@@ -379,6 +383,17 @@ export const ActionOutcome = Schema.Literals(["completed", "canceled", "timedOut
 /** A live action reached its one terminal outcome, observed by every session subscriber. */
 export const ActionSettled = event("ACTION_SETTLED", { actionId: Id, name: Id, outcome: ActionOutcome })
 
+/** The assigned executor reported or withdrew a human-interaction need for its live action. */
+export const ActionAttention = event("ACTION_ATTENTION", {
+  actionId: Id,
+  name: Id,
+  runId: Schema.NullOr(Id),
+  needsHumanInput: Schema.Boolean,
+})
+
+/** Pending input, history or execution eligibility changed; reread owner observation. */
+export const ObservationChanged = event("OBSERVATION_CHANGED", { revision: Id })
+
 export const SessionEventBody = Schema.Union([
   RunStarted,
   RunFinished,
@@ -422,6 +437,8 @@ export const SessionEventBody = Schema.Union([
   PermissionWithdrawn,
   ActionAssigned,
   ActionSettled,
+  ActionAttention,
+  ObservationChanged,
 ])
 
 export type SessionEventBody = typeof SessionEventBody.Type

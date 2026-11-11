@@ -50,3 +50,23 @@ states how far that reach goes and what limits it.
   and refresh tokens too, since `auth.refresh` exchanges a valid one for a
   new access token; the web client keeps its refresh token in the
   browser's `localStorage`.
+
+- The built-in web backend is trusted with its configured observer
+  credential, but not with browser execution credentials. It validates
+  access credentials online, stores only the verified harness binding and
+  shared organization, and never stores a browser refresh token or answers
+  an assigned action. A compromised backend can change organization and
+  read the organization it serves; it cannot complete a browser's action.
+- Browser drafts are sensitive local data. They are partitioned by
+  verified harness identity and principal, are never synchronized as
+  shared authority, and are not silently deleted when a format is
+  unsupported or storage fails. Signing out hides them from the current
+  authority; another authority never receives them automatically.
+- Tool-supplied HTML, SVG and code are data. The native content host never
+  executes them with application privileges. External images require an
+  explicit Load and then use no application credentials or referrer;
+  refusal shows an error or link rather than a backend proxy.
+- Browser diagnostics contain only catalogued bounded attributes. The
+  authenticated intake rejects bodies, unknown names and fields,
+  oversized records, excess rates and disallowed origins; the backend
+  exports through OTLP without a console or file fallback.

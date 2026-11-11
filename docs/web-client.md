@@ -1,188 +1,165 @@
 # Web client
 
-`packages/web` is a static React application that works with a server's
-sessions from the browser. The server does not serve it; any static file
-host can. A static build connects to `/v1/ws` on the page's own origin,
-using `wss:` for HTTPS and `ws:` for HTTP. Route `/v1/*` on that origin to
-the server so its WebSocket and GitHub sign-in endpoints are reachable.
+`packages/web` is the built-in browser application. It contains `client/`
+for browser code, `backend/` for the Bun backend, and `shared/` for the
+web-state wire format. The client talks to the harness directly for
+conversation and assigned actions and to the backend for shared
+organization. The backend serves the built client from one immutable
+asset root.
 
-## Run and build
+## Run, build, and package
 
 ```sh
 bun run dev:web
 ```
 
-from the repository root selects the development profile, loads the `devWeb`
-process's inputs, and serves the client on `127.0.0.1`, on Vite's port.
-The development host allowlist admits configured host names, and an
-occupied port fails the task. The development server endpoint supplies
-the browser-accessible server address, where the web client and server use
-separate ports. It is resolved through the input catalog and supplied to
-Vite as a public client constant; static builds use their own origin. The development
-process excludes inherited dependency environment overrides after resolving
-its inputs. The server accepts a browser connection only from an origin that
-the configured browser origins list, so it must name the origin the client
-is served from; see [configuration](configuration.md).
+serves the browser client through Vite on `127.0.0.1`. The configured
+development endpoint is the harness WebSocket address. The harness owns
+the direct conversation socket; the web backend is a separate process.
 
-`bun run build:web`, from the repository root, builds the client into
-`packages/web/dist` and writes the commit it was built from to
-`revision.txt` at the build's root. It refuses a worktree with changes,
-since the build would hold code no commit has.
+`bun run build:web` builds from a clean commit and writes to
+`packages/web/dist`: the Vite client at the root, the compiled backend at
+`bin/ashe-agent-web`, ordered web migrations under `migrations/`, and
+`revision.txt` at the root. `bun run bundle` packages that directory under
+`web/` beside the harness binary and notices. The browser build cannot
+import backend sources or server-only inputs.
 
-## Container image
+The web image runs `/app/bin/ashe-agent-web serve` as UID 65532 with
+`/app` read-only and durable state mounted at the configured state
+directory. It listens on port 8080 in the reference image and contains no
+harness, organization state, or protected credential.
 
-The web image serves that build with Caddy, from a base image pinned by
-digest. `bun run web-image`, from a commit with no uncommitted changes
-and with `ORAS` naming an `oras` executable, builds the client and its
-image and writes the image, annotated, to the OCI layout
-`dist/web-image` under the tag `qualified`. It runs the two steps of
-`scripts/image.sh`: `build web <layout> <revision> <created>` packages
-`packages/web/dist`, which must hold the revision's `revision.txt`, with
-`packages/web/image/` into an OCI layout, refusing a worktree with
-changes or not at the revision, and `push` writes that image, annotated
-with the `org.opencontainers.image` revision, source, run URL, creation
-time, and version, to another layout or to a registry. The container listens on
-port 8080 as UID 65532, needs a writable `/data` and `/config`, such as
-tmpfs mounts, and otherwise runs read-only. It serves the files under
-`/assets/` as immutable and every other file as `no-cache`, answers a
-missing file with 404 and no cache header, and writes no logs: Caddy's
-admin API, access logs, and console logs are off.
+## Backend inputs and state
 
-[`compose.yaml`](../compose.yaml) is a reference deployment on
-`127.0.0.1:8080` of the image named `localhost/ashe-agent-web`. Give a
-built image that name before starting it:
+The web backend is a `webServe` entry point; migrations and dumps use
+`webMigrate` and `webDb`. Their inputs come from the same machine-readable
+schema and layers as the harness. The state directory holds `web.sqlite`;
+the assets and migration directories name the built files explicitly. The
+observer credential is a protected file. [Configuration](configuration.md)
+owns the layers and [storage](storage.md) owns the database contract.
 
-```sh
-podman pull oci:dist/web-image:qualified
-podman tag <image id it prints> localhost/ashe-agent-web
-podman compose up -d
-```
+The backend binds its SQLite file to the first online-validated harness
+identity. A different `harnessId` fails closed rather than rebinding or
+rewriting state. [Authentication](authentication.md) owns credential
+validation, expiry, and renewal.
 
-Serve the image from an origin the server's configured browser origins list,
-with `/v1/*` routed to that server. Run both from one commit, since the
-protocol may change at any revision.
+## Three views
+
+Chat is the first-open view for a session with no saved choice. It shows
+user messages in bubbles, grouping messages admitted by one turn, and
+assistant output inline. Session stacks typed semantic blocks in canonical
+order, including system and developer content, thoughts, tools, and
+inherited source provenance. Checkpoint window shows the latest successful
+model-input boundary with its contributions, transformations, offered tool
+definitions, estimate coverage, and provider usage kept separate.
+
+The header view selector names all three views. `Ctrl+I` cycles them even
+when the composer has focus; the header also offers `Alt+I` as an
+alternative and a type-to-compose switch. Each session
+remembers its last view and each view its scroll position in browser
+storage. A preview or attention reveal switches to Session and scrolls its
+matching block; ordinary incoming content does not change a retained reading
+position.
+
+## Composer and recovery
+
+One fixed composer serves every view. It keeps text, attachments, title,
+model, reasoning effort, and delivery mode while views change. Send is
+always Send; a separate toggle selects Steer or Queue for the next
+submission. Stop appears beside Send while a turn runs and targets the
+observed turn identity. Continue appears only when owner observation says
+resume is eligible.
+
+Requests for title, model, or effort stay local until Send or a confirmed
+rewind. An omitted field inherits the applied selection; an explicit null
+model and null effort remain distinct. The applied selection and the
+running turn's active selection are shown separately.
+
+Send detaches an immutable snapshot and its submission identity before the
+network call. The next draft is committed in the same browser storage
+write. Unknown acceptance remains visible and is reconciled through the
+harness receipt under the same identity; it is never replayed as a new
+submission. A definitely rejected submission can be restored without
+overwriting newer active text. Offline Send is disabled, and the client
+never builds a durable offline submission queue.
+
+Drafts are partitioned by verified `harnessId`, principal, session, and a
+fresh page-load writer identity. Another tab's saved record is an explicit
+recovery candidate, never a shared writer slot. Unsupported saved formats
+remain in storage and can be exported; no record is silently deleted.
+Blocked storage leaves the current in-memory draft editable with a
+persistent Not saved locally warning.
+
+Every view shows the shared read-only pending strip. Submitted user
+entries are labelled with their mode and expand to their preview. Pending
+developer work shows only an attributed count in Chat; full developer
+content stays in Session.
+
+## History and questions
+
+Rewind and fork controls appear only in Chat and use the harness-issued
+history scope. Rewind previews the target and later history and warns that
+it reruns immediately without rolling back external effects. Its text may
+be edited; original attachments remain attached and immutable. A stale
+scope keeps the edit and does not retarget another boundary. A fork opens
+an idle Chat view and copies neither the source draft nor synthetic input.
+
+Questions and permission requests stay inline in Chat. Only the browser
+whose connection owns the assigned action can answer. A steering message
+resolves that browser's question as replied-by-message after input
+acceptance; Queue leaves it open. Plain message text never approves a
+permission request.
+
+Session details exposes title-scoped grants: it defaults to the current
+title, lists grants for the selected stored title, and clears all grants
+for that title after confirmation. It neither edits permission rules nor
+revokes an individual grant.
+
+## Attention and inbox
+
+The sidebar separates Working from Inbox using authoritative harness
+activity, eligible pending input, continuation, and assignment-validated
+human attention. A needs-human hint never forces a view switch by itself;
+its indicator opens Chat and reveals the request. An interaction assigned
+to another browser says so and cannot be claimed or completed here.
+
+Organization supports pin, read/unread, snooze, filing/reopening, and
+conditional undo. Drag to the filing area or use the row menu; organization
+changes do not cancel input, answer a request, or alter execution. Explicit
+mark-unread advances a read generation so delayed visibility samples cannot
+clear it. Manual filing requires fresh quiescence. Inactivity filing
+defaults to three days and protects pinned, opted-out, working, attention,
+and currently snoozed sessions.
+
+Shared state uses a separate authenticated WebSocket with semantic
+commands, durable operation receipts, and ordered revisions. A revision gap
+reconciles from a snapshot. While shared state is unavailable, cached
+organization is labelled stale, new shared mutations are disabled, and an
+already-open direct harness connection and local drafts continue.
+
+## Content and diagnostics
+
+The client renders typed native content and never evaluates tool-provided
+HTML, SVG, Markdown HTML, or code as application markup. Links are plain
+text unless a native renderer validates their destination. External images
+start as a destination/Load placeholder; only an explicit Load makes a
+credential-free, referrer-free HTTP(S) image request, and refusal shows an
+error or link.
+
+Browser diagnostics go to the backend's bounded, origin-checked,
+authenticated intake. The backend exports only catalogued, bounded records
+through its OpenTelemetry pipeline; no message, draft, attachment, token,
+or tool payload is accepted. [Telemetry](telemetry.md) owns signal names
+and privacy rules.
 
 ## Signing in
 
-The sign-in page offers **Continue with GitHub** for its configured server.
-Register the OAuth app and callback as [setup](../README.md#use) describes. The tab keeps
-its verifier and server URL in `sessionStorage` while GitHub signs in the
-owner. On return it removes the URL fragment before connecting, exchanges
-the sign-in code with `auth.exchange`, and forgets the verifier regardless
-of the result. A return without the stored verifier or server URL sends no
-exchange and asks the owner to start again. Denial, another GitHub account,
-a GitHub failure, and a failed code exchange each show an explanation.
-
-The client keeps the access token in memory and the refresh token in
-`localStorage`, under a key scoped to its server endpoint. A token for
-another endpoint is never used for this server. It exchanges the refresh
-token for a new pair a minute before the access token expires, on a connection
-of its own. On a later visit, a stored refresh token signs the client in
-without another GitHub sign-in. Signing out forgets the refresh token in this
-browser only; the login stays valid until it expires, is revoked, or its
-GitHub user ID differs from the configured owner.
-
-Presenting a refresh token that was already exchanged signs the whole
-login out, as [authentication](authentication.md) explains. Pages of one
-origin share the stored token, so each exchange holds a Web Lock that
-every page of the origin shares and reads the stored token inside it.
-Browsers offer Web Locks only in secure contexts, HTTPS or `127.0.0.1`;
-elsewhere two pages that refresh at the same moment can present the same
-token and sign the login out.
-
-When the connection drops, the client reconnects after a delay that
-doubles from one second up to thirty, and resubscribes to the open
-session from the last event it saw. After authentication it advertises the
-client actions it handles and repeats that registration on every new
-connection. Historical session events replay only conversation state;
-directed action execution and cancellation are processed separately and
-are never replayed.
-
-## Sessions
-
-The sidebar lists the server's sessions. A new session takes a model
-from the server's model list, shown by name, a reasoning effort the
-model lists, and, optionally, an agent; an agent that names a model
-starts the session with it. The effort list marks the default: the
-agent's override for the model, else the model's own setting. The agent
-list shows each agent's title and its title file's description, or that
-an agent without a title file uses the global user instructions. A
-session starts in its own session directory, which the session's header
-shows along with its selected model and effort. Choosing another model
-there switches the session's model from its next turn, at the model's
-default effort; choosing another effort keeps the model.
-
-The existing client's title, model, and effort controls keep their requested
-patch local until a message or rewind submits it. The readout
-separates that requested patch from the applied session selection and the
-selection active for the running turn. A null model renders as unconfigured
-while the rest of the session remains usable. A rejected or superseded request
-does not change the applied or active selection.
-
-The client consumes owned semantic items and model-call commit or discard
-events directly. Committed output stays when a later provisional model call is
-discarded; provisional text and tool state disappear with their call.
-
-Input is steering delivery unless the queue switch is on, which holds it
-for idle; [session input](sessions.md#input) owns admission. The stop button
-cancels the running turn. Continue is offered only while execution is idle
-and requests an explicit continuation. A
-message shows as waiting above the composer until a turn receives it, as
-one held for a context workflow's continuation does. UserMessages admitted
-in one turn are grouped into one chat bubble from the turn's membership.
-
-A tool call waiting on a permission shows the request inside the call,
-with allow once, always allow, and reject. A note typed beside the
-request goes with a rejection, as the call's result. Controls appear only
-when this connection owns the assigned `permission.decide` action; other
-subscribers see the request read-only. The request disappears once
-answered here or by its executor, canceled, timed out, or withdrawn. A call
-can wait on several requests at once, as a code mode program's
-concurrent calls do: the call shows the first, and a list above the
-conversation shows the others, with the same answers.
-
-Action authority remains per connection and per assigned action. Permission
-decisions and question answers each require their own current assignment;
-neither grants the other, and a replayed event cannot dispatch an action.
-
-Model text renders as Markdown. Raw HTML in it shows as text and is
-never rendered.
-
-## Context work
-
-The conversation shows every item of the session, every checkpoint
-window included, with the context work between them:
-
-- each timeline entry where it was recorded, with its kind and number,
-  a compaction entry with its current text, and an open or problem entry
-  marked with the `done` entry that resolved it;
-- each developer message where it was delivered, collapsed to its
-  components' headings;
-- marks where a context turn starts, at each tool result clearing, at
-  each failed context check, where each checkpoint window after the
-  first begins, and at each continuation turn and each turn a developer
-  message started;
-- each session error with its message.
-
-A question set the agent asks shows its feedback first, then each
-question's header and text with its options, a note, and skip. Controls
-appear only when this connection owns the assigned `questions.answer`
-action. Sending it completes that action with each answer; a note over
-2,000 characters keeps the form from sending and says so. Sending a
-steering message while a set is waiting completes it as
-`repliedByMessage`; queued input leaves it open. Once answered, canceled,
-or ended with its call, the set shows its recorded result and no controls.
-
-## Rewind and fork
-
-Each settled turn that started with a UserMessage offers fork. Fork copies
-that settled prefix into a new idle session and opens it; the controls
-are withheld when the session has no eligible turn. Each such turn also
-offers rerun and edit-and-rerun, including while it or a later turn runs.
-An active rewind stops execution before reconstructing the selected
-UserMessages. A turn that a developer message started holds no input and
-offers neither operation. Rerun and edit remove that turn and every later
-one from the session before running the input, or the edited text, again.
-Research and memory files return to their state when that turn started,
-while scratch, other files, shell processes, and other effects of the
-removed turns stay as they are; the client says so before it rewinds.
+The sign-in page offers **Continue with GitHub** for the configured
+harness. The tab keeps its verifier and endpoint in `sessionStorage`,
+removes the return fragment before connecting, and exchanges the code once.
+The access token stays in memory; the refresh token stays in this browser
+under an endpoint-scoped key. Cross-tab refresh holds a bounded Web Lock.
+When Web Locks are unavailable or cannot be acquired, no unlocked refresh
+is attempted; recoverable drafts remain and the client asks for explicit
+sign-in in a secure context. Revocation is shown as lost authorization,
+not as ordinary expiry, and never switches principal automatically.

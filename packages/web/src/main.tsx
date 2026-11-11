@@ -1,6 +1,6 @@
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
-import { App } from "./app/app.tsx"
+import { App } from "./client/App.tsx"
 import { ClientProvider } from "./app/client-context.tsx"
 import { browserPorts } from "./session/browser-ports.ts"
 import { SessionClient } from "./session/client.ts"

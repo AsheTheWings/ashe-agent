@@ -62,6 +62,8 @@ interface Pending {
   readonly onAbort: (() => void) | null
   readonly span: ReturnType<typeof startSpan>
   readonly startedAt: number
+  readonly runId: string | null
+  attention: boolean
 }
 
 type Settlement = "completed" | "canceled" | "timedOut" | "disconnected" | "failed"
@@ -82,6 +84,8 @@ const observationFailure = (error: unknown) =>
 
 export interface ActionRunOptions {
   readonly sessionId: string
+  /** The AgentTurn whose execution owns this assignment. */
+  readonly runId?: string
   readonly clock: ToolClock
   readonly signal?: AbortSignal
   /** The caller's absolute deadline in milliseconds on `clock`. */
@@ -124,6 +128,18 @@ export class ActionBroker {
     return [...definitions.values()].map((definition) => definition.declaration)
   }
 
+  /** Live validated human-interaction hints for one session's owner observation. */
+  attentionForSession(sessionId: string) {
+    return [...this.pending.values()]
+      .filter((pending) => pending.sessionId === sessionId && pending.attention)
+      .map((pending) => ({
+        actionId: pending.id,
+        name: pending.definition.name,
+        runId: pending.runId,
+        needsHumanInput: true as const,
+      }))
+  }
+
   /** Registers or refreshes the connection's directed-message sender. */
   register(connection: Connection, principal: Sender, send: (message: unknown) => void) {
     const existing = this.participants.get(connection.id)
@@ -162,6 +178,7 @@ export class ActionBroker {
     for (const action of [...this.pending.values()]) {
       if (action.participantId !== connectionId) continue
       this.pending.delete(action.id)
+      this.clearAttention(action)
       this.detach(action)
       const failure = this.recordSettlement(action, "disconnected", "interrupted")
       action.reject(failure ?? new ActionDisconnected(action.definition.name))
@@ -208,6 +225,7 @@ export class ActionBroker {
         const pending = this.pending.get(id)
         if (pending === undefined) return
         this.pending.delete(id)
+        this.clearAttention(pending)
         this.detach(pending)
         const failure = this.recordSettlement(pending, "failed", "internal")
         pending.reject(failure ?? error ?? new Error(`action ${name} ended without a result`))
@@ -216,6 +234,7 @@ export class ActionBroker {
         const pending = this.pending.get(id)
         if (pending === undefined) return
         this.pending.delete(id)
+        this.clearAttention(pending)
         this.detach(pending)
         const current = this.participants.get(participant.id)
         if (current?.active === true) {
@@ -264,6 +283,8 @@ export class ActionBroker {
         onAbort,
         span,
         startedAt,
+        runId: options.runId ?? null,
+        attention: false,
       })
       try {
         options.onAssigned?.(id)
@@ -291,6 +312,7 @@ export class ActionBroker {
     })
     if (decoded._tag === "Failure") {
       this.pending.delete(actionId)
+      this.clearAttention(pending)
       this.detach(pending)
       const message = `action ${actionId} returned an invalid result: ${String(decoded.cause)}`
       const failure = this.recordSettlement(pending, "failed", "invalid_params")
@@ -302,6 +324,7 @@ export class ActionBroker {
       throw new ProtocolError({ code: ErrorCode.invalidParams, message })
     }
     this.pending.delete(actionId)
+    this.clearAttention(pending)
     this.detach(pending)
     const failure = this.recordSettlement(pending, "completed")
     if (failure !== null) {
@@ -316,6 +339,7 @@ export class ActionBroker {
     const pending = this.pending.get(actionId)
     if (pending === undefined) return false
     this.pending.delete(actionId)
+    this.clearAttention(pending)
     this.detach(pending)
     const participant = this.participants.get(pending.participantId)
     if (participant?.active === true) {
@@ -344,6 +368,39 @@ export class ActionBroker {
       settleSpan(pending, "failed", "internal")
       return observationFailure(error)
     }
+  }
+
+  /** Reports the assigned connection's human-interaction need for its live action. */
+  reportInteraction(connectionId: string, actionId: string, needsHumanInput: boolean) {
+    const pending = this.pending.get(actionId)
+    if (pending === undefined) {
+      throw new ProtocolError({ code: ErrorCode.alreadyResolved, message: `action ${actionId} is already settled` })
+    }
+    if (pending.participantId !== connectionId) {
+      throw new ProtocolError({ code: ErrorCode.conflict, message: `action ${actionId} is assigned to another connection` })
+    }
+    if (pending.attention === needsHumanInput) return
+    pending.attention = needsHumanInput
+    this.observe(pending.sessionId, {
+      type: "ACTION_ATTENTION",
+      actionId: pending.id,
+      name: pending.definition.name,
+      runId: pending.runId,
+      needsHumanInput,
+    })
+  }
+
+  /** Withdraws a live attention hint before its action settles or disconnects. */
+  private clearAttention(pending: Pending) {
+    if (!pending.attention) return
+    pending.attention = false
+    this.observe(pending.sessionId, {
+      type: "ACTION_ATTENTION",
+      actionId: pending.id,
+      name: pending.definition.name,
+      runId: pending.runId,
+      needsHumanInput: false,
+    })
   }
 
   private detach(pending: Pending) {

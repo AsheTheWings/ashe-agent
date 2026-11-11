@@ -3,14 +3,56 @@
 name: ashe-agent-web
 
 services:
+  web-migrate:
+    image: localhost/ashe-agent-web
+    command: migrate
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: "no"
+    environment:
+      ASHE_AGENT_PROFILE: production
+      ASHE_AGENT_WEB_STATE_DIR: /data
+      ASHE_AGENT_WEB_MIGRATIONS_DIR: /app/migrations
+    volumes:
+      - web-state:/data
+
   web:
     image: localhost/ashe-agent-web
+    user: "0:0"
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     restart: unless-stopped
+    depends_on:
+      web-migrate:
+        condition: service_completed_successfully
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    environment:
+      ASHE_AGENT_PROFILE: production
+      ASHE_AGENT_WEB_STATE_DIR: /data
+      ASHE_AGENT_WEB_LISTEN_HOST: 0.0.0.0
+      ASHE_AGENT_WEB_LISTEN_PORT: "8080"
+      ASHE_AGENT_WEB_HARNESS_URL: ws://host.docker.internal:7421/v1/ws
+      ASHE_AGENT_WEB_ORIGINS: '["http://127.0.0.1:8080"]'
+      ASHE_AGENT_WEB_OBSERVER_CREDENTIAL_FILE: /run/credentials/observer
+      ASHE_AGENT_WEB_ASSETS_DIR: /app
+      ASHE_AGENT_WEB_MIGRATIONS_DIR: /app/migrations
+      ASHE_AGENT_WEB_INACTIVITY_DAYS: "3"
+      ASHE_AGENT_DEPLOYMENT_ENVIRONMENT: production
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://host.docker.internal:4318
+      OTEL_TRACES_EXPORTER: none
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+    volumes:
+      - web-state:/data
+      - ./secrets/observer-token:/run/credentials/observer:ro
     tmpfs:
-      - /data
-      - /config
+      - /tmp:size=64m
     ports:
       - "127.0.0.1:8080:8080"
+
+volumes:
+  web-state:

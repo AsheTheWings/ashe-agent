@@ -236,3 +236,14 @@ The schema names every input; these docs explain what each group does:
 - [Telemetry](telemetry.md): the exporter for each signal, the OTLP
   endpoint and its protocol, the protected file of export headers, and
   the deployment environment every signal reports.
+- [Web client](web-client.md): the web backend's listen address and port,
+  harness endpoint, allowed browser origins, assets and migration
+  directories, durable state directory, observer credential file, and
+  inactivity filing period. `webServe`, `webMigrate`, and `webDb` are
+  separate entry points; each validates only the inputs it reads.
+
+The web backend uses the same layered input resolution as the harness.
+Its protected observer credential is read only from the file its path
+input names, and the backend receives the OTLP export headers the same
+way. [Authentication](authentication.md) owns the credential lifecycle;
+[storage](storage.md) owns the database binding and dumps.

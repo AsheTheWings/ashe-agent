@@ -105,14 +105,24 @@ export const sessionHandlers = (hub: SessionHub) => {
       hub.actions.unsubscribed(context.connection, params.sessionId)
       return {}
     },
-    "session.input": async (params, context) => ({
-      inputId: upload(() =>
+    "session.input": async (params, context) => {
+      const accepted = upload(() =>
         hub.input(params.sessionId, params.text, params.mode, context.principal, {
+          ...(params.submissionId === undefined ? {} : { submissionId: params.submissionId }),
           ...(params.selection === undefined ? {} : { selection: params.selection }),
           ...(params.attachments === undefined ? {} : { attachments: params.attachments }),
         }),
-      ),
-    }),
+      )
+      const receipt = hub.inputReceipt(params.sessionId, accepted.submissionId)
+      if (receipt === null) throw new ProtocolError({ code: ErrorCode.conflict, message: "the accepted input has no receipt" })
+      return { ...accepted, receipt }
+    },
+    "session.input.receipt": async (params) => {
+      const receipt = hub.inputReceipt(params.sessionId, params.submissionId)
+      return receipt === null
+        ? { kind: "not_observed" as const, submissionId: params.submissionId }
+        : { kind: "observed" as const, receipt }
+    },
     "session.resume": async (params) => {
       hub.resume(params.sessionId)
       return {}
@@ -121,11 +131,18 @@ export const sessionHandlers = (hub: SessionHub) => {
       hub.actions.complete(context.connection.id, params.sessionId, params.actionId, params.result)
       return {}
     },
-    "session.cancel": async (params) => {
-      hub.cancel(params.sessionId)
+    "action.reportInteraction": async (params, context) => {
+      hub.actions.reportInteraction(context.connection.id, params.actionId, params.needsHumanInput)
       return {}
     },
+    "session.cancel": async (params) => hub.cancel(params.sessionId, params.expectedTurnId),
     "session.semantics": async (params) => hub.semantics(params.sessionId),
+    "session.semantics.page": async (params) =>
+      hub.semanticPage(params.sessionId, params.object, params.revision, params.cursor, params.limit),
+    "session.semantics.body": async (params) => hub.semanticBody(params.sessionId, params.entryId, params.contentId),
+    "session.semantics.boundary": async (params) => hub.semanticBoundary(params.sessionId, params.manifestId),
+    "session.modelCalls.usage": async (params) => hub.modelCallUsage(params.sessionId, params.modelCallIds),
+    "session.observe": async (params) => hub.observe(params.sessionId),
     "session.grants.list": async (params) => ({ grants: [...hub.store.grantsForSession(params.sessionId)] }),
     "session.grants.clear": async (params) => ({
       cleared: hub.store.clearGrants(params.sessionId, params.agentTitle),
@@ -135,13 +152,24 @@ export const sessionHandlers = (hub: SessionHub) => {
       if (content === null) throw new ProtocolError({ code: ErrorCode.notFound, message: `no retained content ${params.contentId}` })
       return { content }
     },
-    "session.fork": async (params) => ({ session: hub.fork(params.sessionId, params.runId) }),
+    "content.capture": async (params) =>
+      hub.retainedCapture(params.sessionId, params.entryId, params.contentId, params.offset, params.length),
+    "session.fork": async (params) => ({
+      session: hub.fork(params.sessionId, params.runId, {
+        historyScope: params.historyScope,
+        operationId: params.operationId,
+      }),
+    }),
     "session.rewind": async (params, context) => {
       await hub.rewind(params.sessionId, params.runId, params.text, context.principal, {
+        historyScope: params.historyScope,
+        operationId: params.operationId,
         ...(params.selection === undefined ? {} : { selection: params.selection }),
       })
       return {}
     },
+    "session.history.inspect": async (params) => hub.historyInspect(params.sessionId, params.runId),
+    "session.history.result": async (params) => hub.historyResult(params.sessionId, params.operationId),
   }
 
   const onClose = (connection: Connection) => {

@@ -10,7 +10,7 @@ import { createLogin } from "../src/auth/credentials.ts"
 import { tokenHash } from "../src/auth/tokens.ts"
 import { ModelCallError } from "../src/agent/model.ts"
 import { fileReadTool } from "../src/tools/file/read-tool.ts"
-import { Client, waitFor } from "./support/cli.ts"
+import { cancelSession, Client, forkSession, rewindSession, waitFor } from "./support/cli.ts"
 import { callTools, failWith, FakeModel, say, testTools } from "./support/agent.ts"
 import { models, SessionView, TestServer } from "./support/server.ts"
 
@@ -112,7 +112,7 @@ describe("sessions", () => {
       expect(Schema.decodeUnknownExit(SemanticHistory)(history)._tag).toBe("Success")
       expect(history.boundaries).toHaveLength(2)
       const runId = runIds(view)[0]!
-      const forked = await client.request("session.fork", { sessionId: id, runId })
+      const forked = await forkSession(client, { sessionId: id, runId })
       expect(forked.error).toBeUndefined()
       const forkId = forked.result.session.id as string
 
@@ -127,7 +127,7 @@ describe("sessions", () => {
 
       const source = await SessionView.open(server.url, token, id)
       model.next(say("rewound"))
-      const rewound = await afterRestart.request("session.rewind", { sessionId: id, runId })
+      const rewound = await rewindSession(afterRestart, { sessionId: id, runId })
       expect(rewound.error).toBeUndefined()
       await source.waitFor("the rewound turn", (value) =>
         value.events.some((event) => event.event.type === "RUN_FINISHED" && event.event.runId !== runId))
@@ -253,7 +253,7 @@ describe("sessions", () => {
       expect(fileMedia.content.representationId).toStartWith("image:")
       expect(imageMedia.content.contentId).toBe(new Bun.CryptoHasher("sha256").update(imageBytes).digest("hex"))
       const runId = runIds(view)[0]!
-      const forkId = (await client.request("session.fork", { sessionId: id, runId })).result.session.id as string
+      const forkId = (await forkSession(client, { sessionId: id, runId })).result.session.id as string
 
       const readReference = async (
         sessionId: string,
@@ -348,6 +348,7 @@ describe("sessions", () => {
       expect(await api.json()).toEqual({
         principal: { kind: "token", tokenId: expect.any(String), name: "primary" },
         credentialExpiresAt: null,
+        harnessId: expect.any(String),
       })
       expect(api.headers.get("cache-control")).toBe("no-store")
       expect(api.headers.get("access-control-allow-origin")).toBe("http://allowed.test")
@@ -370,6 +371,7 @@ describe("sessions", () => {
         expect(await login.json()).toEqual({
           principal: { kind: "login", loginId: issued.principal.kind === "login" ? issued.principal.loginId : "" },
           credentialExpiresAt: issued.accessTokenExpiresAt,
+          harnessId: expect.any(String),
         })
         db.query("UPDATE access_tokens SET expires_at = 0 WHERE token_hash = ?").run(tokenHash(issued.accessToken))
         expect(
@@ -663,7 +665,7 @@ describe("sessions", () => {
       const before = (await client.request("session.list")).result.sessions
       for (const selection of invalidSelections) {
         expect((await client.request("session.input", { sessionId: id, text: "ignored", selection })).error.code).toBe(-32602)
-        expect((await client.request("session.rewind", { sessionId: id, runId: "missing", selection })).error.code).toBe(-32602)
+        expect((await rewindSession(client, { sessionId: id, runId: "missing", selection })).error.code).toBe(-32602)
       }
       expect((await client.request("session.list")).result.sessions).toEqual(before)
       client.close()
@@ -868,11 +870,11 @@ describe("input during turns", () => {
       const view = await SessionView.open(server.url, token, id)
       await control.request("session.input", { sessionId: id, text: "cancel me" })
       await view.waitFor("the turn", (v) => v.texts().includes("echo: cancel me"))
-      expect((await control.request("session.cancel", { sessionId: id })).result).toEqual({})
+      expect((await cancelSession(control, id)).result).toMatchObject({ outcome: "cancelled" })
       await view.waitFor("the cancelled event", (v) =>
         v.events.some((event) => event.event.type === "RUN_FINISHED" && event.event.outcome.type === "cancelled"),
       )
-      expect((await control.request("session.cancel", { sessionId: id })).error.code).toBe(-32005)
+      expect((await cancelSession(control, id)).error.code).toBe(-32005)
     })
   })
 
@@ -887,7 +889,7 @@ describe("input during turns", () => {
         server,
         "CREATE TRIGGER fail_withdraw BEFORE INSERT ON events WHEN NEW.body LIKE '%PERMISSION_WITHDRAWN%' BEGIN SELECT RAISE(ABORT, 'injected'); END",
       )
-      await control.request("session.cancel", { sessionId: id })
+      await cancelSession(control, id)
       await view.waitFor("the fallback failure", (v) => v.types().includes("RUN_ERROR"))
       expect(view.events.find((event) => event.event.type === "RUN_ERROR")!.event).toMatchObject({ code: "state_integrity_failed" })
       await waitFor("the failed turn row", () => (turnStatuses(server, id).at(-1)?.status === "failed" ? true : undefined))
@@ -909,7 +911,7 @@ describe("input during turns", () => {
         "CREATE TRIGGER fail_withdraw BEFORE INSERT ON events WHEN NEW.body LIKE '%PERMISSION_WITHDRAWN%' BEGIN SELECT RAISE(ABORT, 'injected'); END",
       )
       const response = await Promise.race([
-        control.request("session.rewind", { sessionId: id, runId }),
+        rewindSession(control, { sessionId: id, runId }),
         Bun.sleep(1_000).then(() => {
           throw new Error("the active rewind waited for a settled turn")
         }),
@@ -999,7 +1001,7 @@ describe("restart", () => {
       const view = await SessionView.open(server.url, token, id)
       await control.request("session.input", { sessionId: id, text: "ask then cancel" })
       await view.waitFor("the permission request", (v) => v.types().includes("PERMISSION_REQUESTED"))
-      await control.request("session.cancel", { sessionId: id })
+      await cancelSession(control, id)
       await view.waitFor("the cancelled event", (v) => finishedRuns(v) === 1)
       const requested = view.events.find((event) => event.event.type === "PERMISSION_REQUESTED")
       const withdrawn = view.events.findIndex(
@@ -1044,7 +1046,7 @@ describe("restart", () => {
         await after.waitFor("the denied turn to finish", (v) => finishedRuns(v) === 2)
         await client.request("session.input", { sessionId: id, text: "ask ls b" })
         await after.waitFor("the ungranted request", (v) => v.types().includes("PERMISSION_REQUESTED"))
-        await client.request("session.cancel", { sessionId: id })
+        await cancelSession(client, id)
         await after.waitFor("the cancelled turn", (v) => finishedRuns(v) === 3)
       },
       new TestServer({ shell: { "*": "ask", "rm *": "deny" } }),
@@ -1085,7 +1087,7 @@ describe("fork and rewind", () => {
       server.script.release("second")
       await view.waitFor("the second turn", (v) => finishedRuns(v) === 2)
       const second = view.events.filter((event) => event.event.type === "RUN_STARTED").at(-1)!.event.runId
-      expect((await control.request("session.rewind", {
+      expect((await rewindSession(control, {
         sessionId: id,
         runId: second,
         text: "rewound",
@@ -1106,7 +1108,7 @@ describe("fork and rewind", () => {
       const { control, id, view } = await threeTurns(server, token, models[1]!.id)
       const [, second] = runIds(view)
       const sourceBefore = [...view.events]
-      const forked = (await control.request("session.fork", { sessionId: id, runId: second })).result.session
+      const forked = (await forkSession(control, { sessionId: id, runId: second })).result.session
       expect(forked).toMatchObject({
         selection: { modelSettings: { modelId: models[1]!.id } },
         sessionDir: join(server.sessionsDir, forked.id),
@@ -1123,11 +1125,11 @@ describe("fork and rewind", () => {
 
       await control.request("session.input", { sessionId: id, text: "running" })
       await view.waitFor("the running turn", (v) => v.texts().includes("echo: running"))
-      const whileRunning = await control.request("session.fork", { sessionId: id })
+      const whileRunning = await forkSession(control, { sessionId: id })
       expect(whileRunning.error).toBeUndefined()
       expect(whileRunning.result.session).toMatchObject({ activity: "idle" })
       const interrupted = runIds(view).at(-1)
-      expect((await control.request("session.rewind", { sessionId: id, runId: second })).result).toEqual({})
+      expect((await rewindSession(control, { sessionId: id, runId: second })).result).toEqual({})
       await view.waitFor("the active rewind's rerun", (v) => {
         const ids = runIds(v)
         return ids.length === 2 && ids.at(-1) !== interrupted
@@ -1141,11 +1143,11 @@ describe("fork and rewind", () => {
     await withServer(async (server, token) => {
       const { control, id, view } = await threeTurns(server, token, models[1]!.id)
       const [first, second] = runIds(view)
-      await control.request("session.rewind", { sessionId: id, runId: second, text: "t2 again" })
+      await rewindSession(control, { sessionId: id, runId: second, text: "t2 again" })
       server.script.release("t2 again")
       await view.waitFor("the rerun turn", (v) => finishedRuns(v) === 2)
       for (const through of [first, undefined]) {
-        const forked = (await control.request("session.fork", { sessionId: id, ...(through === undefined ? {} : { runId: through }) }))
+        const forked = (await forkSession(control, { sessionId: id, ...(through === undefined ? {} : { runId: through }) }))
           .result.session
         const copy = await SessionView.open(server.url, token, forked.id)
         await copy.waitFor("the copy", (v) => v.lastSeq === forked.lastSeq)
@@ -1168,7 +1170,7 @@ describe("fork and rewind", () => {
       await away.client.waitClosed()
       const [, second] = runIds(view)
       const highest = view.lastSeq
-      expect((await control.request("session.rewind", { sessionId: id, runId: second, text: "t2 edited" })).result).toEqual({})
+      expect((await rewindSession(control, { sessionId: id, runId: second, text: "t2 edited" })).result).toEqual({})
       server.script.release("t2 edited")
       await view.waitFor("the rerun turn", (v) => finishedRuns(v) === 2)
       expect(view.texts()).toEqual(["echo: t1", "echo: t2 edited"])
@@ -1196,7 +1198,7 @@ describe("fork and rewind", () => {
     await withServer(async (server, token) => {
       const { control, id, view } = await threeTurns(server, token)
       const [, , third] = runIds(view)
-      await control.request("session.rewind", { sessionId: id, runId: third })
+      await rewindSession(control, { sessionId: id, runId: third })
       await view.waitFor("the rerun", (v) => v.texts().filter((text) => text === "echo: t3").length === 1 && v.types().at(-1) !== "SESSION_REWOUND")
       expect(view.texts()).toEqual(["echo: t1", "echo: t2", "echo: t3"])
       server.script.release("t3")
@@ -1223,7 +1225,7 @@ describe("fork and rewind", () => {
       ]
       for (const fault of faults) {
         execute(server, fault)
-        const response = await control.request("session.rewind", { sessionId: id, runId: second })
+        const response = await rewindSession(control, { sessionId: id, runId: second })
         expect(response.error.code).toBe(-32603)
         await server.restart()
         execute(server, "DROP TRIGGER fail_rewind")
@@ -1235,7 +1237,7 @@ describe("fork and rewind", () => {
       }
       // A rewind whose rerun turn cannot start keeps its input waiting, and a restart starts it.
       execute(server, "CREATE TRIGGER fail_turn BEFORE INSERT ON turns BEGIN SELECT RAISE(ABORT, 'injected'); END")
-      expect((await control.request("session.rewind", { sessionId: id, runId: second })).result).toEqual({})
+      expect((await rewindSession(control, { sessionId: id, runId: second })).result).toEqual({})
       await server.restart()
       execute(server, "DROP TRIGGER fail_turn")
       await server.restart()

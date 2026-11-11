@@ -9,6 +9,24 @@ import { Timeline } from "./timeline.ts"
 
 export type TurnStatus = "running" | "finished" | "cancelled" | "failed" | "interrupted"
 
+/** One durable accepted submission and its current position in the session's lifecycle. */
+export interface InputReceiptRecord {
+  readonly submissionId: string
+  readonly inputId: string
+  readonly fingerprint: string
+  readonly acceptedAt: number
+  readonly disposition: "pending" | "admitted" | "removed"
+}
+
+/** One accepted owner history operation and its persisted result. */
+export interface HistoryOperationRecord {
+  readonly operationId: string
+  readonly action: "rewind" | "fork"
+  readonly fingerprint: string
+  readonly status: "started" | "succeeded"
+  readonly result: unknown
+}
+
 /** The catalogs a developer message lists. */
 export interface Catalogs {
   readonly skills: string | null
@@ -401,6 +419,96 @@ export class SessionStore {
     })()
   }
 
+  /** The accepted receipt for one submission, or null when no input accepted it. */
+  inputReceipt(sessionId: string, submissionId: string): InputReceiptRecord | null {
+    const row = this.db
+      .query<{
+        submission_id: string
+        input_id: string
+        fingerprint: string
+        accepted_at: number
+        disposition: "pending" | "admitted" | "removed"
+      }, [string, string]>(
+        `SELECT r.submission_id, r.input_id, r.fingerprint, r.accepted_at,
+           CASE
+             WHEN EXISTS (SELECT 1 FROM waiting_input w WHERE w.session_id = r.session_id AND w.input_id = r.input_id) THEN 'pending'
+             WHEN EXISTS (SELECT 1 FROM turn_inputs i WHERE i.session_id = r.session_id AND i.input_id = r.input_id) THEN 'admitted'
+             ELSE 'removed'
+           END AS disposition
+         FROM input_receipts r WHERE r.session_id = ? AND r.submission_id = ?`,
+      )
+      .get(sessionId, submissionId)
+    return row === null
+      ? null
+      : {
+          submissionId: row.submission_id,
+          inputId: row.input_id,
+          fingerprint: row.fingerprint,
+          acceptedAt: row.accepted_at,
+          disposition: row.disposition,
+        }
+  }
+
+  /** Records one accepted submission; the caller's transaction also stores its input and attachments. */
+  acceptInput(sessionId: string, submissionId: string, inputId: string, fingerprint: string, acceptedAt: number) {
+    this.db
+      .query(
+        `INSERT INTO input_receipts (session_id, submission_id, input_id, fingerprint, accepted_at)
+          VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(sessionId, submissionId, inputId, fingerprint, acceptedAt)
+  }
+
+  /** The accepted operation for one owner control identity, or null when none was admitted. */
+  historyOperation(sessionId: string, operationId: string): HistoryOperationRecord | null {
+    const row = this.db
+      .query<{
+        operation_id: string
+        action: "rewind" | "fork"
+        fingerprint: string
+        status: "started" | "succeeded"
+        result: string | null
+      }, [string, string]>(
+        "SELECT operation_id, action, fingerprint, status, result FROM history_operations WHERE session_id = ? AND operation_id = ?",
+      )
+      .get(sessionId, operationId)
+    return row === null
+      ? null
+      : {
+          operationId: row.operation_id,
+          action: row.action,
+          fingerprint: row.fingerprint,
+          status: row.status,
+          result: row.result === null ? null : JSON.parse(row.result),
+        }
+  }
+
+  /** Persists the admission of one history operation before its mutation. */
+  beginHistoryOperation(
+    sessionId: string,
+    operationId: string,
+    action: "rewind" | "fork",
+    fingerprint: string,
+    at: number,
+  ) {
+    this.db
+      .query(
+        `INSERT INTO history_operations (session_id, operation_id, action, fingerprint, status, created_at)
+          VALUES (?, ?, ?, ?, 'started', ?)`,
+      )
+      .run(sessionId, operationId, action, fingerprint, at)
+  }
+
+  /** Records the durable result of an admitted history operation. */
+  completeHistoryOperation(sessionId: string, operationId: string, result: unknown, at: number) {
+    this.db
+      .query(
+        `UPDATE history_operations SET status = 'succeeded', result = ?, finished_at = ?
+          WHERE session_id = ? AND operation_id = ?`,
+      )
+      .run(JSON.stringify(result), at, sessionId, operationId)
+  }
+
   /** Persists an event under the session's next sequence number, advancing the counter first, and returns it. */
   appendEvent(sessionId: string, body: SessionEventBody, timestamp: number): SessionEvent {
     return this.db.transaction(() => {
@@ -423,6 +531,11 @@ export class SessionStore {
       )
       .all(sessionId, afterSeq)
       .map((row) => ({ sessionId, seq: row.seq, timestamp: row.timestamp, event: JSON.parse(row.body) }))
+  }
+
+  /** The session's last persisted event number, 0 before any event. */
+  lastEventSeq(sessionId: string): number {
+    return this.db.query<{ seq: number | null }, [string]>("SELECT max(seq) AS seq FROM events WHERE session_id = ?").get(sessionId)?.seq ?? 0
   }
 
   turns(sessionId: string): ReadonlyArray<TurnRecord> {

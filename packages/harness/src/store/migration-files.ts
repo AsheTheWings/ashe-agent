@@ -31,6 +31,9 @@ import m0030 from "../../migrations/0030_communication.sql" with { type: "text" 
 import m0031 from "../../migrations/0031_subscription_operation_ownership.sql" with { type: "text" }
 import m0032 from "../../migrations/0032_content_pipeline.sql" with { type: "text" }
 import m0033 from "../../migrations/0033_model_provider_usage.sql" with { type: "text" }
+import m0034 from "../../migrations/0034_input_receipts.sql" with { type: "text" }
+import m0035 from "../../migrations/0035_history_operations.sql" with { type: "text" }
+import m0036 from "../../migrations/0036_harness_identity.sql" with { type: "text" }
 
 /**
  * The migration directory `packages/harness/migrations`, embedded so a
@@ -71,4 +74,7 @@ export const migrationFiles: ReadonlyArray<{ readonly file: string; readonly sql
   { file: "0031_subscription_operation_ownership.sql", sql: m0031 },
   { file: "0032_content_pipeline.sql", sql: m0032 },
   { file: "0033_model_provider_usage.sql", sql: m0033 },
+  { file: "0034_input_receipts.sql", sql: m0034 },
+  { file: "0035_history_operations.sql", sql: m0035 },
+  { file: "0036_harness_identity.sql", sql: m0036 },
 ]

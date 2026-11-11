@@ -4,12 +4,12 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@ashe-agent/harness": "workspace:*",
     "@ashe-agent/protocol": "workspace:*",
-    "@assistant-ui/react": "0.15.32",
-    "@assistant-ui/react-markdown": "0.14.24",
     "@base-ui/react": "1.9.0",
     "@fontsource-variable/geist": "5.3.0",
     "@noble/hashes": "2.4.0",
+    "@opentelemetry/api-logs": "0.223.0",
     "class-variance-authority": "0.7.1",
     "cn": "0.5.1",
     "effect": "4.1.0",
@@ -27,6 +27,7 @@
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.2",
+    "happy-dom": "20.0.10",
     "tailwindcss": "4.3.3",
     "vite": "8.3.5"
   }

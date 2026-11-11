@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import { agentRunner } from "../src/agent/runner.ts"
 import { responsesModelPort } from "../src/agent/model.ts"
-import { Client, waitFor } from "./support/cli.ts"
+import { cancelSession, Client, forkSession, rewindSession, waitFor } from "./support/cli.ts"
 import { callTools, configuredModel, failWith, FakeModel, messageText, say, testTools } from "./support/agent.ts"
 import { SessionView, TestServer, type TestServerOptions } from "./support/server.ts"
 
@@ -288,7 +288,7 @@ describe("session communication through a real WebSocket and provider", () => {
       })
       expect(content.result.content).toMatchObject({ available: true })
       const sourceRun = sourceView.events.find(({ event }) => event.type === "RUN_STARTED")!.event.runId as string
-      const rewound = await client.request("session.rewind", { sessionId: source, runId: sourceRun })
+      const rewound = await rewindSession(client, { sessionId: source, runId: sourceRun })
       expect(rewound.error).toBeUndefined()
       const stillThere = await client.request("content.get", {
         sessionId: target,
@@ -370,7 +370,7 @@ describe("session communication through a real WebSocket and provider", () => {
       }
       expect(references()).toBe(1)
       const sourceRun = sourceView.events.find(({ event }) => event.type === "RUN_STARTED")!.event.runId
-      await client.request("session.rewind", { sessionId: source, runId: sourceRun })
+      await rewindSession(client, { sessionId: source, runId: sourceRun })
       hub.attachments.expire(Date.now() + 365 * 24 * 60 * 60 * 1000)
       expect(references()).toBe(1)
       const read = await client.request("content.get", {
@@ -481,7 +481,7 @@ describe("session communication through a real WebSocket and provider", () => {
       )
       const inputId = hub.store.conversation.waiting(observer).find((entry) => entry.kind === "notification")!.inputId
       const runId = hub.store.turns(observer)[0]!.runId
-      const rewound = await client.request("session.rewind", { sessionId: observer, runId })
+      const rewound = await rewindSession(client, { sessionId: observer, runId })
       expect(rewound.error).toBeUndefined()
       const status = () => {
         const db = new Database(server.databasePath, { readonly: true })
@@ -633,11 +633,11 @@ describe("session communication through a real WebSocket and provider", () => {
           view.events.some(({ event }) => event.type === "TOOL_EXECUTION_STARTED") ? true : undefined,
         )
         if (session === cancelled) {
-          await client.request("session.cancel", { sessionId: session })
+          await cancelSession(client, session)
           await finished(view, 1)
         } else {
           const runId = view.events.find(({ event }) => event.type === "RUN_STARTED")!.event.runId
-          const result = await client.request("session.rewind", { sessionId: session, runId })
+          const result = await rewindSession(client, { sessionId: session, runId })
           expect(result.error).toBeUndefined()
         }
       }
@@ -857,7 +857,7 @@ describe("session communication through a real WebSocket and provider", () => {
       } finally {
         db.close()
       }
-      const rewound = await client.request("session.rewind", { sessionId: source, runId: sourceRun.runId })
+      const rewound = await rewindSession(client, { sessionId: source, runId: sourceRun.runId })
       expect(rewound.error).toBeUndefined()
       const retained = await client.request("content.get", {
         sessionId: branch,

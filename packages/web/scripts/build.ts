@@ -3,6 +3,7 @@
  * commit revision given as the only argument written to `revision.txt` at
  * the build's root.
  */
+import { cpSync, mkdirSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { build, type Plugin } from "vite"
 
@@ -22,3 +23,24 @@ const revisionFile: Plugin = {
 
 const root = join(import.meta.dir, "..")
 await build({ root, configFile: join(root, "vite.config.ts"), plugins: [revisionFile], logLevel: "warn" })
+
+// The backend and its migrations ship beside the client assets in the same
+// revision-stamped directory; neither reads the other's sources.
+mkdirSync(join(root, "dist/bin"), { recursive: true })
+cpSync(join(root, "migrations"), join(root, "dist/migrations"), { recursive: true })
+cpSync(join(root, "NOTICE-t3"), join(root, "dist/NOTICE-t3"))
+const compiled = Bun.spawnSync([
+  process.execPath,
+  "build",
+  "--compile",
+  "--target=bun-linux-x64",
+  "--define",
+  `ASHE_AGENT_REVISION=${JSON.stringify(revision)}`,
+  join(root, "src/backend/main.ts"),
+  "--outfile",
+  join(root, "dist/bin/ashe-agent-web"),
+], { stdout: "inherit", stderr: "inherit" })
+if (compiled.exitCode !== 0) {
+  rmSync(join(root, "dist"), { recursive: true, force: true })
+  process.exit(compiled.exitCode)
+}

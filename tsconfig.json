@@ -17,7 +17,8 @@
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+    "jsx": "react-jsx"
   },
   "include": [
     "packages/*/src/**/*.ts",
@@ -28,6 +29,7 @@
     "images/*/*.ts"
   ],
   "exclude": [
-    "packages/web/src/**"
+    "packages/web/src/**",
+    "packages/web/test/**"
   ]
 }

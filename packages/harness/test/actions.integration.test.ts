@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { ErrorCode } from "@ashe-agent/protocol"
-import { Client, waitFor } from "./support/cli.ts"
-import { SessionView, TestServer } from "./support/server.ts"
+import { cancelSession, Client, waitFor } from "./support/cli.ts"
+import { agentRunner } from "../src/agent/runner.ts"
+import { callTools, FakeModel, say } from "./support/agent.ts"
+import { models, SessionView, TestServer } from "./support/server.ts"
 
 interface ActionNotice {
   readonly actionId: string
@@ -175,7 +177,7 @@ describe("exclusive client actions over WebSocket", () => {
       const executor = await actionClient(server.url, token, id)
       await control.request("session.input", { sessionId: id, text: "ask ls race" })
       const action = await nextAction(executor.actions, 1)
-      await control.request("session.cancel", { sessionId: id })
+      await cancelSession(control, id)
       await observerView.waitFor("the canceled action", (view) =>
         view.events.some(
           (event) =>
@@ -200,4 +202,93 @@ describe("exclusive client actions over WebSocket", () => {
       server.script.release("ask ls race")
     })
   })
+
+  test("attention is assigned-only, clears at settlement and disconnect, and never reassigns", async () => {
+    const model = new FakeModel()
+    const server = new TestServer({ shell: "deny" }, {
+      models,
+      runner: agentRunner({ port: model, models }),
+      modelPort: model,
+    })
+    const token = server.token("attention")
+    try {
+      await server.start()
+      const control = await connect(server.url, token)
+      const id = await createSession(control)
+      const view = await SessionView.open(server.url, token, id)
+      const observer = await actionClient(server.url, token, id, ["questions.answer"])
+      const executor = await actionClient(server.url, token, id, ["questions.answer"])
+      const question = {
+        questions: [
+          {
+            id: "choice",
+            header: "Choice",
+            question: "Which way?",
+            options: [
+              { label: "Left", description: "go left" },
+              { label: "Right", description: "go right" },
+            ],
+          },
+        ],
+      }
+      model.next(callTools([{ name: "context_ask_question", args: question }]), say("after answer"))
+      await control.request("session.input", { sessionId: id, text: "ask now" })
+      const action = await nextAction(executor.actions, 1)
+
+      expect((await control.request("action.reportInteraction", { actionId: action.actionId, needsHumanInput: true })).error.code)
+        .toBe(ErrorCode.conflict)
+      expect((await executor.client.request("action.reportInteraction", { actionId: action.actionId, needsHumanInput: true })).error)
+        .toBeUndefined()
+      await view.waitFor("the attention hint", (value) =>
+        value.events.some(
+          (event) => event.event.type === "ACTION_ATTENTION" && event.event.actionId === action.actionId && event.event.needsHumanInput,
+        ),
+      )
+      expect((await control.request("session.observe", { sessionId: id })).result.attention).toEqual([
+        { actionId: action.actionId, name: "questions.answer", runId: expect.any(String), needsHumanInput: true },
+      ])
+      expect((await executor.client.request("action.complete", {
+        sessionId: id,
+        actionId: action.actionId,
+        result: { kind: "answered", answers: [{ id: "choice", selection: "Left" }] },
+      })).error).toBeUndefined()
+      await view.waitFor("the cleared hint", (value) =>
+        value.events.some(
+          (event) => event.event.type === "ACTION_ATTENTION" && event.event.actionId === action.actionId && !event.event.needsHumanInput,
+        ) && value.events.some((event) => event.event.type === "ACTION_SETTLED" && event.event.actionId === action.actionId),
+      )
+      expect(view.events.filter((event) => event.event.type === "RUN_STARTED")).toHaveLength(1)
+      expect(observer.actions).toHaveLength(0)
+      const attentionEvents = view.events.filter((event) => event.event.type === "ACTION_ATTENTION").length
+      expect((await executor.client.request("action.reportInteraction", {
+        actionId: action.actionId,
+        needsHumanInput: true,
+      })).error.code).toBe(ErrorCode.alreadyResolved)
+      expect((await executor.client.request("action.reportInteraction", {
+        actionId: "unknown-action",
+        needsHumanInput: true,
+      })).error.code).toBe(ErrorCode.alreadyResolved)
+      expect(view.events.filter((event) => event.event.type === "ACTION_ATTENTION")).toHaveLength(attentionEvents)
+
+      const secondExecutor = await actionClient(server.url, token, id, ["questions.answer"])
+      model.next(callTools([{ name: "context_ask_question", args: question }]))
+      await control.request("session.input", { sessionId: id, text: "ask again" })
+      const second = await nextAction(secondExecutor.actions, 1)
+      expect((await secondExecutor.client.request("action.reportInteraction", {
+        actionId: second.actionId,
+        needsHumanInput: true,
+      })).error).toBeUndefined()
+      secondExecutor.client.close()
+      await view.waitFor("the disconnected settlement", (value) =>
+        value.events.some(
+          (event) => event.event.type === "ACTION_SETTLED" && event.event.actionId === second.actionId && event.event.outcome === "disconnected",
+        ),
+      )
+      expect(view.events.filter((event) => event.event.type === "ACTION_ATTENTION" && event.event.actionId === second.actionId).at(-1))
+        .toMatchObject({ event: { needsHumanInput: false } })
+      expect(observer.actions).toHaveLength(0)
+    } finally {
+      await server.cleanup()
+    }
+  }, 30_000)
 })
