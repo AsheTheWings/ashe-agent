@@ -10,34 +10,68 @@ copy a consistent dump instead.
 
 ## Conversation state
 
-A session's conversation state is rows of its own: its checkpoint
-windows, each window's items, the developer component each component item
-holds, and its waiting input; its tool result clearings; its timeline
-entries, their trims, and each text of a compaction entry, the newest
-kept one current; its chat boundaries and their closings; and each
-checkpoint window's research baseline versions, the newest kept one
-current. The content store keeps text that components refer to by
-SHA-256, such as each version of the user instructions and of each
-research file a baseline names. A turn records the position of its
-context turn component and what started the context turn. Each `turns` row
-also records its cause, immutable ordered input membership, starting user
-message ids, captured model and reasoning effort, settlement, first event,
-and context workflow association. `context_workflows` keeps one workflow's
-trigger, participating turn, start position, clearing and validation
-counts, clearing allowance, and construction state across turn aggregates.
-Every row a turn makes names that turn and references its `turns` row with
-a cascading foreign key; rows made at session creation, such as the first
-window and its seed, name no turn.
+A session's canonical history is its ordered `session_entries`: developer,
+user, agent, thought, and tool entries, each with an immutable content
+reference, authorship, local or inherited ownership, and the title and
+model that established it. `window_entries` records which entries each
+checkpoint window includes. The content store keeps immutable bytes by
+SHA-256 and content references retain them while any entry, model call,
+manifest, attachment, snapshot, or baseline needs them. `window_items`,
+`developer_components`, and `tool_result_clearings` are read-only views of
+that history for the context and timeline paths. They translate content to
+the former text shape and clearing positions to their numeric entry
+positions, and omit a tool invocation until it has a result.
+
+The session's applied title, model, and effort are immutable rows in
+`session_settings`; `sessions.current_settings_revision` names the current
+one. A turn references the applied revision established at its UserTurn
+boundary, and `turn_inputs` records its ordered input membership and which
+input applied a settings revision. A turn also records its cause,
+settlement, first event, and context workflow association.
+`context_workflows` keeps one workflow's trigger, participating turn, start
+position, clearing and validation counts, clearing allowance, and
+construction state across turn aggregates. Every row a turn makes names
+that turn and references its `turns` row with a cascading foreign key; rows
+made at session creation, such as the first window and its seed, name no
+turn.
+
+`model_calls` records each request's ordinal, checkpoint window, offered
+tool definitions, lifecycle outcome, and provider replay payload.
+`request_manifests` freezes the ordered input contribution references
+before a request; only calls with a successful outcome are eligible as a
+successful boundary. Each manifest records the renderer and digest of its
+provider input and each contribution's transformation. Successful
+compaction, research, and handoff requests use the same records. `agent_tools`
+holds one lifecycle row per owned tool invocation, with its provider call id,
+structured arguments, start and settlement times, result, and outcome. Its
+model call and parent invocation have session-scoped foreign keys; migrated
+legacy rows without a recorded call carry an explicit unavailable marker.
+`request_manifest_rendered` retains the immutable rendered provider input and
+each contribution's rendered representation.
+`context_result_replacements` records a clearing as a replacement over the
+retained result.
+
+`uploads` holds draft-owned resumable staging, with fixed one-MiB chunks in
+`upload_chunks`, while `attachments` holds finalized originals.
+`attachment_references` claims an original for pending or admitted input.
+Unclaimed staging expires from its creation time; a claimed original stays
+while its input, retained history, request manifest, or fork references it.
+Owner clients resolve a retained original through `content.get` by session,
+content, and attachment, entry, or manifest reference; a reference from
+another session is not found.
 
 A rewind deletes the removed turns' rows, and the foreign keys delete
 every row they own with them, so the conversation is again what the kept
 turns and creation made: a removed context turn's checkpoint window,
-clearings, trims, and compaction texts go, so the kept results are
-uncleared and each compaction entry has its earlier text again. A fork
-copies the rows that no turn owns and those owned by its settled prefix,
-excluding rows created by the next UserTurn and later work. A context
-workflow's durable state follows its participating turns without making a
-later window or auxiliary result part of an earlier prefix.
+clearings, trims, compaction texts, model calls, manifests, and attachment
+claims go, so the kept results are uncleared and each compaction entry has
+its earlier text again. Applied settings revisions remain while the
+session or a surviving turn references them. A fork copies the rows that no
+turn owns and those owned by its settled prefix, excluding rows created by
+the next UserTurn and later work, and preserves inherited authorship while
+sharing immutable content. A context workflow's durable state follows its
+participating turns without making a later window or auxiliary result part
+of an earlier prefix.
 
 ## Session files
 
@@ -110,11 +144,13 @@ Reading the status opens the database read-only and writes nothing.
 An applied migration is never edited, renamed, or deleted; a change to the
 schema is a new migration.
 
-The turn-membership and context-workflow transition discards disposable
-session history, including sessions without a current window, rather than
-converting old turn shapes. It preserves authentication identities,
-logins, API tokens, permission configuration, and the migration ledger.
-There is no compatibility shim for discarded session state.
+The semantic-history migration translates recoverable native entries,
+settings, grants, and retained content into the current tables. Historical
+model calls and request boundaries that were never recorded remain absent;
+the migration does not invent them. The following tool-ownership migration
+rebuilds tool lifecycle rows with explicit unavailable call markers and
+session-scoped foreign keys, and replaces the compatibility views with the
+declared text, numeric-position, and settled-result shapes.
 
 ## Dumps
 

@@ -74,6 +74,138 @@ const turnStatuses = (server: TestServer, id: string) => {
 }
 
 describe("sessions", () => {
+  test("an upload survives a server restart, resumes by offset, and its accepted original is referenced by input", async () => {
+    await withServer(async (server, token) => {
+      let client = await connect(server.url, token)
+      const bytes = Buffer.from("hello")
+      const digest = new Bun.CryptoHasher("sha256").update(bytes).digest("hex")
+      const created = await client.request("upload.create", {
+        draftId: "draft-1",
+        name: "hello.txt",
+        mediaType: "text/plain",
+        size: bytes.byteLength,
+      })
+      expect(created.error).toBeUndefined()
+      const uploadId = created.result.upload.uploadId
+      const first = await client.request("upload.append", {
+        uploadId,
+        offset: 0,
+        data: Buffer.from("hel").toString("base64"),
+      })
+      expect(first.result.upload.offset).toBe(3)
+      client.close()
+      await server.restart()
+
+      client = await connect(server.url, token)
+      const resumed = await client.request("upload.status", { uploadId })
+      expect(resumed.result.upload).toMatchObject({ offset: 3, size: 5, claimed: false })
+      await client.request("upload.append", { uploadId, offset: 3, data: Buffer.from("lo").toString("base64") })
+      const finalized = await client.request("upload.finalize", { uploadId, size: 5, digest })
+      expect(finalized.result.upload).toMatchObject({ offset: 5, digest, claimed: false })
+      const stored = new Database(server.databasePath, { readonly: true })
+      const row = stored.query<{ attachment_id: string }, [string]>("SELECT attachment_id FROM uploads WHERE upload_id = ?").get(uploadId)!
+      stored.close()
+      expect(row.attachment_id).not.toBeNull()
+      const id = await createSession(client)
+      const sent = await client.request("session.input", {
+        sessionId: id,
+        text: "with attachment",
+        attachments: [
+          {
+            attachmentId: row.attachment_id,
+            contentId: digest,
+            representationId: digest,
+            name: "hello.txt",
+            mediaType: "text/plain",
+            digest,
+          },
+        ],
+      })
+      expect(sent.error).toBeUndefined()
+      server.script.release("with attachment")
+      const view = await SessionView.open(server.url, token, id)
+      await view.waitFor("the attached input turn", (value) => finishedRuns(value) === 1)
+      const check = new Database(server.databasePath, { readonly: true })
+      try {
+        expect(check.query("SELECT count(*) AS n FROM attachment_references WHERE session_id = ? AND reference_id = ?").get(id, sent.result.inputId)).toEqual({ n: 1 })
+      } finally {
+        check.close()
+      }
+      const content = await client.request("content.get", { sessionId: id, contentId: digest, referenceId: sent.result.inputId })
+      expect(content.result.content).toMatchObject({
+        sessionId: id,
+        contentId: digest,
+        referenceId: sent.result.inputId,
+        available: true,
+        representations: [{ filename: "hello.txt", mediaType: "text/plain", byteLength: 5 }],
+      })
+      const committed = view.events.find((event) => event.event.type === "MODEL_CALL_COMMITTED")!.event
+      const rendered = { manifestId: committed.inputBoundaryId, contentId: "rendered-provider-input" }
+      execute(
+        server,
+        `INSERT INTO contents (sha256, data, format) VALUES ('${rendered.contentId}', cast('<user>\nhello\n</user>' AS BLOB), 'text/plain')`,
+      )
+      execute(
+        server,
+        `INSERT INTO model_calls
+          (session_id, model_call_id, turn_id, ordinal, window_position, input_manifest_ref, offered_tools_ref, started_at, ended_at, outcome)
+          VALUES ('${id}', '${committed.modelCallId}', '${committed.runId}', 999999, 1, NULL, NULL, 1, 2, 'success')`,
+      )
+      execute(
+        server,
+        `INSERT INTO request_manifests (session_id, manifest_id, model_call_id, body_ref, created_at)
+          VALUES ('${id}', '${rendered.manifestId}', '${committed.modelCallId}', '${rendered.contentId}', 1)`,
+      )
+      execute(
+        server,
+        `INSERT INTO request_manifest_rendered (session_id, manifest_id, content_ref)
+          VALUES ('${id}', '${rendered.manifestId}', '${rendered.contentId}')`,
+      )
+      const renderedContent = await client.request("content.get", {
+        sessionId: id,
+        contentId: rendered.contentId,
+        referenceId: rendered.manifestId,
+      })
+      expect(renderedContent.result.content).toMatchObject({
+        contentId: rendered.contentId,
+        referenceId: rendered.manifestId,
+        available: true,
+        representations: [{ mediaType: "text/plain" }],
+      })
+      const other = await createSession(client)
+      expect(
+        (await client.request("content.get", { sessionId: other, contentId: digest, referenceId: sent.result.inputId })).error.code,
+      ).toBe(-32004)
+      expect(
+        (await client.request("content.get", { sessionId: other, contentId: rendered.contentId, referenceId: rendered.manifestId })).error.code,
+      ).toBe(-32004)
+    })
+  })
+
+  test("owners list grants across title scopes and clear one title", async () => {
+    await withServer(async (server, token) => {
+      const client = await connect(server.url, token)
+      const id = await createSession(client)
+      execute(
+        server,
+        `INSERT INTO session_grants (session_id, title_key, position, permission, pattern) VALUES
+          ('${id}', 'reviewer', 1, 'edit', '/one'),
+          ('${id}', 'reviewer', 2, 'shell', 'git status'),
+          ('${id}', 'writer', 1, 'edit', '/two')`,
+      )
+      const listed = await client.request("session.grants.list", { sessionId: id })
+      expect(listed.result.grants).toMatchObject([
+        { agentTitle: "reviewer", permission: "edit", pattern: "/one" },
+        { agentTitle: "reviewer", permission: "shell", pattern: "git status" },
+        { agentTitle: "writer", permission: "edit", pattern: "/two" },
+      ])
+      expect((await client.request("session.grants.clear", { sessionId: id, agentTitle: "reviewer" })).result).toEqual({ cleared: 2 })
+      expect((await client.request("session.grants.list", { sessionId: id })).result.grants).toMatchObject([
+        { agentTitle: "writer", permission: "edit", pattern: "/two" },
+      ])
+    })
+  })
+
   test("selection methods reject unknown top-level and nested settings at the wire", async () => {
     await withServer(async (server, token) => {
       const client = await connect(server.url, token)

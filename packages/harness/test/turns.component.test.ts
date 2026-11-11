@@ -60,12 +60,12 @@ describe("turn admission ownership", () => {
       h.input(id, "first")
       await h.calls(1)
       h.hub.setModel(id, beta!.id, undefined, h.sender)
-      h.hub.store.db.run("UPDATE sessions SET agent_key = 'writer' WHERE id = ?", [id])
+      h.hub.store.setSettings(id, { agentTitle: "writer", modelSettings: { modelId: beta!.id, reasoningEffort: null } })
       expect(h.hub.summary(id)).toMatchObject({
         selection: { agentTitle: "writer", modelSettings: { modelId: beta!.id } },
         activeSelection: { agentTitle: "untitled", modelSettings: { modelId: alpha!.id } },
       })
-      h.hub.store.db.run("UPDATE sessions SET agent_key = NULL WHERE id = ?", [id])
+      h.hub.store.setSettings(id, { agentTitle: "untitled", modelSettings: { modelId: beta!.id, reasoningEffort: null } })
       h.input(id, "steer")
       first.open()
       await h.calls(2)
@@ -75,6 +75,73 @@ describe("turn admission ownership", () => {
       await h.turnsEnded(id, 2)
       expect(h.hub.summary(id)).toMatchObject({ selection: { modelSettings: { modelId: beta!.id } }, activeSelection: null })
     } finally {
+      await h.cleanup()
+    }
+  })
+
+  test("admission applies requested settings with the input, keeps immutable revisions, and attributes a failed turn", async () => {
+    const [alpha, beta] = agentModels
+    const h = new AgentHarness()
+    try {
+      const id = h.create({ model: alpha!.id })
+      h.model.next(say("first"), say("second"))
+      h.input(id, "first")
+      await h.turnsEnded(id, 1)
+      h.hub.input(id, "second", "steer", h.sender, {
+        selection: { agentTitle: "untitled", modelSettings: { modelId: beta!.id, reasoningEffort: null } },
+      })
+      await h.turnsEnded(id, 2)
+      const turns = h.hub.store.turns(id)
+      expect(turns[1]).toMatchObject({ model: beta!.id, agentTitle: "untitled" })
+      expect(turns[1]!.settingsRevision).not.toBe(turns[0]!.settingsRevision)
+      const revisions = h.hub.store.db
+        .query<{ revision: string; model_id: string | null }, [string]>("SELECT revision, model_id FROM session_settings WHERE session_id = ? ORDER BY applied_at")
+        .all(id)
+      expect(revisions.map((row) => row.model_id)).toEqual([alpha!.id, beta!.id])
+      const admissionInputs = h.hub.store.db
+        .query<{ input_id: string; applied_settings_revision: string | null }, [string, string]>(
+          "SELECT input_id, applied_settings_revision FROM turn_inputs WHERE session_id = ? AND run_id = ? ORDER BY ordinal",
+        )
+        .all(id, turns[1]!.runId)
+      expect(admissionInputs.filter((row) => row.input_id !== "system:1").map((row) => row.applied_settings_revision)).toEqual([
+        turns[1]!.settingsRevision,
+      ])
+
+      h.hub.input(id, "third", "steer", h.sender, { selection: { modelSettings: { modelId: "test/missing" } } })
+      await h.turnsEnded(id, 3)
+      const failed = h.hub.store.turns(id)[2]!
+      expect(failed).toMatchObject({ model: "test/missing", status: "failed" })
+      expect(failed.settingsRevision).not.toBe(turns[1]!.settingsRevision)
+      expect(ofType(h, id, "RUN_ERROR").at(-1)).toMatchObject({ code: "model_unavailable" })
+    } finally {
+      await h.cleanup()
+    }
+  })
+
+  test("a batch applies requested settings in arrival order and admits one turn with the final profile", async () => {
+    const [alpha, beta] = agentModels
+    const h = new AgentHarness()
+    const first = gate()
+    try {
+      const id = h.create({ model: alpha!.id })
+      h.model.next(hold(first.promise), say("batch"))
+      h.input(id, "first")
+      await h.calls(1)
+      h.hub.input(id, "one", "queue", h.sender, { selection: { modelSettings: { modelId: beta!.id } } })
+      h.hub.input(id, "two", "queue", h.sender, { selection: { modelSettings: { modelId: alpha!.id } } })
+      first.open()
+      await h.turnsEnded(id, 2)
+      const turns = h.hub.store.turns(id)
+      expect(turns).toHaveLength(2)
+      expect(turns[1]).toMatchObject({ model: alpha!.id })
+      expect(turns[1]!.userMessageIds).toHaveLength(2)
+      expect(ofType(h, id, "RUN_STARTED").at(-1)!.selection).toMatchObject({ modelSettings: { modelId: alpha!.id } })
+      const revisions = h.hub.store.db
+        .query<{ model_id: string | null }, [string]>("SELECT model_id FROM session_settings WHERE session_id = ? ORDER BY rowid")
+        .all(id)
+      expect(revisions.map((row) => row.model_id)).toEqual([alpha!.id, beta!.id, alpha!.id])
+    } finally {
+      first.open()
       await h.cleanup()
     }
   })
@@ -224,6 +291,27 @@ describe("turn admission ownership", () => {
       expect(() => h.hub.fork(id, undefined)).toThrow("no settled turn")
       running.open()
       await h.turnsEnded(id, 1)
+    } finally {
+      await h.cleanup()
+    }
+  })
+
+  test("a post-admission context failure settles the turn instead of leaving it running", async () => {
+    const h = new AgentHarness()
+    try {
+      const id = h.create()
+      const context = (h.hub as unknown as { context: { afterItems: () => void } }).context
+      context.afterItems = () => {
+        throw new Error("context hook failed")
+      }
+      h.model.next(say("must not run"))
+      h.input(id, "admit then fail")
+      await h.turnsEnded(id, 1)
+      expect(h.hub.store.turns(id)).toMatchObject([{ status: "failed" }])
+      expect(h.hub.store.conversation.waiting(id)).toEqual([])
+      expect(h.model.calls).toHaveLength(0)
+      expect(h.hub.summary(id)).toMatchObject({ activity: "idle", activeSelection: null })
+      expect(ofType(h, id, "RUN_ERROR")).toMatchObject([{ code: "turn_start_failed" }])
     } finally {
       await h.cleanup()
     }

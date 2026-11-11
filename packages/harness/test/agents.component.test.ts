@@ -168,6 +168,35 @@ describe("agents", () => {
     )
   })
 
+  test("title-only ownership renders foreign work with its source and drops an earlier title's seed instructions", async () => {
+    const only = configuredModel("test/title", { contextLimit: 200_000 })
+    await withConfig(
+      { "titles/alpha.md": title("Alpha", "ALPHA BODY"), "titles/beta.md": title("Beta", "BETA BODY") },
+      async (h) => {
+        const id = h.create({ agent: "alpha" })
+        h.model.next(say("alpha reply"), say("beta reply"), say("alpha again"))
+        h.input(id, "first")
+        await h.turnsEnded(id, 1)
+        h.hub.input(id, "second", "steer", h.sender, { selection: { agentTitle: "beta" } })
+        await h.turnsEnded(id, 2)
+        const beta = h.model.last().messages.map(messageText).join("\n")
+        expect(beta).toContain(`Source session: \`${id}\`; title: \`alpha\`; model: \`test/title\``)
+        expect(beta).toContain("<agent model=\"test/title\">\nalpha reply\n</agent>")
+        expect(beta).toContain("BETA BODY")
+        expect(beta).not.toContain("ALPHA BODY")
+
+        h.hub.input(id, "third", "steer", h.sender, { selection: { agentTitle: "alpha" } })
+        await h.turnsEnded(id, 3)
+        const alpha = h.model.last().messages.map(messageText).join("\n")
+        expect(alpha).toContain(`Source session: \`${id}\`; title: \`beta\`; model: \`test/title\``)
+        expect(alpha).toContain("<agent model=\"test/title\">\nbeta reply\n</agent>")
+        expect(alpha).toContain("ALPHA BODY")
+      },
+      undefined,
+      { agents: { alpha: {}, beta: {} }, models: [only] },
+    )
+  })
+
   test("a title file created, edited, and deleted mid-session gives the full title text, a diff, then the global text", async () => {
     await withConfig(
       { "AGENTS.md": "GLOBAL RULE" },

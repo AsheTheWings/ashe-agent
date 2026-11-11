@@ -68,8 +68,14 @@ export const renderTranscript = (items: ReadonlyArray<Item>): string =>
     .join("\n")
 
 /** The transcript component of a run of items another model owns. */
-export const transcriptComponent = (items: ReadonlyArray<Item>) =>
-  `# Transcript\n\nTurns another model ran in this session, recorded verbatim; they are not your own work.\n\n${renderTranscript(items)}`
+export const transcriptComponent = (items: ReadonlyArray<Item>) => {
+  const source = items[0]
+  const origin =
+    source === undefined
+      ? ""
+      : `\n\nSource session: \`${escapeTags(source.authorshipSessionId)}\`; title: \`${escapeTags(source.agentTitle)}\`; model: ${source.model === null ? "none" : `\`${escapeTags(source.model)}\``}.`
+  return `# Transcript\n\nTurns another model ran in this session, recorded verbatim; they are not your own work.${origin}\n\n${renderTranscript(items)}`
+}
 
 /**
  * An assistant message as the model receives it again: reasoning without
@@ -90,6 +96,9 @@ const replayable = (message: AIMessage): AIMessage => {
   })
 }
 
+/** The native assistant message a provider receives for retained own-history. */
+export const renderNativeMessage = (message: AIMessage): AIMessage => replayable(message)
+
 /** A tool result as a model call carries it: images as images for a model that takes them, else as placeholders. */
 const toolMessage = (item: ResultItem, imageInput: boolean) => {
   const content = resultContent(item)
@@ -104,6 +113,9 @@ const toolMessage = (item: ResultItem, imageInput: boolean) => {
   })
 }
 
+/** The provider tool message a retained result renders to. */
+export const renderToolResultMessage = (item: ResultItem, imageInput: boolean): ToolMessage => toolMessage(item, imageInput)
+
 /**
  * The messages of a model call by `model` in a checkpoint window: its
  * harness instructions as the `<system>` block of the first user input,
@@ -115,18 +127,32 @@ const toolMessage = (item: ResultItem, imageInput: boolean) => {
  * Tool result images are sent as images only when `imageInput` says the
  * model takes them.
  */
-export const renderWindow = (harness: string, items: ReadonlyArray<Item>, model: string, imageInput: boolean): Array<BaseMessage> => {
+export const renderWindow = (
+  harness: string,
+  items: ReadonlyArray<Item>,
+  model: string,
+  imageInput: boolean,
+  agentTitle = items[0]?.agentTitle ?? "untitled",
+  observe?: (sourceEntryIds: ReadonlyArray<string>, rendered: string) => void,
+): Array<BaseMessage> => {
   const messages: Array<BaseMessage> = []
   let blocks: Array<string> = [systemBlock(harness)]
-  let components: Array<{ text: string }> = []
+  let components: Array<{ text: string; sourceEntryIds: ReadonlyArray<string> }> = []
   let foreign: Array<Item> = []
   let inputOwner: string | null | undefined
   const closeComponents = () => {
-    if (components.length > 0) blocks.push(developerBlock(components))
+    if (components.length > 0) {
+      const rendered = developerBlock(components)
+      blocks.push(rendered)
+      observe?.(components.flatMap((component) => component.sourceEntryIds), rendered)
+    }
     components = []
   }
   const closeForeign = () => {
-    if (foreign.length > 0) components.push({ text: transcriptComponent(foreign) })
+    if (foreign.length > 0) {
+      const rendered = transcriptComponent(foreign)
+      components.push({ text: rendered, sourceEntryIds: foreign.map((item) => item.entryId) })
+    }
     foreign = []
   }
   const flush = () => {
@@ -137,7 +163,19 @@ export const renderWindow = (harness: string, items: ReadonlyArray<Item>, model:
   }
   for (const item of items) {
     const seed = item.kind === "component" && item.component.type === "seed"
-    if (!seed && item.model !== null && item.model !== model) {
+    const oldTitleSeed =
+      seed && item.kind === "component" && item.component.sources.userInstructions?.kind === "title" && item.agentTitle !== agentTitle
+    if (oldTitleSeed) continue
+    if (!seed && item.runId !== null && (item.model !== model || item.agentTitle !== agentTitle)) {
+      const previous = foreign.at(-1)
+      if (
+        previous !== undefined &&
+        (previous.authorshipSessionId !== item.authorshipSessionId ||
+          previous.agentTitle !== item.agentTitle ||
+          previous.model !== item.model)
+      ) {
+        closeForeign()
+      }
       foreign.push(item)
       continue
     }
@@ -147,19 +185,24 @@ export const renderWindow = (harness: string, items: ReadonlyArray<Item>, model:
     if (input && item.runId !== null) inputOwner = item.runId
     switch (item.kind) {
       case "component":
-        components.push(item.component)
+        components.push({ ...item.component, sourceEntryIds: [item.entryId] })
         break
-      case "user":
+      case "user": {
         closeComponents()
-        blocks.push(userBlock(item.text))
+        const rendered = userBlock(item.text)
+        blocks.push(rendered)
+        observe?.([item.entryId], rendered)
         break
+      }
       case "assistant":
         flush()
         messages.push(replayable(item.message))
+        observe?.([item.entryId], JSON.stringify(replayable(item.message)))
         break
       case "result":
         flush()
         messages.push(toolMessage(item, imageInput))
+        observe?.([item.entryId], JSON.stringify(toolMessage(item, imageInput)))
         break
     }
   }

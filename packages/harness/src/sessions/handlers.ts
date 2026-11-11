@@ -1,5 +1,7 @@
-import type { SessionEvent } from "@ashe-agent/protocol"
+import { ErrorCode, type SessionEvent } from "@ashe-agent/protocol"
 import type { Connection, Handlers } from "../server/websocket.ts"
+import { ProtocolError } from "../server/websocket.ts"
+import { AttachmentError } from "../content/attachments.ts"
 import type { SessionHub } from "./hub.ts"
 
 /**
@@ -8,6 +10,22 @@ import type { SessionHub } from "./hub.ts"
  * per session; subscribing again replaces it.
  */
 export const sessionHandlers = (hub: SessionHub) => {
+  const ownerId = (principal: { readonly kind: "token" | "login"; readonly tokenId?: string; readonly loginId?: string }) =>
+    principal.kind === "token" ? `token:${principal.tokenId}` : `login:${principal.loginId}`
+  const upload = <A>(action: () => A): A => {
+    try {
+      return action()
+    } catch (error) {
+      if (!(error instanceof AttachmentError)) throw error
+      const code =
+        error.code === "not_found" || error.code === "expired"
+          ? ErrorCode.notFound
+          : error.code === "conflict"
+            ? ErrorCode.conflict
+            : ErrorCode.invalidInput
+      throw new ProtocolError({ code, message: error.message })
+    }
+  }
   const subscriptions = new Map<string, Map<string, () => void>>()
   const of = (connection: Connection) => {
     let map = subscriptions.get(connection.id)
@@ -32,6 +50,20 @@ export const sessionHandlers = (hub: SessionHub) => {
       const { agents, defaultAgent } = hub.agents()
       return { agents: [...agents], defaultAgent }
     },
+    "upload.create": async (params, context) => ({
+      upload: upload(() => hub.attachments.create(ownerId(context.principal), params.draftId, params.name, params.mediaType, params.size, Date.now())),
+    }),
+    "upload.status": async (params, context) => ({
+      upload: upload(() => hub.attachments.statusOf(ownerId(context.principal), params.uploadId, Date.now())),
+    }),
+    "upload.append": async (params, context) => ({
+      upload: upload(() => hub.attachments.append(ownerId(context.principal), params.uploadId, params.offset, params.data, Date.now())),
+    }),
+    "upload.finalize": async (params, context) => ({
+      upload: upload(() =>
+        hub.attachments.finalize(ownerId(context.principal), params.uploadId, params.size, params.digest, Date.now()),
+      ),
+    }),
     "session.list": async () => ({ sessions: [...hub.list()] }),
     "session.create": async (params) => ({
       session: hub.create({
@@ -74,7 +106,12 @@ export const sessionHandlers = (hub: SessionHub) => {
       return {}
     },
     "session.input": async (params, context) => ({
-      inputId: hub.input(params.sessionId, params.text, params.mode, context.principal),
+      inputId: upload(() =>
+        hub.input(params.sessionId, params.text, params.mode, context.principal, {
+          ...(params.selection === undefined ? {} : { selection: params.selection }),
+          ...(params.attachments === undefined ? {} : { attachments: params.attachments }),
+        }),
+      ),
     }),
     "session.resume": async (params) => {
       hub.resume(params.sessionId)
@@ -87,6 +124,15 @@ export const sessionHandlers = (hub: SessionHub) => {
     "session.cancel": async (params) => {
       hub.cancel(params.sessionId)
       return {}
+    },
+    "session.grants.list": async (params) => ({ grants: [...hub.store.grantsForSession(params.sessionId)] }),
+    "session.grants.clear": async (params) => ({
+      cleared: hub.store.clearGrants(params.sessionId, params.agentTitle),
+    }),
+    "content.get": async (params) => {
+      const content = hub.store.conversation.retainedContent(params.sessionId, params.contentId, params.referenceId)
+      if (content === null) throw new ProtocolError({ code: ErrorCode.notFound, message: `no retained content ${params.contentId}` })
+      return { content }
     },
     "session.fork": async (params) => ({ session: hub.fork(params.sessionId, params.runId) }),
     "session.rewind": async (params, context) => {

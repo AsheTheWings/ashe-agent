@@ -25,6 +25,8 @@ import m0024 from "../../migrations/0024_password_removal.sql" with { type: "tex
 import m0025 from "../../migrations/0025_github_logins.sql" with { type: "text" }
 import m0026 from "../../migrations/0026_turn_membership.sql" with { type: "text" }
 import m0027 from "../../migrations/0027_context_workflows.sql" with { type: "text" }
+import m0028 from "../../migrations/0028_semantic_history.sql" with { type: "text" }
+import m0029 from "../../migrations/0029_tool_ownership.sql" with { type: "text" }
 
 /**
  * The migration directory `packages/harness/migrations`, embedded so a
@@ -59,4 +61,6 @@ export const migrationFiles: ReadonlyArray<{ readonly file: string; readonly sql
   { file: "0025_github_logins.sql", sql: m0025 },
   { file: "0026_turn_membership.sql", sql: m0026 },
   { file: "0027_context_workflows.sql", sql: m0027 },
+  { file: "0028_semantic_history.sql", sql: m0028 },
+  { file: "0029_tool_ownership.sql", sql: m0029 },
 ]

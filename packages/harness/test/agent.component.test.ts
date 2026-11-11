@@ -415,8 +415,7 @@ describe("the agent loop", () => {
           cause: "user",
           membership: [{ kind: "user", inputId: "crashed-input" }],
           userMessageIds: ["crashed-input"],
-          model: session.model,
-          reasoningEffort: session.reasoningEffort,
+          settingsRevision: session.settingsRevision,
           firstSeq: session.nextSeq,
           contextWorkflowId: null,
           contextStartItem: null,
@@ -474,8 +473,7 @@ describe("the agent loop", () => {
           cause: "user",
           membership: [{ kind: "user", inputId: "manual-input" }],
           userMessageIds: ["manual-input"],
-          model: session.model,
-          reasoningEffort: session.reasoningEffort,
+          settingsRevision: session.settingsRevision,
           firstSeq: session.nextSeq,
           contextWorkflowId: null,
           contextStartItem: null,
@@ -911,6 +909,7 @@ describe("model switching", () => {
       expect(texts(byBeta)).toHaveLength(1)
       const record = texts(byBeta)[0]!
       expect(headings(record)).toEqual(["# Session Facts", "# Transcript"])
+      expect(record).toContain(`Source session: \`${id}\`; title: \`untitled\`; model: \`${alpha}\``)
       expect(record).toEndWith("</developer>\n<user>\nt2\n</user>")
       expect(ofType(h.events(id), "DEVELOPER_MESSAGE")).toEqual([])
       expect(record).toContain("<user>\nt1\n</user>")

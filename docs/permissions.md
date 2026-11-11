@@ -121,4 +121,6 @@ timeout, bounds the wait ([tools](tools.md#execution-budget)).
 
 A session's grants survive a server restart and a rewind, and a fork
 starts with its source's grants. Grants are stored in the
-`session_grants` table.
+`session_grants` table. Owner clients list grants across title scopes with
+`session.grants.list` and clear one title's grants with
+`session.grants.clear`; clearing one branch changes no other branch.
