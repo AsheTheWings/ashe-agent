@@ -1,4 +1,5 @@
-import { logs } from "@opentelemetry/api-logs"
+import { logs, SeverityNumber } from "@opentelemetry/api-logs"
+import { LOGS } from "../../../harness/src/telemetry/signals.ts"
 import type { DiagnosticRecord } from "../shared/web-state.ts"
 
 export const diagnosticNames = ["web.sync", "web.interaction", "web.render_failure", "web.draft", "web.auth"] as const
@@ -65,10 +66,14 @@ export const parseDiagnostics = (body: unknown): ReadonlyArray<DiagnosticRecord>
 export const exportDiagnostics = (records: ReadonlyArray<DiagnosticRecord>) => {
   const logger = logs.getLogger("ashe-agent-web")
   for (const record of records) {
+    const severity = LOGS[record.name as DiagnosticName].severity
     const attributes: Record<string, string | number | boolean | string[]> = {}
     for (const [key, value] of Object.entries(record.attributes)) attributes[key] = typeof value === "object" ? [...value] : value
     logger.emit({
       eventName: record.name,
+      body: record.name,
+      severityText: severity,
+      severityNumber: SeverityNumber[severity],
       attributes,
       ...(record.timeUnixNano === undefined ? {} : { timestamp: Number(record.timeUnixNano) / 1_000_000 }),
     })
