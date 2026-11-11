@@ -81,7 +81,7 @@ export const callSettings = (
   selection: string | null,
 ): CallSettings => {
   const listed = (effort: string | undefined) => (effort !== undefined && model.efforts.includes(effort) ? effort : undefined)
-  const effort = listed(selection ?? undefined) ?? listed(overrides?.reasoningEffort) ?? listed(model.settings.reasoningEffort)
+  const effort = listed(selection ?? undefined) ?? listed(model.settings.reasoningEffort)
   const temperature = overrides?.temperature ?? model.settings.temperature
   return {
     ...(model.temperatureCapable && temperature !== undefined ? { temperature } : {}),

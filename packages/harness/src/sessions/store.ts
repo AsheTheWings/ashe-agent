@@ -357,12 +357,6 @@ export class SessionStore {
     return session === null ? null : profile(session)
   }
 
-  setModel(sessionId: string, model: string, reasoningEffort: string | null) {
-    const current = this.profile(sessionId)
-    if (current === null) throw new Error(`no session ${sessionId}`)
-    return this.setSettings(sessionId, { ...current, modelSettings: { modelId: model, reasoningEffort } })
-  }
-
   setInputSettingsRevision(sessionId: string, runId: string, inputId: string, revision: string) {
     this.db
       .query("UPDATE turn_inputs SET applied_settings_revision = ? WHERE session_id = ? AND run_id = ? AND input_id = ?")
@@ -394,8 +388,7 @@ export class SessionStore {
       .run(sessionId, agentTitle).changes
   }
 
-  addGrants(sessionId: string, permission: string, patterns: ReadonlyArray<string>) {
-    const title = this.profile(sessionId)?.agentTitle ?? UNTITLED_AGENT_TITLE
+  addGrants(sessionId: string, title: string, permission: string, patterns: ReadonlyArray<string>) {
     const insert = this.db.query(
       `INSERT INTO session_grants (session_id, title_key, position, permission, pattern)
         VALUES (?, ?, (SELECT coalesce(max(position), 0) + 1 FROM session_grants WHERE session_id = ? AND title_key = ?), ?, ?)`,

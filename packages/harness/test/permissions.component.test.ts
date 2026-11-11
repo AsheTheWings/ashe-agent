@@ -4,6 +4,9 @@ import { describe, expect, test } from "bun:test"
 import type { SessionEvent } from "@ashe-agent/protocol"
 import { ErrorCode } from "@ashe-agent/protocol"
 import { IntegrityFailure } from "../src/agent/failure.ts"
+import { implicitAgent } from "../src/agents/agents.ts"
+import { evaluate } from "../src/permissions/rules.ts"
+import type { SessionSetup } from "../src/sessions/hub.ts"
 import { ProtocolError } from "../src/server/websocket.ts"
 import { waitFor } from "./support/cli.ts"
 import { AgentHarness, callTools, messageText, say } from "./support/agent.ts"
@@ -38,6 +41,89 @@ const expectProtocolError = (run: () => void, code: number) => {
 }
 
 describe("permission paths", () => {
+  test("a title change at the next UserTurn applies that title's loaded policy", async () => {
+    const policies: Record<string, { edit: "ask" | "deny" }> = {
+      writer: { edit: "deny" },
+      reviewer: { edit: "ask" },
+    }
+    const setup: SessionSetup = {
+      resolve: (agent) =>
+        agent === null
+          ? implicitAgent
+          : { ...implicitAgent, key: agent, permission: policies[agent] ?? null },
+      userInstructions: () => null,
+      catalogs: () => ({ skills: null, codeMode: null }),
+      agents: () => ({
+        agents: Object.keys(policies).map((key) => ({
+          key,
+          title: key,
+          description: null,
+          model: null,
+          reasoningEfforts: {},
+          titleFile: { state: "absent" as const },
+        })),
+        defaultAgent: null,
+      }),
+    }
+    await withHarness({ setup }, async (h) => {
+      const id = h.create()
+      h.model.next(callTools([{ name: "touch", args: { paths: ["a"] } }]), say("writer"))
+      h.hub.input(id, "writer", "steer", h.sender, { selection: { agentTitle: "writer" } })
+      await h.turnsEnded(id, 1)
+      expect(results(h, id)[0]).toMatchObject({ outcome: "failed", content: expect.stringContaining("not offered in this request") })
+
+      h.model.next(callTools([{ name: "touch", args: { paths: ["a"] } }]), say("reviewer"))
+      h.hub.input(id, "reviewer", "steer", h.sender, { selection: { agentTitle: "reviewer" } })
+      const request = (await waitRequests(h, id, 1))[0]!
+      h.hub.cancel(id)
+      await h.turnsEnded(id, 2)
+      expect(request).toMatchObject({ permission: "edit" })
+    })
+  })
+
+  test("admission catalogs use the effective title's grants in both directions", async () => {
+    const setup: SessionSetup = {
+      resolve: (agent) => (agent === null ? implicitAgent : { ...implicitAgent, key: agent }),
+      userInstructions: () => null,
+      catalogs: (rules) => ({
+        skills: [
+          evaluate(rules, "skill", "writer-skill") === "deny" ? null : "catalog: writer",
+          evaluate(rules, "skill", "reviewer-skill") === "deny" ? null : "catalog: reviewer",
+        ].filter((value): value is string => value !== null).join("\n") || null,
+        codeMode: null,
+      }),
+      agents: () => ({
+        agents: ["writer", "reviewer"].map((key) => ({
+          key,
+          title: key,
+          description: null,
+          model: null,
+          reasoningEfforts: {},
+          titleFile: { state: "absent" as const },
+        })),
+        defaultAgent: null,
+      }),
+    }
+    await withHarness({ setup, permission: { skill: "deny" } }, async (h) => {
+      const id = h.create()
+      h.hub.store.addGrants(id, "writer", "skill", ["writer-skill"])
+      h.hub.store.addGrants(id, "reviewer", "skill", ["reviewer-skill"])
+      h.model.next(say("writer"))
+      h.hub.input(id, "writer", "steer", h.sender, { selection: { agentTitle: "writer" } })
+      await h.turnsEnded(id, 1)
+      const writer = ofType(h.events(id), "DEVELOPER_MESSAGE").at(-1).components.map((component: any) => component.text).join("\n")
+      expect(writer).toContain("catalog: writer")
+      expect(writer).not.toContain("catalog: reviewer")
+
+      h.model.next(say("reviewer"))
+      h.hub.input(id, "reviewer", "steer", h.sender, { selection: { agentTitle: "reviewer" } })
+      await h.turnsEnded(id, 2)
+      const reviewer = ofType(h.events(id), "DEVELOPER_MESSAGE").at(-1).components.map((component: any) => component.text).join("\n")
+      expect(reviewer).toContain("catalog: reviewer")
+      expect(reviewer).not.toContain("catalog: writer")
+    })
+  })
+
   test("relative, symlinked, `..` after a symlink, absent, and dangling paths are decided by their resolved paths", async () => {
     await withHarness({ permission: { edit: { "~/sessions/*/real/*": "deny", "~/sessions/*/outside/*": "deny" } } }, async (h) => {
       const id = h.create()
@@ -196,7 +282,8 @@ describe("permission requests", () => {
       expect(results(h, id).map((result) => result.outcome)).toEqual(["declined", "canceled"])
       expect(ofType(h.events(id), "TOOL_EXECUTION_STARTED")).toHaveLength(0)
       expect(results(h, id)[1].content).toContain("before it started")
-      expect(ofType(h.events(id), "RUN_FINISHED").at(-1)).toMatchObject({ outcome: { type: "success" } })
+      expect(ofType(h.events(id), "RUN_FINISHED").at(-1)).toMatchObject({ outcome: { type: "cancelled" } })
+      expect(h.hub.store.turns(id)[0]!.status).toBe("cancelled")
       h.model.next(say("ok"))
       h.input(id, "next")
       await h.turnsEnded(id, 2)
@@ -241,6 +328,48 @@ describe("permission requests", () => {
 })
 
 describe("session grants", () => {
+  test("grants are scoped to the active title and survive switching away and back", async () => {
+    const setup: SessionSetup = {
+      resolve: (agent) => (agent === null ? implicitAgent : { ...implicitAgent, key: agent }),
+      userInstructions: () => null,
+      catalogs: () => ({ skills: null, codeMode: null }),
+      agents: () => ({
+        agents: ["writer", "reviewer"].map((key) => ({
+          key,
+          title: key,
+          description: null,
+          model: null,
+          reasoningEfforts: {},
+          titleFile: { state: "absent" as const },
+        })),
+        defaultAgent: null,
+      }),
+    }
+    await withHarness({ permission: { edit: "ask" }, setup }, async (h) => {
+      const id = h.create()
+      const path = join(realpathSync(h.sessionDir(id)), "shared")
+      const call = () => callTools([{ name: "touch", args: { paths: ["shared"] } }])
+      h.model.next(call(), say("writer"))
+      h.hub.input(id, "writer", "steer", h.sender, { selection: { agentTitle: "writer" } })
+      const [writerAsk] = await waitRequests(h, id, 1)
+      h.answer(id, writerAsk.requestId, "always")
+      await h.turnsEnded(id, 1)
+      expect(h.hub.store.grants(id, "writer")).toEqual([{ permission: "edit", pattern: path }])
+
+      h.model.next(call(), say("reviewer"))
+      h.hub.input(id, "reviewer", "steer", h.sender, { selection: { agentTitle: "reviewer" } })
+      const reviewerAsk = (await waitRequests(h, id, 2)).at(-1)!
+      h.answer(id, reviewerAsk.requestId, "once")
+      await h.turnsEnded(id, 2)
+
+      h.model.next(call(), say("writer again"))
+      h.hub.input(id, "writer again", "steer", h.sender, { selection: { agentTitle: "writer" } })
+      await h.turnsEnded(id, 3)
+      expect(requests(h, id)).toHaveLength(2)
+      expect(results(h, id).at(-1)).toMatchObject({ outcome: "success" })
+    })
+  })
+
   test("grants survive a restart and a rewind, and a fork starts with its source's grants", async () => {
     await withHarness({ permission: { edit: "ask" } }, async (h) => {
       const id = h.create()

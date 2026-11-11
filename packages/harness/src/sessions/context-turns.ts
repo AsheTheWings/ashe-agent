@@ -448,7 +448,7 @@ export class ContextTurns {
           messages.push({ kind: "agent", text })
           covers.push(item.position)
         }
-      } else if (turn.status === "finished" && item.kind === "result" && item.outcome === "declined") {
+      } else if (item.kind === "result" && item.outcome === "declined") {
         messages.push({ kind: "no_reply", reason: "rejected" })
       } else if (turn.status !== "finished") {
         messages.push({ kind: "no_reply", reason: turn.status === "cancelled" ? "canceled" : turn.status === "interrupted" ? "restarted" : "failed" })

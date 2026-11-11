@@ -345,7 +345,7 @@
         },
         "additionalProperties": false
       },
-      "description": "Agents by title, each with an optional starting model, per-model setting overrides, and permission rules."
+      "description": "Agents by title, each with an optional starting model, per-model setting overrides, and permission rules; the key untitled is reserved."
     },
     "defaultAgent": {
       "anyOf": [
@@ -357,7 +357,7 @@
           "type": "null"
         }
       ],
-      "description": "Optional title of the agent sessions created without one run as."
+      "description": "Optional title of the agent sessions created without one run as; the synthetic untitled title is not configurable."
     },
     "titlesDir": {
       "type": "string",

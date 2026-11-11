@@ -6,7 +6,9 @@ history. Every client of the owner sees every session.
 ## Session directory
 
 Creating a session takes no working directory: `session.create` refuses
-a request naming `cwd`. The server creates the session's directory,
+a request naming `cwd`. It may start with an explicitly null model,
+which persists as `modelId: null` without requiring a runnable model.
+The server creates the session's directory,
 `<state-dir>/sessions/<session-id>/`, readable by the server user alone,
 when it creates the session. That directory is the session's starting
 working directory: shell commands without a `workdir` run there, and a
@@ -64,9 +66,15 @@ messages as one UserTurn. Steering therefore precedes older queued input.
 At admission, the batch's requested settings apply in arrival order. An
 immutable `session_settings` revision is written for each effective change,
 and the AgentTurn references the final revision established at its UserTurn
-boundary. Its history entries retain that title and model, including when
-the turn later fails. A model or effort change, and a steering, context, or
-continuation handoff, affects the next AgentTurn.
+boundary. Selecting a title resolves its default model, an explicit model
+takes precedence, its effort preset applies for that model, and an explicit
+effort applies last. A model change clears inherited effort the model does
+not list; an explicitly supplied unsupported effort reaches execution and
+fails the admitted turn. Its history entries retain that title and model,
+including when the turn later fails. A model or effort change, and a
+steering, context, or continuation handoff, affects the next AgentTurn.
+An unconfigured, unknown, or removed selection is admitted and then fails
+the turn explicitly. Its input stays part of that failed turn.
 
 `session.resume` requests a continuation on an idle session. It is refused
 while a turn or context workflow is active. The continuation joins one
@@ -110,6 +118,11 @@ result saying whether it had started. A turn that ends in any way
 withdraws its unanswered permission requests with `PERMISSION_WITHDRAWN`
 events in the same transaction as its final event.
 
+A plain permission rejection without feedback gives the call a `declined`
+result, cancels its still-unstarted tool calls, and settles the AgentTurn
+as `cancelled`. A rejection with feedback gives the call a failed result
+and lets the agent continue.
+
 Every tool call gets exactly one result before the session's next model
 call: its own, or a failed one saying it was canceled, declined,
 interrupted, timed out, or failed with its turn, and whether execution
@@ -142,7 +155,7 @@ starts with. It also keeps the conversation state that no copied turn or a
 copied turn owns, preserving inherited authorship while sharing immutable
 content, and the source's
 [session grants](permissions.md#session-grants). The source's
-`SESSION_REWOUND` and `MODEL_CHANGED` events, pending input, active
+`SESSION_REWOUND` and `SELECTION_CHANGED` events, pending input, active
 client actions, and shell processes are not copied. Its first eligible
 delivery carries the fork component, which reconciles identity and file
 generations without starting a model call by itself.
@@ -152,7 +165,14 @@ their events, the conversation state they own, and the `INPUT_WAITING`
 events of the messages they took, so no client can read them again. In
 the same transaction, it stores the rewind component and the removed
 turn's user messages, or the given text instead, as waiting steered input
-with new ids, emitting their `INPUT_WAITING` events after its
+with new ids. The current applied title, model, and effort stay selected
+unless the rewind submits an optional selection patch with the
+reconstructed input. Every original user message keeps its text and
+retained attachment references in order; replacement text keeps the
+combined attachment references in their original order. The transaction
+claims those originals for the new input before the old references go, so
+restart and reconstruction preserve their bytes. The input emits its
+`INPUT_WAITING` events after the
 `SESSION_REWOUND` event, which names the first removed number. A client
 drops its events from that number on. A failure leaves the history as it
 was; once the rewind commits, its input starts the rerun turn, after a

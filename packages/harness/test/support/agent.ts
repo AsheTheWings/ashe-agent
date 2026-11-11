@@ -343,7 +343,7 @@ export class AgentHarness {
     this.hub = this.makeHub()
   }
 
-  create(params: { model?: string; agent?: string; reasoningEffort?: string } = {}) {
+  create(params: { model?: string | null; agent?: string; reasoningEffort?: string | null } = {}) {
     const id = this.hub.create(params).id
     if (this.options.clientActions !== false) this.attachClient(id)
     return id

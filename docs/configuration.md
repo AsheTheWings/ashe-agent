@@ -136,11 +136,11 @@ nor the request names one. Every model id an input names, the default
 model's and each agent's included, must be registered.
 
 A model call's reasoning effort is the first that the model lists of the
-session's selection when the turn started, the agent's override for the
-model, and the model entry's setting. Its temperature is the agent's
-override, else the model entry's setting, and is sent only to a model
-that accepts one. [Model context](model-context.md) explains what each
-call sends.
+turn's selected effort and the model entry's setting. A title's effort
+preset becomes part of that selection when the title is selected. Its
+temperature is the active title's override, else the model entry's
+setting, and is sent only to a model that accepts one.
+[Model context](model-context.md) explains what each call sends.
 
 ### The working margin
 

@@ -2,6 +2,9 @@ import { describe, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import { statSync } from "node:fs"
 import { join } from "node:path"
+import { OWNER_IDENTITY_PATH, RETAINED_CONTENT_PATH } from "@ashe-agent/protocol"
+import { createLogin } from "../src/auth/credentials.ts"
+import { tokenHash } from "../src/auth/tokens.ts"
 import { Client, waitFor } from "./support/cli.ts"
 import { models, SessionView, TestServer } from "./support/server.ts"
 
@@ -27,6 +30,11 @@ const createSession = async (client: Client, selection?: Record<string, unknown>
   const response = await client.request("session.create", selection === undefined ? {} : { selection })
   if (response.error !== undefined) throw new Error(response.error.message)
   return response.result.session.id as string
+}
+
+const httpUrl = (server: TestServer, path: string) => {
+  const websocket = new URL(server.url)
+  return `http://${websocket.host}${path}`
 }
 
 
@@ -74,6 +82,61 @@ const turnStatuses = (server: TestServer, id: string) => {
 }
 
 describe("sessions", () => {
+  test("identity uses bearer validation, reports actual expiry, revocations, origins, and no-store caching", async () => {
+    await withServer(async (server, token) => {
+      const allowed = { Origin: "http://allowed.test" }
+      const api = await fetch(httpUrl(server, OWNER_IDENTITY_PATH), {
+        headers: { Authorization: `Bearer ${token}`, ...allowed },
+      })
+      expect(api.status).toBe(200)
+      expect(await api.json()).toEqual({
+        principal: { kind: "token", tokenId: expect.any(String), name: "primary" },
+        credentialExpiresAt: null,
+      })
+      expect(api.headers.get("cache-control")).toBe("no-store")
+      expect(api.headers.get("access-control-allow-origin")).toBe("http://allowed.test")
+      expect(api.headers.get("vary")).toContain("Origin")
+
+      expect(
+        (await fetch(httpUrl(server, OWNER_IDENTITY_PATH), {
+          headers: { Authorization: `Bearer ${token}`, Origin: "http://denied.test" },
+        })).status,
+      ).toBe(403)
+      expect((await fetch(httpUrl(server, `${OWNER_IDENTITY_PATH}?token=${token}`))).status).toBe(401)
+
+      const db = new Database(server.databasePath)
+      try {
+        const issued = createLogin(db, 42, Date.now())
+        const login = await fetch(httpUrl(server, OWNER_IDENTITY_PATH), {
+          headers: { Authorization: `Bearer ${issued.accessToken}` },
+        })
+        expect(login.status).toBe(200)
+        expect(await login.json()).toEqual({
+          principal: { kind: "login", loginId: issued.principal.kind === "login" ? issued.principal.loginId : "" },
+          credentialExpiresAt: issued.accessTokenExpiresAt,
+        })
+        db.query("UPDATE access_tokens SET expires_at = 0 WHERE token_hash = ?").run(tokenHash(issued.accessToken))
+        expect(
+          (await fetch(httpUrl(server, OWNER_IDENTITY_PATH), {
+            headers: { Authorization: `Bearer ${issued.accessToken}` },
+          })).status,
+        ).toBe(401)
+
+        const changed = createLogin(db, 42, Date.now())
+        db.query("UPDATE logins SET github_user_id = 99 WHERE id = ?").run(
+          changed.principal.kind === "login" ? changed.principal.loginId : "",
+        )
+        expect(
+          (await fetch(httpUrl(server, OWNER_IDENTITY_PATH), {
+            headers: { Authorization: `Bearer ${changed.accessToken}` },
+          })).status,
+        ).toBe(401)
+      } finally {
+        db.close()
+      }
+    })
+  })
+
   test("an upload survives a server restart, resumes by offset, and its accepted original is referenced by input", async () => {
     await withServer(async (server, token) => {
       let client = await connect(server.url, token)
@@ -139,6 +202,30 @@ describe("sessions", () => {
         available: true,
         representations: [{ filename: "hello.txt", mediaType: "text/plain", byteLength: 5 }],
       })
+      const download = await fetch(
+        httpUrl(server, `${RETAINED_CONTENT_PATH}/${id}/${digest}/${sent.result.inputId}`),
+        { headers: { Authorization: `Bearer ${token}`, Origin: "http://allowed.test" } },
+      )
+      expect(download.status).toBe(200)
+      expect(Buffer.from(await download.arrayBuffer()).toString()).toBe("hello")
+      expect(download.headers.get("content-type")).toBe("text/plain")
+      expect(download.headers.get("content-disposition")).toBe('attachment; filename="hello.txt"')
+      expect(download.headers.get("x-content-type-options")).toBe("nosniff")
+      expect(download.headers.get("content-security-policy")).toBe("default-src 'none'; sandbox")
+      expect(download.headers.get("cache-control")).toBe("no-store")
+      const missing = await fetch(
+        httpUrl(server, `${RETAINED_CONTENT_PATH}/${id}/${digest}/missing-input`),
+        { headers: { Authorization: `Bearer ${token}` } },
+      )
+      expect(missing.status).toBe(404)
+      expect(await missing.json()).toMatchObject({ code: "not_found" })
+      const otherSession = await createSession(client)
+      expect(
+        (await fetch(
+          httpUrl(server, `${RETAINED_CONTENT_PATH}/${otherSession}/${digest}/${sent.result.inputId}`),
+          { headers: { Authorization: `Bearer ${token}` } },
+        )).status,
+      ).toBe(404)
       const committed = view.events.find((event) => event.event.type === "MODEL_CALL_COMMITTED")!.event
       const rendered = { manifestId: committed.inputBoundaryId, contentId: "rendered-provider-input" }
       execute(
@@ -179,6 +266,77 @@ describe("sessions", () => {
       expect(
         (await client.request("content.get", { sessionId: other, contentId: rendered.contentId, referenceId: rendered.manifestId })).error.code,
       ).toBe(-32004)
+      const store = new Database(server.databasePath)
+      try {
+        store.run("PRAGMA foreign_keys = OFF")
+        store.query("DELETE FROM contents WHERE sha256 = ?").run(rendered.contentId)
+      } finally {
+        store.close()
+      }
+      const unavailable = await fetch(
+        httpUrl(server, `${RETAINED_CONTENT_PATH}/${id}/${rendered.contentId}/${rendered.manifestId}`),
+        { headers: { Authorization: `Bearer ${token}` } },
+      )
+      expect(unavailable.status).toBe(409)
+      expect(await unavailable.json()).toMatchObject({ code: "representation_unavailable" })
+    })
+  })
+
+  test("retained originals download as attachments under normal, unknown, and active-looking MIME types", async () => {
+    await withServer(async (server, token) => {
+      const client = await connect(server.url, token)
+      const inputs = [
+        { name: "notes.txt", mediaType: "text/plain", body: "plain text" },
+        { name: "opaque.bin", mediaType: "application/x-unknown", body: "unknown bytes" },
+        { name: "active.html", mediaType: "text/html", body: "<script>alert(1)</script>" },
+      ]
+      const refs = []
+      for (const input of inputs) {
+        const bytes = Buffer.from(input.body)
+        const digest = new Bun.CryptoHasher("sha256").update(bytes).digest("hex")
+        const created = await client.request("upload.create", {
+          draftId: "security",
+          name: input.name,
+          mediaType: input.mediaType,
+          size: bytes.byteLength,
+        })
+        await client.request("upload.append", {
+          uploadId: created.result.upload.uploadId,
+          offset: 0,
+          data: bytes.toString("base64"),
+        })
+        await client.request("upload.finalize", { uploadId: created.result.upload.uploadId, size: bytes.byteLength, digest })
+        const db = new Database(server.databasePath, { readonly: true })
+        try {
+          const attachmentId = db
+            .query<{ attachment_id: string }, [string]>("SELECT attachment_id FROM uploads WHERE upload_id = ?")
+            .get(created.result.upload.uploadId)!.attachment_id
+          refs.push({ attachmentId, contentId: digest, representationId: digest, name: input.name, mediaType: input.mediaType, digest })
+        } finally {
+          db.close()
+        }
+      }
+      const id = await createSession(client)
+      const sent = await client.request("session.input", {
+        sessionId: id,
+        text: "download all",
+        attachments: refs,
+      })
+      expect(sent.error).toBeUndefined()
+      server.script.release("download all")
+      const view = await SessionView.open(server.url, token, id)
+      await view.waitFor("the attached turn", (value) => finishedRuns(value) === 1)
+      for (const ref of refs) {
+        const response = await fetch(
+          httpUrl(server, `${RETAINED_CONTENT_PATH}/${id}/${ref.contentId}/${sent.result.inputId}`),
+          { headers: { Authorization: `Bearer ${token}` } },
+        )
+        expect(response.status).toBe(200)
+        expect(response.headers.get("content-type")).toBe(ref.mediaType)
+        expect(response.headers.get("content-disposition")).toBe(`attachment; filename="${ref.name}"`)
+        expect(response.headers.get("x-content-type-options")).toBe("nosniff")
+        expect(response.headers.get("content-security-policy")).toBe("default-src 'none'; sandbox")
+      }
     })
   })
 
@@ -255,6 +413,57 @@ describe("sessions", () => {
           { id: "test/second", name: "test/second", contextLimit: 300_000, imageInput: true, pdfInput: false, reasoningEfforts: [], reasoningEffort: null },
         ],
         defaultModel: "test/first",
+      })
+    })
+  })
+
+  test("creation preserves an explicitly unconfigured model and admits input to a failed turn", async () => {
+    await withServer(async (server, token) => {
+      const client = await connect(server.url, token)
+      const created = await client.request("session.create", {
+        selection: { modelSettings: { modelId: null } },
+      })
+      expect(created.result.session).toMatchObject({
+        identity: { agentTitle: "untitled", modelId: null },
+        selection: { modelSettings: { modelId: null, reasoningEffort: null } },
+      })
+      const id = created.result.session.id
+      const view = await SessionView.open(server.url, token, id)
+      await client.request("session.input", { sessionId: id, text: "not runnable" })
+      await view.waitFor("the configuration failure", (v) => {
+        return v.events.some(
+          (event) => event.event.type === "RUN_ERROR" && event.event.code === "model_unavailable",
+        )
+      })
+      expect(view.events.find((event) => event.event.type === "RUN_STARTED")!.event).toMatchObject({
+        selection: { modelSettings: { modelId: null } },
+      })
+      expect((await client.request("session.list")).result.sessions[0].identity.modelId).toBeNull()
+    })
+  })
+
+  test("Untitled is always listed and can be explicitly selected without named titles", async () => {
+    await withServer(async (server, token) => {
+      const client = await connect(server.url, token)
+      expect((await client.request("agents.list")).result).toEqual({
+        agents: [
+          {
+            key: "untitled",
+            title: "Untitled",
+            description: null,
+            model: models[0]!.id,
+            reasoningEfforts: {},
+            titleFile: { state: "absent" },
+          },
+        ],
+        defaultAgent: null,
+      })
+      const created = await client.request("session.create", {
+        selection: { agentTitle: "untitled" },
+      })
+      expect(created.result.session).toMatchObject({
+        identity: { agentTitle: "untitled", modelId: models[0]!.id },
+        selection: { agentTitle: "untitled", modelSettings: { modelId: models[0]!.id, reasoningEffort: null } },
       })
     })
   })
@@ -574,6 +783,38 @@ describe("fork and rewind", () => {
     }
     return { control, id, view }
   }
+
+  test("rewind submits its optional selection with the reconstructed input", async () => {
+    await withServer(async (server, token) => {
+      const control = await connect(server.url, token)
+      const id = await createSession(control)
+      const view = await SessionView.open(server.url, token, id)
+      await control.request("session.input", { sessionId: id, text: "first" })
+      server.script.release("first")
+      await view.waitFor("the first turn", (v) => finishedRuns(v) === 1)
+      await control.request("session.input", {
+        sessionId: id,
+        text: "second",
+        selection: { modelSettings: { modelId: models[1]!.id } },
+      })
+      server.script.release("second")
+      await view.waitFor("the second turn", (v) => finishedRuns(v) === 2)
+      const second = view.events.filter((event) => event.event.type === "RUN_STARTED").at(-1)!.event.runId
+      expect((await control.request("session.rewind", {
+        sessionId: id,
+        runId: second,
+        text: "rewound",
+        selection: { modelSettings: { modelId: models[0]!.id } },
+      })).error).toBeUndefined()
+      await view.waitFor("the rewound selection", (v) => {
+        const start = v.events.filter((event) => event.event.type === "RUN_STARTED").at(-1)
+        return start?.event.selection.modelSettings.modelId === models[0]!.id
+      })
+      server.script.release("rewound")
+      await view.waitFor("the rewound turn", (v) => finishedRuns(v) === 1)
+      expect((await control.request("session.list")).result.sessions[0].selection.modelSettings.modelId).toBe(models[0]!.id)
+    })
+  })
 
   test("fork copies through a settled user turn while the source runs, and active rewind replaces the running tail", async () => {
     await withServer(async (server, token) => {

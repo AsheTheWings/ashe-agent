@@ -68,10 +68,10 @@ export const sessionHandlers = (hub: SessionHub) => {
     "session.create": async (params) => ({
       session: hub.create({
         ...(params.selection?.agentTitle === undefined ? {} : { agent: params.selection.agentTitle }),
-        ...(params.selection?.modelSettings?.modelId == null
+        ...(params.selection?.modelSettings?.modelId === undefined
           ? {}
           : { model: params.selection.modelSettings.modelId }),
-        ...(params.selection?.modelSettings?.reasoningEffort == null
+        ...(params.selection?.modelSettings?.reasoningEffort === undefined
           ? {}
           : { reasoningEffort: params.selection.modelSettings.reasoningEffort }),
       }),
@@ -136,7 +136,9 @@ export const sessionHandlers = (hub: SessionHub) => {
     },
     "session.fork": async (params) => ({ session: hub.fork(params.sessionId, params.runId) }),
     "session.rewind": async (params, context) => {
-      await hub.rewind(params.sessionId, params.runId, params.text, context.principal)
+      await hub.rewind(params.sessionId, params.runId, params.text, context.principal, {
+        ...(params.selection === undefined ? {} : { selection: params.selection }),
+      })
       return {}
     },
   }

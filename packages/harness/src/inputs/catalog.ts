@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { UNTITLED_AGENT_TITLE } from "@ashe-agent/protocol"
 import {
   AbsolutePath,
   Agents,
@@ -272,7 +273,7 @@ export const catalog = {
     defaults: both((dirs) => `${dirs.configHome}/ashe-agent/AGENTS.md`),
   }),
   agents: configuration({
-    description: "Agents by title, each with an optional starting model, per-model setting overrides, and permission rules.",
+    description: "Agents by title, each with an optional starting model, per-model setting overrides, and permission rules; the key untitled is reserved.",
     env: "ASHE_AGENT_AGENTS",
     codec: "json",
     schema: Agents,
@@ -280,10 +281,16 @@ export const catalog = {
     defaults: both(() => ({})),
   }),
   defaultAgent: configuration({
-    description: "Optional title of the agent sessions created without one run as.",
+    description: "Optional title of the agent sessions created without one run as; the synthetic untitled title is not configurable.",
     env: "ASHE_AGENT_DEFAULT_AGENT",
     codec: "string",
-    schema: Schema.NullOr(Schema.NonEmptyString),
+    schema: Schema.NullOr(
+      Schema.NonEmptyString.check(
+        Schema.makeFilter((value: string) =>
+          value === UNTITLED_AGENT_TITLE ? "must not be the reserved untitled title" : true,
+        ),
+      ),
+    ),
     processes: serve,
     defaults: both(() => null),
   }),

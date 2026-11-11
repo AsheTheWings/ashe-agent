@@ -80,6 +80,13 @@ describe("providers and model ids", () => {
     expect(problems({ providers: { main: { ...config().providers.main, models: {} } } })).toEqual(["ASHE_AGENT_PROVIDERS: must register at least one model"])
   })
 
+  test("the synthetic untitled title is reserved from agent configuration", () => {
+    expect(problems({ agents: { untitled: {} } }).join("\n")).toContain(
+      'the key "untitled" must be a title',
+    )
+    expect(problems({ defaultAgent: "untitled" }).join("\n")).toContain("must not be the reserved untitled title")
+  })
+
   test("a model entry and an agent override refuse any other field", () => {
     expect(problems({ providers: { main: { ...config().providers.main, models: { thinker: { ...reasoning, cost: 1 } } } } })).toHaveLength(1)
     expect(problems({ agents: { helper: { models: { "main/thinker": { limit: { context: 1 } } } } } })).toHaveLength(1)
@@ -111,9 +118,9 @@ describe("settings and capabilities", () => {
     expect(problems(withSampler(-0.1))).toHaveLength(1)
   })
 
-  test("the reasoning effort resolves from the turn's selection to the agent's override to the model entry", () => {
+  test("the reasoning effort resolves from the turn's selection to the model entry", () => {
     expect(callSettings(thinker, { reasoningEffort: "high" }, "low").reasoning).toEqual({ effort: "low", summary: "auto" })
-    expect(callSettings(thinker, { reasoningEffort: "high" }, null).reasoning).toEqual({ effort: "high", summary: "auto" })
+    expect(callSettings(thinker, { reasoningEffort: "high" }, null).reasoning).toEqual({ effort: "medium", summary: "auto" })
     expect(callSettings(thinker, undefined, null).reasoning).toEqual({ effort: "medium", summary: "auto" })
     // A selection the model no longer lists falls through to the next source.
     expect(callSettings(thinker, undefined, "extreme").reasoning).toEqual({ effort: "medium", summary: "auto" })

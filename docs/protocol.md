@@ -58,8 +58,10 @@ the next section explains, and then sends any of these:
   `agents.list` gives each agent with its title file's state and the
   default agent, as [agents and skills](agents-and-skills.md) explains.
 - `session.list` gives every session's summary, and `session.create`
-  starts one, optionally with a model from `models.list`, an agent, and a
-  reasoning effort the model lists.
+  starts one from an optional selection. An omitted model applies the
+  title and configured defaults; an explicit `modelId: null` keeps the
+  session durably unconfigured. An explicit `reasoningEffort: null`
+  requests the model's default effort.
 - `session.subscribe` streams a session's events, as
   [session events](#session-events) explains, and `session.unsubscribe`
   stops them.
@@ -69,9 +71,9 @@ the next section explains, and then sends any of these:
   turn.
 - `session.resume` starts a continuation on an idle session. It is refused
   while execution or a context workflow is active.
-- `session.setModel` switches the session's selected model and reasoning
-  effort, which the next turn uses; without an effort, the selection is
-  cleared. The `MODEL_CHANGED` event records it.
+- Selection changes for an existing session travel with `session.input`
+  or `session.rewind`; there is no picker-only mutation RPC. A change
+  applies at the next UserTurn boundary.
 - `actions.list` gives each registered action's name, description, and
   argument and result JSON schemas. `client.setActions` replaces the
   authenticated connection's advertised support with a list of declared
@@ -83,7 +85,27 @@ the next section explains, and then sends any of these:
 - `session.fork` copies a settled prefix through the fork point `runId`,
   or the latest settled point, into an idle session. `session.rewind`
   removes the rewind point `runId` and every later turn, then reruns its
-  user messages or the given `text`.
+  user messages or the given `text`; an optional `selection` applies with
+  that reconstructed input.
+- `session.grants.list` returns persisted always-approval rules for a
+  session across title scopes, and `session.grants.clear` removes one
+  title's rules.
+
+`GET /v1/auth/identity` accepts an access or API credential in an
+`Authorization: Bearer` header. It returns
+`{ principal, credentialExpiresAt }`; an access token reports its actual
+expiry and an API token reports null. Responses use `Cache-Control:
+no-store`, accept no token in the URL, and enforce the configured browser
+origins.
+
+`GET /v1/content/<sessionId>/<contentId>/<referenceId>` returns one
+retained original after the same bearer validation. A missing identity
+returns 404 and an unavailable representation returns 409. Successful
+originals always use `Content-Disposition: attachment`,
+`X-Content-Type-Options: nosniff`, and
+`Content-Security-Policy: default-src 'none'; sandbox`, including unknown
+and active-looking MIME types. Browser access follows the configured
+origin policy and is never cached.
 
 [Sessions](sessions.md) explains turns, input, fork, and rewind in full.
 
@@ -141,7 +163,6 @@ cover what AG-UI does not:
 | `QUESTIONS_ASKED` | A `context_ask_question` call's question set, with its id, the tool call, the questions, and `feedback` on the session's previous set. |
 | `QUESTIONS_ANSWERED` | The first answer to a question set, with its sender. |
 | `RUN_INTERRUPTED` | A run the server was still running when it stopped. |
-| `MODEL_CHANGED` | A new selected model and reasoning effort, null for the model's default, used from the next run. |
 | `SESSION_REWOUND` | A rewind removed every event from `firstRemovedSeq` on. |
 | `TOOL_EXECUTION_STARTED` | The server started running a tool call. |
 | `PROGRAM_CALL_FINISHED` | A tool call made by the code mode program of an `execute` call ended. |

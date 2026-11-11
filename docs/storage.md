@@ -63,11 +63,14 @@ another session is not found.
 A rewind deletes the removed turns' rows, and the foreign keys delete
 every row they own with them, so the conversation is again what the kept
 turns and creation made: a removed context turn's checkpoint window,
-clearings, trims, compaction texts, model calls, manifests, and attachment
-claims go, so the kept results are uncleared and each compaction entry has
-its earlier text again. Applied settings revisions remain while the
-session or a surviving turn references them. A fork copies the rows that no
-turn owns and those owned by its settled prefix, excluding rows created by
+clearings, trims, compaction texts, model calls, and manifests go, so the
+kept results are uncleared and each compaction entry has its earlier text
+again. Original user attachments come from their retained identities, and
+the same transaction claims them for the reconstructed input before old
+references go, leaving no staging-expiry or restart gap. Applied settings
+revisions remain while the session or a surviving turn references them.
+A fork copies the rows that no turn owns and those owned by its settled prefix,
+excluding rows created by
 the next UserTurn and later work, and preserves inherited authorship while
 sharing immutable content. A context workflow's durable state follows its
 participating turns without making a later window or auxiliary result part

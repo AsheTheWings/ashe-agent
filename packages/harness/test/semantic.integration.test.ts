@@ -419,6 +419,74 @@ describe("retained attachments and uploads", () => {
       await h.cleanup()
     }
   })
+
+  test("rewind edits user text without losing retained attachments through restart reconstruction", async () => {
+    let clock = Date.now()
+    const h = new AgentHarness({ now: () => clock })
+    try {
+      const id = h.create()
+      const uploads = new AttachmentStore(h.db, limits)
+      const now = clock
+      const refs = ["alpha.txt", "beta.txt"].map((name, index) => {
+        const bytes = Buffer.from(index === 0 ? "a" : "b")
+        const sha = new Bun.CryptoHasher("sha256").update(bytes).digest("hex")
+        const created = uploads.create("login:component", "rewind", name, "text/plain", bytes.byteLength, now + index * 10)
+        uploads.append("login:component", created.uploadId, 0, bytes.toString("base64"), now + index * 10 + 1)
+        uploads.finalize("login:component", created.uploadId, bytes.byteLength, sha, now + index * 10 + 2)
+        const attachmentId = h.db
+          .query<{ attachment_id: string }, [string]>("SELECT attachment_id FROM uploads WHERE upload_id = ?")
+          .get(created.uploadId)!.attachment_id
+        return {
+          attachmentId,
+          contentId: sha,
+          representationId: sha,
+          name,
+          mediaType: "text/plain",
+          digest: sha,
+        }
+      })
+      h.model.next(say("first"))
+      h.hub.input(id, "original text", "steer", h.sender, { attachments: refs })
+      await h.turnsEnded(id, 1)
+      const [original] = h.hub.store.turns(id)
+
+      clock += 2_000
+      h.model.next(say("edited"))
+      await h.hub.rewind(id, original!.runId, "edited text", h.sender)
+      await h.turnsEnded(id, 1)
+      const editedTurn = h.hub.store.turns(id).at(-1)!
+      const editedUser = h.hub.store.conversation
+        .turnItems(id, editedTurn.runId)
+        .find((item) => item.kind === "user")
+      expect(editedUser).toMatchObject({
+        text: "edited text",
+        attachments: [{ name: "alpha.txt" }, { name: "beta.txt" }],
+      })
+      expect(
+        h.db
+          .query<{ n: number }, [string, string]>("SELECT count(*) AS n FROM attachment_references WHERE session_id = ? AND reference_id = ?")
+          .get(id, editedTurn.userMessageIds[0]!),
+      ).toEqual({ n: 2 })
+
+      h.model.next(say("again"))
+      await h.hub.rewind(id, editedTurn.runId, undefined, h.sender)
+      await h.turnsEnded(id, 1)
+      await h.restart()
+      const rebuiltTurn = h.hub.store.turns(id).at(-1)!
+      const rebuiltUser = h.hub.store.conversation
+        .turnItems(id, rebuiltTurn.runId)
+        .find((item) => item.kind === "user")
+      expect(rebuiltUser).toMatchObject({
+        text: "edited text",
+        attachments: [{ name: "alpha.txt" }, { name: "beta.txt" }],
+      })
+      for (const ref of refs) {
+        expect(h.hub.store.conversation.contentBytes(ref.contentId)).not.toBeNull()
+      }
+    } finally {
+      await h.cleanup()
+    }
+  })
 })
 
 describe("model request boundaries on real persistence", () => {

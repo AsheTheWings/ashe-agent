@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import type { SessionEvent } from "@ashe-agent/protocol"
-import { AgentHarness, agentModels, failWith, gate, hold, say } from "./support/agent.ts"
+import { implicitAgent } from "../src/agents/agents.ts"
+import type { SessionSetup } from "../src/sessions/hub.ts"
+import { AgentHarness, agentModels, configuredModel, failWith, gate, hold, messageText, say } from "./support/agent.ts"
 import { waitFor } from "./support/cli.ts"
 
 const ofType = <T extends SessionEvent["event"]["type"]>(h: AgentHarness, id: string, type: T) =>
@@ -9,6 +11,101 @@ const ofType = <T extends SessionEvent["event"]["type"]>(h: AgentHarness, id: st
   )
 
 describe("turn admission ownership", () => {
+  test("a session can be created without a model, survives restart, and fails input admission without a provider call", async () => {
+    const h = new AgentHarness()
+    try {
+      const id = h.create({ model: null })
+      expect(h.hub.summary(id).identity.modelId).toBeNull()
+      h.input(id, "not runnable yet")
+      await h.turnsEnded(id, 1)
+      expect(h.hub.store.turns(id)).toMatchObject([{ model: null, status: "failed" }])
+      expect(ofType(h, id, "RUN_ERROR")).toMatchObject([{ code: "model_unavailable" }])
+      expect(h.model.calls).toHaveLength(0)
+      expect(h.hub.store.conversation.waiting(id)).toEqual([])
+
+      await h.restart()
+      expect(h.hub.summary(id)).toMatchObject({ identity: { modelId: null }, activity: "idle" })
+      h.input(id, "still not runnable")
+      await h.turnsEnded(id, 2)
+      expect(h.hub.store.turns(id).at(-1)).toMatchObject({ model: null, status: "failed" })
+      expect(h.model.calls).toHaveLength(0)
+    } finally {
+      await h.cleanup()
+    }
+  })
+
+  test("a removed title keeps its session selection and fails the admitted turn explicitly", async () => {
+    let configured = true
+    const setup: SessionSetup = {
+      resolve: (agent) => {
+        if (agent === "reviewer" && configured) return { ...implicitAgent, key: "reviewer" }
+        if (agent === null) return implicitAgent
+        throw new Error(`no agent ${agent}`)
+      },
+      userInstructions: () => null,
+      catalogs: () => ({ skills: null, codeMode: null }),
+      agents: () => ({
+        agents: configured
+          ? [
+              {
+                key: "reviewer",
+                title: "Reviewer",
+                description: null,
+                model: null,
+                reasoningEfforts: {},
+                titleFile: { state: "absent" },
+              },
+            ]
+          : [],
+        defaultAgent: null,
+      }),
+    }
+    const h = new AgentHarness({ setup })
+    try {
+      const id = h.create({ agent: "reviewer" })
+      h.model.next(say("ok"))
+      h.input(id, "before removal")
+      await h.turnsEnded(id, 1)
+      configured = false
+      await h.restart()
+      const calls = h.model.calls.length
+      h.input(id, "after removal")
+      await h.turnsEnded(id, 2)
+      expect(h.hub.store.turns(id).at(-1)).toMatchObject({
+        agentTitle: "reviewer",
+        model: agentModels[0]!.id,
+        status: "failed",
+      })
+      expect(ofType(h, id, "RUN_ERROR").at(-1)).toMatchObject({ code: "title_unavailable" })
+      expect(h.model.calls).toHaveLength(calls)
+      expect(h.hub.summary(id).selection).toMatchObject({ agentTitle: "reviewer", modelSettings: { modelId: agentModels[0]!.id } })
+    } finally {
+      await h.cleanup()
+    }
+  })
+
+  test("restart preserves the selected model and effort for the next UserTurn", async () => {
+    const thoughtful = configuredModel("test/thoughtful", {
+      efforts: ["low", "high"],
+      settings: { reasoningEffort: "low" },
+    })
+    const h = new AgentHarness({ models: [thoughtful] })
+    try {
+      const id = h.create({ model: thoughtful.id, reasoningEffort: "high" })
+      await h.restart()
+      expect(h.hub.summary(id).selection.modelSettings).toEqual({
+        modelId: thoughtful.id,
+        reasoningEffort: "high",
+      })
+      h.model.next(say("after restart"))
+      h.input(id, "continue")
+      await h.turnsEnded(id, 1)
+      expect(h.model.last()).toMatchObject({ model: thoughtful.id, reasoning: { effort: "high" } })
+    } finally {
+      await h.cleanup()
+    }
+  })
+
   test("steering outranks queued input, and each finite batch becomes one immutable membership", async () => {
     const h = new AgentHarness()
     try {
@@ -59,7 +156,6 @@ describe("turn admission ownership", () => {
       h.model.next(hold(first.promise), hold(second.promise), say("done"))
       h.input(id, "first")
       await h.calls(1)
-      h.hub.setModel(id, beta!.id, undefined, h.sender)
       h.hub.store.setSettings(id, { agentTitle: "writer", modelSettings: { modelId: beta!.id, reasoningEffort: null } })
       expect(h.hub.summary(id)).toMatchObject({
         selection: { agentTitle: "writer", modelSettings: { modelId: beta!.id } },
@@ -118,6 +214,74 @@ describe("turn admission ownership", () => {
     }
   })
 
+  test("an invalid steering turn resumes a valid queued turn after early readiness fails", async () => {
+    const [alpha] = agentModels
+    const h = new AgentHarness()
+    const first = gate()
+    try {
+      const id = h.create({ model: alpha!.id })
+      h.model.next(hold(first.promise), say("queued"))
+      h.input(id, "first")
+      await h.calls(1)
+      h.hub.input(id, "queued", "queue", h.sender, {
+        selection: { modelSettings: { modelId: alpha!.id } },
+      })
+      h.hub.input(id, "invalid", "steer", h.sender, {
+        selection: { modelSettings: { modelId: "test/missing" } },
+      })
+      first.open()
+      await h.turnsEnded(id, 3)
+      expect(ofType(h, id, "RUN_ERROR")).toMatchObject([{ code: "model_unavailable" }])
+      expect(h.model.calls).toHaveLength(2)
+      expect(messageText(h.model.calls[1]!.call.messages.at(-1)!)).toContain("queued")
+      expect(h.hub.store.conversation.waiting(id)).toEqual([])
+      expect(h.hub.summary(id).activity).toBe("idle")
+    } finally {
+      first.open()
+      await h.cleanup()
+    }
+  })
+
+  test("a context settlement failure during early readiness still resumes valid queued input", async () => {
+    const [alpha] = agentModels
+    const h = new AgentHarness()
+    const first = gate()
+    const context = (h.hub as any).context
+    const turnEnded = context.turnEnded
+    let failOnce = true
+    context.turnEnded = (sessionId: string, runId: string, status: string) => {
+      if (status === "failed" && failOnce) {
+        failOnce = false
+        throw new Error("injected settlement failure")
+      }
+      return turnEnded.call(context, sessionId, runId, status)
+    }
+    try {
+      const id = h.create({ model: alpha!.id })
+      h.model.next(hold(first.promise), say("queued"))
+      h.input(id, "first")
+      await h.calls(1)
+      h.hub.input(id, "queued", "queue", h.sender, {
+        selection: { modelSettings: { modelId: alpha!.id } },
+      })
+      h.hub.input(id, "invalid", "steer", h.sender, {
+        selection: { modelSettings: { modelId: "test/missing" } },
+      })
+      first.open()
+      await h.turnsEnded(id, 3)
+      expect(ofType(h, id, "RUN_ERROR")).toMatchObject([{ code: "model_unavailable" }])
+      expect(ofType(h, id, "SESSION_ERROR")).toMatchObject([{ code: "context_workflow_failed" }])
+      expect(h.model.calls).toHaveLength(2)
+      expect(messageText(h.model.calls[1]!.call.messages.at(-1)!)).toContain("queued")
+      expect(h.hub.store.conversation.waiting(id)).toEqual([])
+      expect(h.hub.summary(id).activity).toBe("idle")
+    } finally {
+      context.turnEnded = turnEnded
+      first.open()
+      await h.cleanup()
+    }
+  })
+
   test("a batch applies requested settings in arrival order and admits one turn with the final profile", async () => {
     const [alpha, beta] = agentModels
     const h = new AgentHarness()
@@ -127,8 +291,12 @@ describe("turn admission ownership", () => {
       h.model.next(hold(first.promise), say("batch"))
       h.input(id, "first")
       await h.calls(1)
-      h.hub.input(id, "one", "queue", h.sender, { selection: { modelSettings: { modelId: beta!.id } } })
-      h.hub.input(id, "two", "queue", h.sender, { selection: { modelSettings: { modelId: alpha!.id } } })
+      h.hub.input(id, "one", "queue", h.sender, {
+        selection: { modelSettings: { modelId: beta!.id, reasoningEffort: "unsupported" } },
+      })
+      h.hub.input(id, "two", "queue", h.sender, {
+        selection: { modelSettings: { modelId: alpha!.id, reasoningEffort: null } },
+      })
       first.open()
       await h.turnsEnded(id, 2)
       const turns = h.hub.store.turns(id)
@@ -140,6 +308,27 @@ describe("turn admission ownership", () => {
         .query<{ model_id: string | null }, [string]>("SELECT model_id FROM session_settings WHERE session_id = ? ORDER BY rowid")
         .all(id)
       expect(revisions.map((row) => row.model_id)).toEqual([alpha!.id, beta!.id, alpha!.id])
+
+      h.hub.input(id, "three", "steer", h.sender, {
+        selection: { modelSettings: { modelId: alpha!.id, reasoningEffort: "unsupported" } },
+      })
+      await h.turnsEnded(id, 3)
+      expect(h.hub.store.turns(id).at(-1)).toMatchObject({ model: alpha!.id, status: "failed" })
+      expect(ofType(h, id, "RUN_ERROR").at(-1)).toMatchObject({ code: "reasoning_effort_unavailable" })
+
+      h.hub.input(id, "four", "steer", h.sender, {
+        selection: { agentTitle: "missing-title", modelSettings: { modelId: beta!.id } },
+      })
+      await h.turnsEnded(id, 4)
+      expect(h.hub.store.turns(id).at(-1)).toMatchObject({
+        agentTitle: "missing-title",
+        model: beta!.id,
+        status: "failed",
+      })
+      expect(ofType(h, id, "RUN_ERROR").at(-1)).toMatchObject({ code: "title_unavailable" })
+      expect(h.hub.summary(id)).toMatchObject({
+        selection: { agentTitle: "missing-title", modelSettings: { modelId: beta!.id } },
+      })
     } finally {
       first.open()
       await h.cleanup()

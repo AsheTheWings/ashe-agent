@@ -28,11 +28,13 @@ itself. `~` or `$HOME` at the start of a pattern, alone or before a `/`,
 expands to the server user's home directory. A name mapped straight to an
 action is that action for the pattern `*`.
 
-A call is checked against the global rules, then the rules of the
-session's agent, then the session's grants, all in the order they are
-written, and the last rule matching both its permission name and its
+A call is checked against the global rules, then the rules of the active
+AgentTurn's title, then that session/title's grants, all in the order they
+are written, and the last rule matching both its permission name and its
 subject decides. A call that no rule matches is allowed, so nothing asks
-or is refused until the rules say so.
+or is refused until the rules say so. Configuration is loaded at startup;
+the next UserTurn uses the loaded title policy, while a running AgentTurn
+keeps the policy and grants it started with.
 
 ## Withheld tools
 
@@ -102,8 +104,8 @@ what is offered, and only an actual ask needs an executor.
   pattern the request names, kept with the session. Every other pending
   request of the session that the grants now allow is approved with it.
 - `reject` without a message declines the call. The model's next call
-  sees the declined result, and the turn ends without another model call;
-  the turn's later tool calls get canceled results.
+  sees the declined result, and the AgentTurn settles as cancelled without
+  another model call; the turn's later tool calls get canceled results.
 - `reject` with a message fails the call with the message as its result,
   and the turn goes on.
 
@@ -124,3 +126,6 @@ starts with its source's grants. Grants are stored in the
 `session_grants` table. Owner clients list grants across title scopes with
 `session.grants.list` and clear one title's grants with
 `session.grants.clear`; clearing one branch changes no other branch.
+Each grant is scoped by session and title. Switching to another title uses
+that title's grants, and switching back restores the first title's grants.
+Starting with stricter configuration does not revoke persisted grants.

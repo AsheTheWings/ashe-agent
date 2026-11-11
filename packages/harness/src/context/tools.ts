@@ -6,8 +6,8 @@ import type { AppendInput } from "./entries.ts"
 /** The context tools that no permission rule applies to. */
 export const UNCHECKED_CONTEXT_TOOLS: ReadonlyArray<string> = ["context_append", "context_get_open_items"]
 
-/** The tools a context turn's model calls offer after its first clearing, as far as the session offers them. */
-export const CLEARED_CONTEXT_TOOLS: ReadonlyArray<string> = [
+/** The tools every model call of a context turn offers, as far as the session offers them. */
+export const CONTEXT_TURN_TOOLS: ReadonlyArray<string> = [
   "context_append",
   "context_get_open_items",
   "shell_exec_command",
