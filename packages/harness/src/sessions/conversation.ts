@@ -219,6 +219,18 @@ const representation = (
   transformation: string | null,
 ): RepresentationRef => ({ representationId, contentId, mediaType, digest, transformation })
 
+const representationKind = (
+  mediaType: string,
+  transformation: string | null,
+): RetainedContent["representations"][number]["kind"] => {
+  if (transformation === "pdf-page-image") return "pdf-page"
+  if (transformation !== null && transformation.startsWith("pdf-")) return "converted-text"
+  if (mediaType.startsWith("image/")) return "image"
+  if (mediaType === "application/pdf") return "original"
+  if (mediaType === "text/plain") return "text"
+  return "original"
+}
+
 const semanticEntryFromRow = (row: SemanticRow): SemanticEntry | null => {
   const base = {
     id: row.entry_id,
@@ -1057,27 +1069,26 @@ export class Conversation {
 
   retainedContent(sessionId: string, contentId: string, referenceId: string): RetainedContent | null {
     const attachments = this.db
-      .query<{ id: string; name: string; format: string; mime_type: string; size: number; content_sha256: string }, [string, string]>(
+      .query<{ id: string; name: string; format: string; mime_type: string; size: number; content_sha256: string }, [string, string, string]>(
         `SELECT a.id, u.name, a.format, a.mime_type, a.size, a.content_sha256
           FROM attachment_references r
           JOIN attachments a ON a.id = r.attachment_id
           JOIN uploads u ON u.attachment_id = a.id
-          WHERE r.session_id = ? AND r.reference_id = ?
+          WHERE r.session_id = ? AND (r.reference_id = ? OR a.id = ?)
           ORDER BY r.created_at, a.id`,
       )
-      .all(sessionId, referenceId)
+      .all(sessionId, referenceId, referenceId)
     const entry = this.db
       .query<{ format: string }, [string, string, string]>(
         `SELECT c.format FROM session_entries e JOIN contents c ON c.sha256 = e.content_sha256
           WHERE e.session_id = ? AND e.entry_id = ? AND e.content_sha256 = ?`,
       )
       .get(sessionId, referenceId, contentId)
-    const rendered = this.db
-      .query<{ content_ref: string }, [string, string, string]>(
-        `SELECT content_ref FROM request_manifest_rendered
-          WHERE session_id = ? AND manifest_id = ? AND content_ref = ?`,
+    const manifest = this.db
+      .query<{ manifest_id: string }, [string, string]>(
+        `SELECT manifest_id FROM request_manifests WHERE session_id = ? AND manifest_id = ?`,
       )
-      .get(sessionId, referenceId, contentId)
+      .get(sessionId, referenceId)
     let proof: {
       readonly representationId: string
       readonly mediaType: string
@@ -1117,41 +1128,36 @@ export class Conversation {
         break
       }
     }
+    const toolMedia = this.retainedToolMedia(sessionId, contentId, referenceId)
     if (attachments.length > 0 && proof === null) return null
-    if (attachments.length === 0 && entry === null && rendered === null) return null
+    const manifestContainsContent = manifest !== null && this.manifestContainsContent(sessionId, referenceId, contentId)
+    if (attachments.length === 0 && entry === null && !manifestContainsContent && toolMedia === null) return null
     const content = this.db
       .query<{ format: string; size: number }, [string]>(
         "SELECT format, length(data) AS size FROM contents WHERE sha256 = ?",
       )
       .get(contentId)
-    if (content === null) {
+    if (content === null && toolMedia === null) {
       return { contentId, referenceId, sessionId, available: false, representations: [] }
     }
-    const renderedRepresentation = rendered === null ? null : this.renderedRepresentation(
+    const renderedRepresentation = manifest === null ? null : this.renderedRepresentation(
       sessionId,
       referenceId,
       contentId,
-      content.format,
-      content.size,
+      content?.format ?? toolMedia!.representation.mediaType,
+      content?.size ?? toolMedia!.bytes?.byteLength ?? 0,
     )
-    const format = proof?.mediaType ?? entry?.format ?? content.format
-    const transformation = proof?.transformation ?? renderedRepresentation?.transformation ?? null
-    const metadata = proof?.metadata ?? renderedRepresentation?.metadata ?? {}
+    const format = proof?.mediaType ?? toolMedia?.representation.mediaType ?? entry?.format ?? content!.format
+    const transformation = proof?.transformation
+      ?? toolMedia?.representation.transformation
+      ?? renderedRepresentation?.transformation
+      ?? null
+    const metadata = proof?.metadata ?? toolMedia?.metadata ?? renderedRepresentation?.metadata ?? {}
     const parsedMetadata = (typeof metadata === "string"
       ? JSON.parse(metadata) as Record<string, unknown>
       : metadata) as Record<string, unknown>
     const page = typeof parsedMetadata.page === "number" && parsedMetadata.page >= 1 ? parsedMetadata.page : null
-    const kind = transformation === "pdf-page-image"
-      ? "pdf-page"
-      : transformation !== null && transformation.startsWith("pdf-")
-        ? "converted-text"
-        : format.startsWith("image/")
-          ? "image"
-          : format === "application/pdf"
-            ? "original"
-            : format === "text/plain"
-              ? "text"
-              : "original"
+    const kind = representationKind(format, transformation)
     return {
       contentId,
       referenceId,
@@ -1159,17 +1165,82 @@ export class Conversation {
       available: true,
       representations: [
         {
-          representationId: proof?.representationId ?? renderedRepresentation?.representationId ?? contentId,
+          representationId: proof?.representationId
+            ?? toolMedia?.representation.representationId
+            ?? renderedRepresentation?.representationId
+            ?? contentId,
           kind,
           mediaType: format,
-          digest: contentId,
-          byteLength: content.size,
-          filename: attachment?.name ?? null,
+          digest: toolMedia?.representation.digest ?? contentId,
+          byteLength: content?.size ?? toolMedia!.bytes!.byteLength,
+          filename: attachment?.name ?? toolMedia?.filename ?? null,
           page,
           transformation,
           metadata: parsedMetadata,
         },
       ],
+    }
+  }
+
+  /** Bytes retained by a semantic reference, including a tool media part's stored base64 data. */
+  retainedContentBytes(sessionId: string, contentId: string, referenceId: string): Uint8Array | null {
+    return this.contentBytes(contentId) ?? this.retainedToolMedia(sessionId, contentId, referenceId)?.bytes ?? null
+  }
+
+  private retainedToolMedia(sessionId: string, contentId: string, referenceId: string) {
+    const row = this.db.query<{ data: Uint8Array }, [string, string]>(
+      `SELECT coalesce(rc.data, c.data) AS data
+        FROM session_entries e
+        JOIN contents c ON c.sha256 = e.content_sha256
+        LEFT JOIN agent_tools a ON a.session_id = e.session_id AND a.entry_id = e.entry_id
+        LEFT JOIN contents rc ON rc.sha256 = a.result_ref
+        WHERE e.session_id = ? AND e.entry_id = ? AND e.kind = 'tool'`,
+    ).get(sessionId, referenceId)
+    if (row === null) return null
+    const envelope = JSON.parse(Buffer.from(row.data).toString("utf8")) as { readonly content?: ToolContent }
+    if (typeof envelope.content === "string" || envelope.content === undefined) return null
+    for (const part of envelope.content) {
+      if (part.type === "text") continue
+      const bytes = new Uint8Array(Buffer.from(part.data, "base64"))
+      const digest = new Bun.CryptoHasher("sha256").update(bytes).digest("hex")
+      const synthesized = representation(digest, digest, part.mimeType, digest, null)
+      const retained = part.representation ?? synthesized
+      if (retained.contentId !== contentId) continue
+      const retainedDigest = retained.digest.toLowerCase().replace(/^sha256:/, "")
+      if (this.contentBytes(contentId) === null && retainedDigest !== digest) return null
+      return {
+        representation: retained,
+        bytes,
+        filename: part.type === "pdf" ? part.filename : null,
+        metadata: part.metadata ?? {},
+      }
+    }
+    return null
+  }
+
+  private manifestContainsContent(sessionId: string, manifestId: string, contentId: string): boolean {
+    const body = this.db
+      .query<{ body: Uint8Array }, [string, string]>(
+        `SELECT c.data AS body FROM request_manifests r
+          JOIN contents c ON c.sha256 = r.body_ref
+          WHERE r.session_id = ? AND r.manifest_id = ?`,
+      )
+      .get(sessionId, manifestId)
+    if (body === null) return false
+    try {
+      const request = JSON.parse(Buffer.from(body.body).toString("utf8")) as {
+        readonly providerInput?: { readonly contentId?: string }
+        readonly contributions?: ReadonlyArray<{
+          readonly representation?: { readonly contentId?: string }
+          readonly rendered?: { readonly contentId?: string }
+        }>
+      }
+      return request.providerInput?.contentId === contentId ||
+        (request.contributions ?? []).some((contribution) =>
+          contribution.representation?.contentId === contentId ||
+          contribution.rendered?.contentId === contentId)
+    } catch {
+      return false
     }
   }
 
@@ -1197,6 +1268,7 @@ export class Conversation {
       }
       readonly contributions?: ReadonlyArray<{
         readonly transformation?: string | null
+        readonly representation?: RepresentationRef
         readonly rendered?: {
           readonly contentId?: string
           readonly representationId?: string
@@ -1223,11 +1295,19 @@ export class Conversation {
       }
     }
     for (const contribution of request.contributions ?? []) {
-      if (contribution.rendered?.contentId !== contentId) continue
-      return {
-        representationId: contribution.rendered.representationId ?? contentId,
-        transformation: contribution.transformation ?? null,
-        metadata: { renderer: contribution.rendered.renderer ?? null, byteLength, format },
+      if (contribution.rendered?.contentId === contentId) {
+        return {
+          representationId: contribution.rendered.representationId ?? contentId,
+          transformation: contribution.transformation ?? null,
+          metadata: { renderer: contribution.rendered.renderer ?? null, byteLength, format },
+        }
+      }
+      if (contribution.representation?.contentId === contentId) {
+        return {
+          representationId: contribution.representation.representationId,
+          transformation: contribution.representation.transformation,
+          metadata: { byteLength, format },
+        }
       }
     }
     return null

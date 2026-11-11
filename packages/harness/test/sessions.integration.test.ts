@@ -1,13 +1,15 @@
 import { describe, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
-import { statSync } from "node:fs"
+import { readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { Schema } from "effect"
 import { OWNER_IDENTITY_PATH, RETAINED_CONTENT_PATH, SemanticHistory } from "@ashe-agent/protocol"
 import { agentRunner } from "../src/agent/runner.ts"
+import { builtinTool } from "../src/agent/tools.ts"
 import { createLogin } from "../src/auth/credentials.ts"
 import { tokenHash } from "../src/auth/tokens.ts"
 import { ModelCallError } from "../src/agent/model.ts"
+import { fileReadTool } from "../src/tools/file/read-tool.ts"
 import { Client, waitFor } from "./support/cli.ts"
 import { callTools, failWith, FakeModel, say, testTools } from "./support/agent.ts"
 import { models, SessionView, TestServer } from "./support/server.ts"
@@ -159,6 +161,183 @@ describe("sessions", () => {
     }
   }, 30_000)
 
+  test("semantic attachment and tool media references resolve through owner content access", async () => {
+    const imageBytes = Buffer.from("synthetic image bytes")
+    const fileImage = readFileSync("packages/harness/test/fixtures/documents/red.png")
+    const imageTool = builtinTool({
+      name: "image_result",
+      permission: null,
+      description: "Returns a retained image.",
+      args: Schema.Struct({}),
+      run: async () => ({
+        outcome: "success",
+        content: [{
+          type: "image",
+          path: "image.png",
+          mimeType: "image/png",
+          data: imageBytes.toString("base64"),
+        }],
+      }),
+    })
+    const model = new FakeModel()
+    const mediaModels = [models[1]!]
+    const server = new TestServer({ shell: "deny" }, {
+      models: mediaModels,
+      runner: agentRunner({ port: model, models: mediaModels }),
+      modelPort: model,
+      tools: () => [...testTools(), fileReadTool(), imageTool],
+    })
+    try {
+      const token = server.token("primary")
+      await server.start()
+      let client = await connect(server.url, token)
+      const attachmentBytes = Buffer.from("attachment bytes")
+      const attachmentDigest = new Bun.CryptoHasher("sha256").update(attachmentBytes).digest("hex")
+      const created = await client.request("upload.create", {
+        draftId: "semantic-reference",
+        name: "note.txt",
+        mediaType: "text/plain",
+        size: attachmentBytes.byteLength,
+      })
+      await client.request("upload.append", {
+        uploadId: created.result.upload.uploadId,
+        offset: 0,
+        data: attachmentBytes.toString("base64"),
+      })
+      await client.request("upload.finalize", {
+        uploadId: created.result.upload.uploadId,
+        size: attachmentBytes.byteLength,
+        digest: attachmentDigest,
+      })
+      const uploads = new Database(server.databasePath, { readonly: true })
+      let attachmentId: string
+      try {
+        attachmentId = uploads
+          .query<{ attachment_id: string }, [string]>("SELECT attachment_id FROM uploads WHERE upload_id = ?")
+          .get(created.result.upload.uploadId)!.attachment_id
+      } finally {
+        uploads.close()
+      }
+      const id = await createSession(client)
+      const view = await SessionView.open(server.url, token, id)
+      model.next(
+        callTools([
+          { name: "file_read", args: { path: join(process.cwd(), "packages/harness/test/fixtures/documents/red.png") } },
+          { name: "image_result", args: {} },
+        ]),
+        say("finished"),
+      )
+      await client.request("session.input", {
+        sessionId: id,
+        text: "retain these references",
+        attachments: [{
+          attachmentId,
+          contentId: attachmentDigest,
+          representationId: attachmentDigest,
+          name: "note.txt",
+          mediaType: "text/plain",
+          digest: attachmentDigest,
+        }],
+      })
+      await view.waitFor("the media turn", (value) => finishedRuns(value) === 1)
+      const semantics = await client.request("session.semantics", { sessionId: id })
+      expect(semantics.error).toBeUndefined()
+      const user = semantics.result.entries.find((entry: any) => entry.kind === "user")
+      const attachment = user.parts.find((part: any) => part.kind === "attachment")
+      const tools = semantics.result.entries.filter((entry: any) => entry.kind === "agent-tool")
+      const fileTool = tools.find((entry: any) => entry.tool.name === "file_read")
+      const imageResultTool = tools.find((entry: any) => entry.tool.name === "image_result")
+      const fileMedia = fileTool.tool.result.content.find((part: any) => part.kind === "media")
+      const imageMedia = imageResultTool.tool.result.content.find((part: any) => part.kind === "media")
+      expect(attachment.content.contentId).toBe(attachmentDigest)
+      expect(fileMedia.content.representationId).toStartWith("image:")
+      expect(imageMedia.content.contentId).toBe(new Bun.CryptoHasher("sha256").update(imageBytes).digest("hex"))
+      const runId = runIds(view)[0]!
+      const forkId = (await client.request("session.fork", { sessionId: id, runId })).result.session.id as string
+
+      const readReference = async (
+        sessionId: string,
+        contentId: string,
+        referenceId: string,
+        expected: Buffer,
+        representationId = contentId,
+      ) => {
+        const result = await client.request("content.get", { sessionId, contentId, referenceId })
+        expect(result.error).toBeUndefined()
+        expect(result.result.content.available).toBe(true)
+        expect(result.result.content.representations[0].representationId).toBe(representationId)
+        const response = await fetch(httpUrl(server, `${RETAINED_CONTENT_PATH}/${sessionId}/${contentId}/${referenceId}`), {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        expect(response.status).toBe(200)
+        expect(Buffer.from(await response.arrayBuffer()).toString()).toBe(expected.toString())
+      }
+
+      await readReference(id, attachment.content.contentId, attachment.attachmentId, attachmentBytes)
+      await readReference(
+        id,
+        fileMedia.content.contentId,
+        fileTool.id,
+        fileImage,
+        fileMedia.content.representationId,
+      )
+      await readReference(id, imageMedia.content.contentId, imageResultTool.id, imageBytes)
+      const contributionReferences = semantics.result.boundaries.flatMap((boundary: any) =>
+        boundary.contributions
+          .filter((contribution: any) => contribution.representation !== undefined)
+          .map((contribution: any) => ({ boundary: boundary.id, representation: contribution.representation })),
+      )
+      expect(contributionReferences.length).toBeGreaterThan(0)
+      for (const reference of contributionReferences) {
+        const result = await client.request("content.get", {
+          sessionId: id,
+          contentId: reference.representation.contentId,
+          referenceId: reference.boundary,
+        })
+        expect(result.error).toBeUndefined()
+        expect(result.result.content.available).toBe(true)
+      }
+      const unrelatedContent = "f".repeat(64)
+      execute(
+        server,
+        `INSERT INTO contents (sha256, data, format) VALUES ('${unrelatedContent}', cast('outside manifest' AS BLOB), 'text/plain')`,
+      )
+      const manifestId = semantics.result.boundaries[0].id
+      expect((await client.request("content.get", {
+        sessionId: id,
+        contentId: unrelatedContent,
+        referenceId: manifestId,
+      })).error.code).toBe(-32004)
+      expect((await fetch(
+        httpUrl(server, `${RETAINED_CONTENT_PATH}/${id}/${unrelatedContent}/${manifestId}`),
+        { headers: { Authorization: `Bearer ${token}` } },
+      )).status).toBe(404)
+      const otherSession = await createSession(client)
+      expect((await client.request("content.get", {
+        sessionId: otherSession,
+        contentId: attachmentDigest,
+        referenceId: manifestId,
+      })).error.code).toBe(-32004)
+      expect((await fetch(
+        httpUrl(server, `${RETAINED_CONTENT_PATH}/${otherSession}/${attachmentDigest}/${manifestId}`),
+        { headers: { Authorization: `Bearer ${token}` } },
+      )).status).toBe(404)
+      await server.restart()
+      client = await connect(server.url, token)
+      await readReference(forkId, attachment.content.contentId, attachment.attachmentId, attachmentBytes)
+      await readReference(
+        forkId,
+        fileMedia.content.contentId,
+        fileTool.id,
+        fileImage,
+        fileMedia.content.representationId,
+      )
+      await readReference(forkId, imageMedia.content.contentId, imageResultTool.id, imageBytes)
+    } finally {
+      await server.cleanup()
+    }
+  }, 30_000)
+
   test("identity uses bearer validation, reports actual expiry, revocations, origins, and no-store caching", async () => {
     await withServer(async (server, token) => {
       const allowed = { Origin: "http://allowed.test" }
@@ -304,10 +483,25 @@ describe("sessions", () => {
         )).status,
       ).toBe(404)
       const committed = view.events.find((event) => event.event.type === "MODEL_CALL_COMMITTED")!.event
-      const rendered = { manifestId: committed.inputBoundaryId, contentId: "rendered-provider-input" }
+      const rendered = {
+        manifestId: committed.inputBoundaryId,
+        contentId: "rendered-provider-input",
+        bodyId: "rendered-request-body",
+      }
+      const renderedBody = JSON.stringify({
+        providerInput: {
+          contentId: rendered.contentId,
+          representationId: rendered.contentId,
+          renderer: "ashe-agent/provider-message@1",
+          messageCount: 1,
+        },
+        contributions: [],
+      })
       execute(
         server,
-        `INSERT INTO contents (sha256, data, format) VALUES ('${rendered.contentId}', cast('<user>\nhello\n</user>' AS BLOB), 'text/plain')`,
+        `INSERT INTO contents (sha256, data, format) VALUES
+          ('${rendered.contentId}', cast('<user>hello</user>' AS BLOB), 'text/plain'),
+          ('${rendered.bodyId}', cast('${renderedBody}' AS BLOB), 'application/json')`,
       )
       execute(
         server,
@@ -318,7 +512,7 @@ describe("sessions", () => {
       execute(
         server,
         `INSERT INTO request_manifests (session_id, manifest_id, model_call_id, body_ref, created_at)
-          VALUES ('${id}', '${rendered.manifestId}', '${committed.modelCallId}', '${rendered.contentId}', 1)`,
+          VALUES ('${id}', '${rendered.manifestId}', '${committed.modelCallId}', '${rendered.bodyId}', 1)`,
       )
       execute(
         server,
@@ -335,7 +529,11 @@ describe("sessions", () => {
         contentId: rendered.contentId,
         referenceId: rendered.manifestId,
         available: true,
-        representations: [{ mediaType: "text/plain" }],
+        representations: [{
+          mediaType: "text/plain",
+          transformation: "provider-message",
+          metadata: { renderer: "ashe-agent/provider-message@1" },
+        }],
       })
       const other = await createSession(client)
       expect(

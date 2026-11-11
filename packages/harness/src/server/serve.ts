@@ -39,7 +39,7 @@ export class ProtocolServer extends Context.Service<ProtocolServer, WebSocketSer
                 if (!content.available || representation === undefined) {
                   return { status: "unavailable", message: `retained content ${contentId} has no representation` }
                 }
-                const bytes = hub.store.conversation.contentBytes(contentId)
+                const bytes = hub.store.conversation.retainedContentBytes(sessionId, contentId, referenceId)
                 if (bytes === null) {
                   return { status: "unavailable", message: `retained content ${contentId} has no bytes` }
                 }

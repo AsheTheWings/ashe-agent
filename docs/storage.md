@@ -66,8 +66,9 @@ compatibility.
 Unclaimed staging expires from its creation time; a claimed original stays
 while its input, retained history, request manifest, or fork references it.
 Owner clients resolve retained content through `content.get` by session,
-content, and attachment, entry, or manifest reference; a reference from
-another session is not found. The result reports availability and every
+content, and attachment id, input id, entry id, or manifest id; a
+reference from another session is not found. Tool media resolves through
+its semantic entry and retained part bytes. The result reports availability and every
 representation's kind, media type, digest, byte length, optional filename,
 source page, transformation, and bounded renderer metadata alongside its
 bytes. Attachment references resolve their original and derived
