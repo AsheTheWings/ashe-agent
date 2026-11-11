@@ -11,6 +11,17 @@ states how far that reach goes and what limits it.
   again; the check of the command that started the process covers it.
 - `web_search` sends its queries, and `web_fetch` the URLs it fetches, to
   Exa.
+- PDF rendering and text extraction run locally in a separate worker under
+  data, stack, CPU, wall, input, and output limits. The server passes it only
+  the bytes selected for conversion; no PDF content is sent to a conversion
+  service, and OCR is not performed. A worker failure fails the current
+  projection without an in-process fallback.
+- Upload staging and attachment originals stay on this host. A model call
+  sends only the representation selected for that model: a sanitized native
+  PDF, page images and text, or extractable text.
+- Retained tool output and derived attachment representations are readable by
+  the server's user and by processes with that user's rights; their modes do
+  not protect them from those processes.
 - `context_append` and `context_get_open_items` are never
   permission-checked; they only record and read the session's timeline
   entries. The user's answers to `context_ask_question` are recorded as

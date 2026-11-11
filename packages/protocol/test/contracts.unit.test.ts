@@ -105,6 +105,7 @@ describe("owned semantic content", () => {
     const measurement = {
       method: "ashe-agent-estimator",
       methodVersion: 1,
+      purpose: "execution",
       coverage: "partial",
       knownSubtotal: 1_000,
       contributions: [

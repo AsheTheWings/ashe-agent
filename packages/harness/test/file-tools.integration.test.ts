@@ -5,7 +5,7 @@ import type { SessionEvent } from "@ashe-agent/protocol"
 import { systemToolClock, type Tool, type ToolRun } from "../src/agent/tools.ts"
 import { fileTools } from "../src/tools/file/index.ts"
 import { waitFor } from "./support/cli.ts"
-import { AgentHarness, agentModels, callTools, messageText, responsesInput, say } from "./support/agent.ts"
+import { AgentHarness, agentModels, callTools, configuredModel, messageText, responsesInput, say } from "./support/agent.ts"
 
 const fixtures = join(import.meta.dir, "fixtures/documents")
 const [alpha, beta] = [agentModels[0]!.id, agentModels[1]!.id]
@@ -27,14 +27,33 @@ const withHarness = async (options: ConstructorParameters<typeof AgentHarness>[0
 const ofType = (events: ReadonlyArray<SessionEvent>, type: string) =>
   (events.map((event) => event.event) as Array<any>).filter((event) => event.type === type)
 
+const upload = (h: AgentHarness, name: string, bytes: Uint8Array) => {
+  const digest = new Bun.CryptoHasher("sha256").update(bytes).digest("hex")
+  const made = h.hub.attachments.create("login:component", name, name, "application/pdf", bytes.byteLength, Date.now())
+  h.hub.attachments.append("login:component", made.uploadId, 0, Buffer.from(bytes).toString("base64"), Date.now())
+  h.hub.attachments.finalize("login:component", made.uploadId, bytes.byteLength, digest, Date.now())
+  const attachmentId = h.hub.store.db.query<{ attachment_id: string }, [string]>(
+    "SELECT attachment_id FROM uploads WHERE owner_id = 'login:component' AND upload_id = ?",
+  ).get(made.uploadId)!.attachment_id
+  return { attachmentId, contentId: digest, representationId: digest, name, mediaType: "application/pdf", digest }
+}
+
 /** Calls a file tool directly, as a turn would, with every call allowed. */
-const call = (tool: Tool, cwd: string, args: unknown, imageInput = false, authorize: ToolRun["authorize"] = async () => {}) => {
+const call = (
+  tool: Tool,
+  cwd: string,
+  args: unknown,
+  imageInput = false,
+  authorize: ToolRun["authorize"] = async () => {},
+  pdfInput = false,
+) => {
   const run: ToolRun = {
     sessionId: "s",
     runId: "r",
     toolCallId: crypto.randomUUID(),
     cwd,
     imageInput,
+    pdfInput,
     signal: new AbortController().signal,
     authorize,
     started: () => {},
@@ -51,11 +70,11 @@ const call = (tool: Tool, cwd: string, args: unknown, imageInput = false, author
 const tool = (name: string) => fileTools().find((candidate) => candidate.spec.name === name)!
 
 describe("file_read documents", () => {
-  test("docx, xlsx, csv, and text-layer PDF convert to Markdown and page like text", async () => {
+  test("docx, xlsx, and csv convert to Markdown and page like text", async () => {
     await withHarness({}, async (h) => {
       const read = tool("file_read")
       const docx = await call(read, h.dir, { path: "report.docx", limit: 3 })
-      expect(docx.outcome).toBe("success")
+      expect(docx).toMatchObject({ outcome: "success" })
       expect(docx.content).toStartWith("     1\tFixture Title\n     2\t\n     3\tParagraph 1 of the fixture document.\n")
       expect(docx.content).toMatch(/\[Stopped at 3 lines: lines 1-3 of \d+; continue from offset 4\.\]$/)
       expect((await call(read, h.dir, { path: "report.docx", offset: 4, limit: 2 })).content).toStartWith("     4\t\n     5\tParagraph 2 of")
@@ -63,26 +82,24 @@ describe("file_read documents", () => {
       expect((await call(read, h.dir, { path: join(h.dir, "prices.csv") })).content).toBe(
         "     1\t| item | price |\n     2\t| --- | --- |\n     3\t| tea | 4 |\n     4\t| coffee | 5 |",
       )
-      const pdf = await call(read, h.dir, { path: "orchard.pdf", limit: 1 })
-      expect(pdf.content).toStartWith("     1\t# Orchard report\n[Stopped at 1 lines")
-      expect((await call(read, h.dir, { path: "orchard.pdf", offset: -1 })).content).toContain("Paragraph 24.")
     })
   })
 
-  test("an image-only PDF reports needsOcr with its pages, inline in a read of several files", async () => {
+  test("a PDF without configured conversion fails explicitly, inline in a read of several files", async () => {
     await withHarness({}, async (h) => {
       const read = tool("file_read")
       const scan = await call(read, h.dir, { path: "scan.pdf" })
       expect(scan).toEqual({
         outcome: "failed",
-        content: "scan.pdf could not be converted from pdf to Markdown (needsOcr: pages 1 of 1 are scanned or image-only and need OCR, which file_read does not do.)",
+        content: "scan.pdf is a PDF, but local PDF conversion is unavailable.",
+        alreadyBounded: true,
       })
       const several = await call(read, h.dir, { path: ["scan.pdf", "*.csv"] })
       expect(several.outcome).toBe("success")
       expect(several.content).toBe(
         [
           "==> scan.pdf <==",
-          "scan.pdf could not be converted from pdf to Markdown (needsOcr: pages 1 of 1 are scanned or image-only and need OCR, which file_read does not do.)",
+          "scan.pdf is a PDF, but local PDF conversion is unavailable.",
           "==> prices.csv <==",
           "     1\t| item | price |\n     2\t| --- | --- |\n     3\t| tea | 4 |\n     4\t| coffee | 5 |",
         ].join("\n"),
@@ -90,10 +107,67 @@ describe("file_read documents", () => {
     })
   })
 
+  test("a native PDF read needs no converter and sanitizes its provider filename", async () => {
+    await withHarness({}, async (h) => {
+      writeFileSync(join(h.dir, "my report;.pdf"), readFileSync(join(fixtures, "orchard.pdf")))
+      const read = await call(tool("file_read"), h.dir, { path: "my report;.pdf" }, false, undefined, true)
+      expect(read.outcome).toBe("success")
+      expect(read.content).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: "pdf",
+          filename: "my_report_.pdf",
+          mimeType: "application/pdf",
+        }),
+      ]))
+    })
+  })
+
+  test("a native retained attachment read needs no converter", async () => {
+    const h = new AgentHarness({
+      models: [configuredModel("test/native", { pdfInput: true })],
+      tools: fileTools(),
+    })
+    try {
+      const ref = upload(h, "retained.pdf", readFileSync(join(fixtures, "orchard.pdf")))
+      const session = h.create()
+      h.model.next(callTools([{ name: "file_read", args: { attachmentId: ref.attachmentId } }]), say("native"))
+      h.hub.input(session, "read", "steer", h.sender, { attachments: [ref] })
+      await h.turnsEnded(session, 1, 60_000)
+      const messages = JSON.stringify(h.model.last().messages)
+      expect(messages).toContain('"type":"input_file"')
+      expect(messages).toContain('"filename":"attachment.pdf"')
+      expect(messages).not.toContain("local PDF conversion is unavailable")
+      const output = responsesInput(h.model.last()).filter((item) => item.type === "function_call_output").at(-1)!
+      expect(output.output).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "input_file" }),
+      ]))
+    } finally {
+      await h.cleanup()
+    }
+  }, 60_000)
+
+  test("a multi-file read stops before loading media beyond its combined budget", async () => {
+    await withHarness({}, async (h) => {
+      const bytes = Buffer.alloc(3 * 1024 ** 2)
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes)
+      for (const name of ["one.png", "two.png", "three.png"]) writeFileSync(join(h.dir, name), bytes)
+      const read = await call(tool("file_read"), h.dir, { path: ["one.png", "two.png", "three.png"] }, true)
+      expect(read.outcome).toBe("success")
+      expect(read.content).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "text", text: expect.stringContaining("not read: three.png") }),
+      ]))
+      expect(Array.isArray(read.content) ? read.content.filter((part) => part.type === "image") : []).toHaveLength(2)
+    })
+  })
+
   test("devices and FIFOs are refused before reading, and missing files and directories are named", async () => {
     await withHarness({}, async (h) => {
       const read = tool("file_read")
-      expect(await call(read, h.dir, { path: "/dev/zero" })).toEqual({ outcome: "failed", content: "/dev/zero is a device or stream, which file_read does not read." })
+      expect(await call(read, h.dir, { path: "/dev/zero" })).toEqual({
+        outcome: "failed",
+        content: "/dev/zero is a device or stream, which file_read does not read.",
+        alreadyBounded: true,
+      })
       expect(Bun.spawnSync(["mkfifo", join(h.dir, "pipe")]).exitCode).toBe(0)
       expect((await call(read, h.dir, { path: "pipe" })).content).toBe(`${join(h.dir, "pipe")} is a device or stream, which file_read does not read.`)
       expect((await call(read, h.dir, { path: "nope.txt" })).content).toBe("nope.txt does not exist.")
@@ -290,6 +364,7 @@ describe("file tools in a turn", () => {
       expect(await call(tool("file_read"), h.dir, { path: "link/f.txt" }, false, relink)).toEqual({
         outcome: "failed",
         content: `link/f.txt was not read: it resolved to ${join(root, "one/f.txt")} when authorized and resolves to ${join(root, "two/f.txt")} now.`,
+        alreadyBounded: true,
       })
       rmSync(join(h.dir, "link"))
       symlinkSync("one", join(h.dir, "link"))

@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite"
+import { endSpan, startSpan, type ErrorClass } from "../telemetry/signals.ts"
 import type { RetainedAttachmentRef, UploadStatus } from "@ashe-agent/protocol"
 
 /** The defaults one owner's unclaimed staging and one upload are bounded by. */
@@ -47,6 +48,15 @@ interface UploadRow {
 }
 
 const sha256 = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex")
+
+const uploadError = (error: unknown): ErrorClass =>
+  error instanceof AttachmentError
+    ? error.code === "quota"
+      ? "upload_quota"
+      : error.code === "invalid"
+        ? "upload_invalid"
+        : "conflict"
+    : "internal"
 
 /** Draft-owned upload staging and the attachment originals pending or admitted input claims. */
 export class AttachmentStore {
@@ -100,7 +110,7 @@ export class AttachmentStore {
   }
 
   /** Creates an upload owned by `ownerId`, whose staging survives connections. */
-  create(ownerId: string, draftId: string, name: string, mediaType: string, size: number, now: number): UploadStatus {
+  private createInternal(ownerId: string, draftId: string, name: string, mediaType: string, size: number, now: number): UploadStatus {
     this.expire(now)
     const image = mediaType.toLowerCase().startsWith("image/")
     const limit = image ? this.limits.maxImageBytes : this.limits.maxFileBytes
@@ -120,13 +130,39 @@ export class AttachmentStore {
     return this.status(this.upload(ownerId, uploadId), now)
   }
 
+  private observedUpload<A>(call: () => A): A {
+    const span = startSpan("ashe_agent.content_upload", {
+      "ashe_agent.content.operation": "upload",
+    })
+    try {
+      const result = call()
+      endSpan(span, { "ashe_agent.content.outcome": "success" })
+      return result
+    } catch (error) {
+      endSpan(span, { "ashe_agent.content.outcome": "failed" }, uploadError(error))
+      throw error
+    }
+  }
+
+  create(ownerId: string, draftId: string, name: string, mediaType: string, size: number, now: number): UploadStatus {
+    return this.observedUpload(() => this.createInternal(ownerId, draftId, name, mediaType, size, now))
+  }
+
+  append(ownerId: string, uploadId: string, offset: number, data: string, now: number): UploadStatus {
+    return this.observedUpload(() => this.appendInternal(ownerId, uploadId, offset, data, now))
+  }
+
+  finalize(ownerId: string, uploadId: string, size: number, digest: string, now: number): UploadStatus {
+    return this.observedUpload(() => this.finalizeInternal(ownerId, uploadId, size, digest, now))
+  }
+
   statusOf(ownerId: string, uploadId: string, now: number): UploadStatus {
     this.expire(now)
     return this.status(this.upload(ownerId, uploadId), now)
   }
 
   /** Appends one chunk, or accepts a repeated write for bytes already staged at that offset. */
-  append(ownerId: string, uploadId: string, offset: number, data: string, now: number): UploadStatus {
+  private appendInternal(ownerId: string, uploadId: string, offset: number, data: string, now: number): UploadStatus {
     this.expire(now)
     const row = this.upload(ownerId, uploadId)
     if (row.status !== "open") throw new AttachmentError("conflict", `upload ${uploadId} is already finalized`)
@@ -162,7 +198,7 @@ export class AttachmentStore {
   }
 
   /** Verifies the complete size and digest, then materializes the retained original. */
-  finalize(ownerId: string, uploadId: string, size: number, digest: string, now: number): UploadStatus {
+  private finalizeInternal(ownerId: string, uploadId: string, size: number, digest: string, now: number): UploadStatus {
     this.expire(now)
     const row = this.upload(ownerId, uploadId)
     const expected = digest.toLowerCase().replace(/^sha256:/, "")

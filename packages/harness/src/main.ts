@@ -25,6 +25,7 @@ import { applyMigrations, discoverMigrations, MigrationError, readMigrationStatu
 import { mcpLogEvents } from "./telemetry/mcp-events.ts"
 import { parseOtlpHeaders } from "./telemetry/headers.ts"
 import { toolPolicy } from "./agent/tools.ts"
+import { BoundedPdfConverter } from "./content/conversion.ts"
 
 declare const ASHE_AGENT_REVISION: string | undefined
 
@@ -137,7 +138,44 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
     })
     const endProcesses = () => processes.stopAll()
     process.on("exit", endProcesses)
-    const builtin = builtinTools(inputs, processes)
+    const conversion = new BoundedPdfConverter(
+      {
+        prlimitPath: inputs.conversionPrlimitPath,
+        dataBytes: inputs.conversionDataLimitBytes,
+        stackBytes: inputs.conversionStackLimitBytes,
+        cpuSeconds: inputs.conversionCpuSeconds,
+        wallMs: inputs.conversionWallMs,
+        outputBytes: inputs.conversionOutputBytes,
+        activeWorkers: inputs.conversionActiveWorkers,
+        queuedJobs: inputs.conversionQueuedJobs,
+        inputBytes: inputs.contentMaxOriginalBytes,
+      },
+      {
+        executable: process.execPath,
+        args: Bun.isStandaloneExecutable ? ["conversion-worker"] : [Bun.main, "conversion-worker"],
+      },
+    )
+    const pdfGeometry = {
+      dpi: inputs.contentPdfDpi,
+      maxLongEdge: inputs.contentPdfMaxLongEdge,
+      maxPixelsPerPage: inputs.contentPdfMaxPixelsPerPage,
+    }
+    const contentPolicy = {
+      collectionBytes: inputs.contentCollectionBytes,
+      previewLines: inputs.contentPreviewLines,
+      previewBytes: inputs.contentPreviewBytes,
+    }
+    const builtin = builtinTools(
+      {
+        ...inputs,
+        fileRead: {
+          conversion,
+          pdfGeometry,
+          pdfPagesPerWindow: inputs.contentPdfPagesPerWindow,
+        },
+      },
+      processes,
+    )
     const port = responsesModelPort((id) => {
       const model = models.find((candidate) => candidate.id === id)
       const key = model === undefined ? undefined : apiKeys.get(model.provider)
@@ -193,6 +231,15 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
           communicationWaitMinMs: inputs.communicationWaitMinMs,
           communicationWaitDefaultMs: inputs.communicationWaitDefaultMs,
           communicationWaitMaxMs: inputs.communicationWaitMaxMs,
+          conversion,
+          contentMediaOptions: {
+            ...pdfGeometry,
+            pagesPerWindow: inputs.contentPdfPagesPerWindow,
+            previewLines: inputs.contentPreviewLines,
+            previewBytes: inputs.contentPreviewBytes,
+            imageTokens: inputs.contentImageTokens,
+            pdfTokens: inputs.contentPdfDocumentTokens,
+          },
           toolPolicy: toolTimePolicy,
           uploadLimits: {
             maxFileBytes: inputs.contentMaxOriginalBytes,
@@ -203,7 +250,13 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
             expiryMs: inputs.contentUploadExpiryMs,
             chunkBytes: inputs.contentUploadChunkBytes,
           },
-          runner: agentRunner({ port, models }),
+          runner: agentRunner({
+            port,
+            models,
+            imageTokens: inputs.contentImageTokens,
+            pdfTokens: inputs.contentPdfDocumentTokens,
+            contentPolicy,
+          }),
         }),
       ),
       Layer.provide(Store.layer(databasePath(inputs.stateDir))),
@@ -303,7 +356,15 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
 }
 
 const [name, ...args] = process.argv.slice(2)
-if (name === "--version" || name === "version") {
+if (name === "conversion-worker") {
+  const { runConversionWorker } = await import("./content/worker.ts")
+  try {
+    await runConversionWorker()
+  } catch (error) {
+    process.stderr.write(`ashe-agent: conversion worker failed: ${error instanceof Error ? error.message : String(error)}\n`)
+    process.exit(1)
+  }
+} else if (name === "--version" || name === "version") {
   process.stdout.write(`AsheAgent ${revision}\n`)
 } else if (name === undefined || name === "--help" || name === "help") {
   process.stdout.write(usage)

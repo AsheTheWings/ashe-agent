@@ -1,4 +1,5 @@
 import { createTwoFilesPatch, FILE_HEADERS_ONLY } from "diff"
+import { estimateStructured, estimateText } from "@ashe-agent/protocol"
 import type { ToolSpec } from "../agent/model.ts"
 import type { Catalogs, UserInstructions } from "../sessions/hub.ts"
 import {
@@ -17,7 +18,6 @@ import {
 import {
   CHECKPOINT_ALLOWANCE,
   CODE_MODE_CATALOG_ALLOWANCE,
-  estimateTokens,
   HARNESS_INSTRUCTIONS_ALLOWANCE,
   SESSION_FACTS_ALLOWANCE,
   SKILL_CATALOG_ALLOWANCE,
@@ -50,13 +50,13 @@ const allowances: Readonly<Record<string, { readonly what: string; readonly allo
 export const componentIssue = (component: Component): AllowanceIssue | null => {
   const limit = allowances[component.name]
   if (limit === undefined) return null
-  const tokens = estimateTokens(component.text)
+  const tokens = estimateText(component.text)
   return tokens > limit.allowance ? { what: limit.what, tokens, allowance: limit.allowance } : null
 }
 
 /** The allowance issue of tool definitions over their allowance, if they are. */
 export const toolDefinitionsIssue = (specs: ReadonlyArray<ToolSpec>): AllowanceIssue | null => {
-  const tokens = estimateTokens(JSON.stringify(specs))
+  const tokens = estimateStructured(specs)
   return tokens > TOOL_DEFINITIONS_ALLOWANCE ? { what: "the tool definitions", tokens, allowance: TOOL_DEFINITIONS_ALLOWANCE } : null
 }
 
@@ -91,7 +91,7 @@ export interface SeedSources {
 export const renderSeed = (
   sources: SeedSources,
 ): { readonly ok: true; readonly components: ReadonlyArray<Component> } | { readonly ok: false; readonly issue: AllowanceIssue } => {
-  const harnessTokens = estimateTokens(sources.harness)
+  const harnessTokens = estimateText(sources.harness)
   if (harnessTokens > HARNESS_INSTRUCTIONS_ALLOWANCE) {
     return { ok: false, issue: { what: "the harness instructions", tokens: harnessTokens, allowance: HARNESS_INSTRUCTIONS_ALLOWANCE } }
   }
@@ -120,7 +120,7 @@ export const renderSeed = (
 
 /** A built checkpoint window's estimated size: its harness instructions and seed components. */
 export const seedTokens = (harness: string, components: ReadonlyArray<Component>) =>
-  components.reduce((sum, component) => sum + estimateTokens(component.text), estimateTokens(harness))
+  components.reduce((sum, component) => sum + estimateText(component.text), estimateText(harness))
 
 /** One unified diff from `before` to `after` of the file at `path`. */
 export const unifiedDiff = (path: string, before: string, after: string) =>

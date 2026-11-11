@@ -71,6 +71,11 @@ export class CliRun {
     return join(this.stateDir, "database", "ashe-agent.db")
   }
 
+  /** Process identifiers of the `serve` commands this run started. */
+  get serverPids(): ReadonlyArray<number> {
+    return this.servers.map((server) => server.pid)
+  }
+
   async run(args: ReadonlyArray<string>, options: { stdin?: string; env?: Record<string, string> } = {}) {
     const child = Bun.spawn([...this.command, ...args], {
       env: { ...this.env, ...options.env },

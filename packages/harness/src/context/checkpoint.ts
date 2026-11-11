@@ -1,11 +1,12 @@
 import { escapeTags } from "../agent/blocks.ts"
 import { renderTranscript } from "../agent/window.ts"
+import { estimateText } from "@ashe-agent/protocol"
 import type { Item } from "../sessions/conversation.ts"
 import primaryExplanation from "./checkpoint/primary-timeline.md" with { type: "text" }
 import recentExplanation from "./checkpoint/recent-transcript.md" with { type: "text" }
 import secondaryExplanation from "./checkpoint/secondary-timelines.md" with { type: "text" }
 import type { Component } from "./components.ts"
-import { estimateTokens, RECENT_TRANSCRIPT_ALLOWANCE, TIMELINES_ALLOWANCE } from "./constants.ts"
+import { RECENT_TRANSCRIPT_ALLOWANCE, TIMELINES_ALLOWANCE } from "./constants.ts"
 import { openItems, type Entry } from "./entries.ts"
 
 /** A secondary timeline as the checkpoint lists it: its path and description. */
@@ -37,10 +38,10 @@ const itemPart = (item: Item) => `${renderTranscript([item])}\n`
 
 /** The estimated tokens of the checkpoint text the timelines allowance covers, the entries excluded. */
 export const timelinesOverhead = (sessionId: string, timelines: ReadonlyArray<SecondaryTimeline>, trimmedOpen: number) =>
-  estimateTokens(heading(sessionId)) + estimateTokens(secondarySection(timelines)) + estimateTokens(primaryHeading(trimmedOpen))
+  estimateText(heading(sessionId)) + estimateText(secondarySection(timelines)) + estimateText(primaryHeading(trimmedOpen))
 
 /** The estimated tokens of the primary timeline's entries in the checkpoint. */
-export const entriesTokens = (rendered: ReadonlyArray<string>) => rendered.reduce((sum, text) => sum + estimateTokens(entryPart(text)), 0)
+export const entriesTokens = (rendered: ReadonlyArray<string>) => rendered.reduce((sum, text) => sum + estimateText(entryPart(text)), 0)
 
 /**
  * The oldest entries of the primary timeline to trim so that it, with the
@@ -56,7 +57,7 @@ export const trimPlan = (
   render: (entry: Entry) => string,
 ): ReadonlyArray<number> => {
   const primary = entries.filter((entry) => !entry.trimmed)
-  const tokens = primary.map((entry) => estimateTokens(entryPart(render(entry))))
+  const tokens = primary.map((entry) => estimateText(entryPart(render(entry))))
   const open = new Set(openItems(entries).map((entry) => entry.number))
   let trimmedOpen = entries.filter((entry) => entry.trimmed && open.has(entry.number)).length
   let remaining = tokens.reduce((sum, value) => sum + value, 0)
@@ -80,10 +81,10 @@ export const recentTranscript = (items: ReadonlyArray<Item>): ReadonlyArray<Item
   const last = items.findLast((item) => item.kind !== "component")
   if (last === undefined || last.kind === "user") return []
   const after = items.slice(items.findLastIndex((item) => item.kind === "user") + 1)
-  let budget = RECENT_TRANSCRIPT_ALLOWANCE - estimateTokens(transcriptHeading())
+  let budget = RECENT_TRANSCRIPT_ALLOWANCE - estimateText(transcriptHeading())
   let first = after.length
   while (first > 0) {
-    const tokens = estimateTokens(itemPart(after[first - 1]!))
+    const tokens = estimateText(itemPart(after[first - 1]!))
     if (tokens > budget) break
     budget -= tokens
     first -= 1

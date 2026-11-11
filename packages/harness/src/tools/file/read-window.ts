@@ -112,30 +112,52 @@ export const readWindow = (text: string, options: WindowOptions = {}): string =>
 export interface FileRead {
   readonly parts: ReadonlyArray<ToolContentPart>
   readonly failed: boolean
+  readonly mediaLimitReached?: boolean
 }
+
+/** Base64 media bytes one read may return across all of its files. */
+export const MAX_TOTAL_MEDIA_BYTES = 8 * 1024 ** 2
 
 /**
  * The reads of several files, each under a `==> path <==` header and each
- * given what is left of `MAX_TOTAL_BYTES` of text; once that is spent, the
- * remaining files are named as not read. Images do not count toward it.
+ * given what is left of `MAX_TOTAL_BYTES` of text and
+ * `MAX_TOTAL_MEDIA_BYTES` of base64 media; once either is spent, the
+ * remaining files are named as not read.
  */
 export const readMany = async (
   files: ReadonlyArray<string>,
-  read: (file: string, maxBytes: number) => Promise<FileRead>,
+  read: (file: string, maxBytes: number, mediaBytesLeft: number) => Promise<FileRead>,
 ): Promise<Array<ToolContentPart>> => {
   const parts: Array<ToolContentPart> = []
   const skipped: Array<string> = []
   let used = 0
-  for (const file of files) {
-    if (used >= MAX_TOTAL_BYTES) {
+  let mediaUsed = 0
+  let mediaStopped = false
+  for (const [index, file] of files.entries()) {
+    if (used >= MAX_TOTAL_BYTES || mediaUsed >= MAX_TOTAL_MEDIA_BYTES) {
+      mediaStopped = mediaUsed >= MAX_TOTAL_MEDIA_BYTES
       skipped.push(file)
       continue
     }
     const header = `==> ${file} <==`
-    const result = await read(file, Math.min(MAX_WINDOW_BYTES, MAX_TOTAL_BYTES - used))
+    const result = await read(file, Math.min(MAX_WINDOW_BYTES, MAX_TOTAL_BYTES - used), MAX_TOTAL_MEDIA_BYTES - mediaUsed)
     parts.push({ type: "text", text: header }, ...result.parts)
     used += byteLength(header) + result.parts.reduce((sum, part) => sum + (part.type === "text" ? byteLength(part.text) : 0), 0)
+    mediaUsed += result.parts.reduce((sum, part) => sum + (part.type === "text" ? 0 : byteLength(part.data)), 0)
+    if (result.mediaLimitReached === true) {
+      mediaStopped = true
+      const remaining = files.slice(index + 1)
+      skipped.push(...remaining)
+      break
+    }
   }
-  if (skipped.length > 0) parts.push({ type: "text", text: `[Stopped at ${MAX_TOTAL_BYTES} bytes in total; not read: ${skipped.join(", ")}.]` })
+  if (skipped.length > 0) {
+    parts.push({
+      type: "text",
+      text: mediaStopped
+        ? `[Stopped at ${MAX_TOTAL_MEDIA_BYTES} base64 media bytes in total; not read: ${skipped.join(", ")}.]`
+        : `[Stopped at ${MAX_TOTAL_BYTES} bytes in total; not read: ${skipped.join(", ")}.]`,
+    })
+  }
   return parts
 }

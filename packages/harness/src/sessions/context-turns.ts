@@ -4,6 +4,8 @@ import {
   type QuestionsActionResult,
   type SessionEvent,
   type SessionEventBody,
+  estimateText,
+  type EstimatorOptions,
 } from "@ashe-agent/protocol"
 import { context as otelContext, type Context as TraceContext, type Span } from "@opentelemetry/api"
 import { AIMessage, HumanMessage } from "@langchain/core/messages"
@@ -34,7 +36,6 @@ import {
 } from "../context/components.ts"
 import {
   CLEARING_SHARES,
-  estimateTokens,
   MEMORY_FILES_MAX,
   RESERVE,
   SUMMARY_MAX_OUTPUT_TOKENS,
@@ -53,7 +54,7 @@ import {
   type NewEntry,
 } from "../context/entries.ts"
 import { allowanceMessage, renderSeed, seedTokens, unifiedDiff, type SeedSources } from "../context/seed.ts"
-import { boundaryCloses, clearingPlan, countsInBoundary, resultTokens } from "../context/sizes.ts"
+import { boundaryCloses, clearingPlan, countsInBoundary, resultTokens, type ItemMediaFor } from "../context/sizes.ts"
 import { answerEntries, questionProblems } from "../context/questions.ts"
 import { CONTEXT_TOOLS, contextTools, type AskArgs } from "../context/tools.ts"
 import { memoryViolations, overCount, validateFiles, violationCount, type AreaEntry } from "../context/validation.ts"
@@ -101,6 +102,8 @@ export interface ContextOptions {
   /** The model of each auxiliary task; a task without one uses the model of the session's latest turn. */
   readonly auxiliaryModels: AuxiliaryModels
   readonly actions: ActionBroker
+  readonly estimator?: EstimatorOptions
+  readonly projectedMedia?: ItemMediaFor
 }
 
 interface ResearchCall {
@@ -401,6 +404,11 @@ export class ContextTurns {
     return new Map(this.store.turns(sessionId).map((turn) => [turn.runId, turn]))
   }
 
+  private mediaFor(model: string | null): ItemMediaFor | undefined {
+    const projected = this.options.projectedMedia
+    return projected === undefined ? undefined : (item) => projected(item, model)
+  }
+
   /**
    * After items of the turn `turn` were recorded: closes the open chat
    * boundary once its size reaches 60,000 tokens, owned by the turn, and
@@ -414,7 +422,7 @@ export class ContextTurns {
     const items = this.conversation.itemsFrom(sessionId, open.position)
     if (items.length === 0) return
     const turns = this.turnMap(sessionId)
-    if (!boundaryCloses(items, (runId) => turns.get(runId)?.contextStartItem ?? null)) return
+    if (!boundaryCloses(items, (runId) => turns.get(runId)?.contextStartItem ?? null, this.options.estimator, this.mediaFor(turn.model))) return
     const through = items.at(-1)!.position
     this.host.commit(sessionId, () => this.timeline.close(sessionId, open.position, turn.runId, through))
     void this.summarize(sessionId, open.position)
@@ -835,8 +843,14 @@ export class ContextTurns {
       const clearable = this.conversation
         .items(sessionId, window.position)
         .flatMap((item) => (item.kind === "result" && item.cleared !== true && !CONTEXT_TOOLS.has(item.name) ? [item] : []))
-      if (attempt === 1) state.clearable = clearable.reduce((sum, item) => sum + resultTokens(item), 0)
-      const { positions, freed } = clearingPlan(clearable, attempt, state.clearable, state.freed)
+      const projected = this.mediaFor(turn.model)
+      if (attempt === 1) {
+        state.clearable = clearable.reduce(
+          (sum, item) => sum + resultTokens(item, this.options.estimator, projected),
+          0,
+        )
+      }
+      const { positions, freed } = clearingPlan(clearable, attempt, state.clearable, state.freed, this.options.estimator, projected)
       state.freed += freed
       this.host.commit(sessionId, (append) => {
         this.conversation.clear(sessionId, turn.runId, attempt, positions)
@@ -1061,8 +1075,8 @@ export class ContextTurns {
     const timeline = entries.filter((entry) => !entry.trimmed).map(render)
     const budget =
       checkpointWindowSize(model, session.modelOverrides[model.id]) -
-      estimateTokens(HANDOFF_PROMPT.text) -
-      estimateTokens(timeline.join("\n\n")) -
+      estimateText(HANDOFF_PROMPT.text) -
+      estimateText(timeline.join("\n\n")) -
       SUMMARY_MAX_OUTPUT_TOKENS
     const window = this.conversation.currentWindow(sessionId)!.position
     const transcript = handoffTranscript(this.conversation.items(sessionId, window).filter((item) => !seedComponent(item)), budget)

@@ -75,6 +75,16 @@ directory entry it names, so deleting a symlink removes the link without
 reading its target. A move is also decided for the file its content is
 read from and for its destination.
 
+## Tool result observations
+
+A tool result whose captured output exceeds the configured preview enters the
+next model call as a bounded head-and-tail window with its line and byte
+totals. Full captured text is retained beside the session history under
+`references/`, and the result names that path. `file_read` can page the file;
+its own result is not windowed again. A tool that cannot retain the capture
+keeps its actual outcome and records the loss explicitly. [Content](content.md)
+and [storage](storage.md#session-files) own the retention and fork behavior.
+
 ## `file_patch`
 
 `file_patch` takes one `patch` string in Codex's `apply_patch` format:
@@ -100,9 +110,14 @@ as Codex does.
 ## `file_read`
 
 `file_read` takes a `path`, either one path or a list of paths and glob
-patterns, with an optional `offset`, `column`, and `limit`. Relative paths resolve
-against the session directory. Nothing records what a
+patterns, or an `attachmentId` for a retained attachment in the calling
+session. Text reads also accept an optional `offset`, `column`, and `limit`.
+Relative paths resolve against the session directory. Nothing records what a
 session read.
+
+An attachment continuation reads the original by its session-scoped identity,
+so it still works after a restart and after the model has moved to a later
+checkpoint window. A different session's attachment identity is refused.
 
 Text comes back numbered as `cat -n` numbers it: at most 2,000 lines,
 128 KB, and 2,000 characters per line. A negative offset counts from the
@@ -115,7 +130,9 @@ become LF.
 
 A list of paths and globs reads each file under a `==> path <==` header,
 reports each file's failure inline, and stops at 100 KB of text in total,
-naming the files it did not read. One glob reads at most 1,000 files.
+naming the files it did not read. One glob reads at most 1,000 files. Base64
+media across one multi-file result is limited to 8 MiB; files beyond that total
+are named as not read before their bytes are loaded.
 
 `file_read` refuses paths under `/dev` and `/proc/<pid>/fd`, character and
 block devices, FIFOs, and sockets before reading them, and binary files
@@ -127,8 +144,25 @@ A file of at most 32 MB that anydoc detects as a document, or a `.csv`
 file, is converted to Markdown in the server's own process and read
 through the same windows as text. Conversion never uses anydoc's hosted
 OCR, so no document leaves the host. A failed conversion names anydoc's
-error code; a PDF with scanned or image-only pages reports `needsOcr` and
-the pages that need OCR.
+error code.
+
+A PDF also accepts `pageOffset` and `pageLimit`, separate from the text
+line `offset` and `limit`. The page window defaults from configuration. An
+image-capable model receives ordered page images and extractable text; a
+text-only model receives extractable text. A PDF with no extractable text
+fails explicitly because OCR is not enabled. A window past the document's
+last page reports the total without inventing pages. When the model declares
+native PDF input and no page window is requested, the original PDF is returned
+as a sanitized file input instead of being rendered or converted; this native
+route applies equally to a path and a retained `attachmentId` and does not
+require a local conversion worker. A declared type that does not identify a
+PDF is overridden by a `%PDF-` prefix, so a mislabeled PDF still uses the
+isolated worker for page images or text. A native PDF tool result crosses the
+Responses boundary as an `input_file`, including for historical projected
+results.
+Rendered pages record their renderer, version, page window, geometry, page and
+total, and content identity. [Content](content.md) explains the conversion
+worker and representation reuse.
 
 ### Images
 

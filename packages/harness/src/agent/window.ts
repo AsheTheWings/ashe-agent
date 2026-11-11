@@ -1,13 +1,36 @@
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages"
+import type { RepresentationRef } from "@ashe-agent/protocol"
 import { developerBlock, systemBlock } from "../context/components.ts"
 import type { Item } from "../sessions/conversation.ts"
-import { estimateTokens, IMAGE_TOKENS } from "../context/constants.ts"
+import type { ProjectedAttachment } from "../content/media.ts"
+import { measureCall } from "./measurement.ts"
 import { block, escapeTags, userBlock } from "./blocks.ts"
 import type { ToolSpec } from "./model.ts"
 
 export type ToolContentPart =
-  | { readonly type: "text"; readonly text: string }
-  | { readonly type: "image"; readonly path: string; readonly mimeType: string; readonly data: string }
+  | {
+      readonly type: "text"
+      readonly text: string
+      readonly representation?: RepresentationRef
+      readonly metadata?: Readonly<Record<string, unknown>>
+    }
+  | {
+      readonly type: "image"
+      readonly path: string
+      readonly mimeType: string
+      readonly data: string
+      readonly representation?: RepresentationRef
+      readonly metadata?: Readonly<Record<string, unknown>>
+    }
+  | {
+      readonly type: "pdf"
+      readonly path: string
+      readonly mimeType: "application/pdf"
+      readonly filename: string
+      readonly data: string
+      readonly representation?: RepresentationRef
+      readonly metadata?: Readonly<Record<string, unknown>>
+    }
 
 /** A tool result's content: text, or parts that may carry images. */
 export type ToolContent = string | ReadonlyArray<ToolContentPart>
@@ -32,7 +55,11 @@ export const messageText = (message: AIMessage): string => {
 
 /** A tool result's content as text, images as `[image: <path>]`. */
 export const toolContentText = (content: ToolContent): string =>
-  typeof content === "string" ? content : content.map((part) => (part.type === "text" ? part.text : `[image: ${part.path}]`)).join("\n")
+  typeof content === "string"
+    ? content
+    : content.map((part) =>
+        part.type === "text" ? part.text : part.type === "image" ? `[image: ${part.path}]` : `[pdf: ${part.filename}]`,
+      ).join("\n")
 
 const attribute = (value: string) => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;")
 
@@ -42,12 +69,24 @@ const attribute = (value: string) => value.replace(/&/g, "&amp;").replace(/"/g, 
  * components as nested `<developer>` blocks. Reasoning is left out and
  * images become `[image: <path>]`.
  */
-export const renderTranscript = (items: ReadonlyArray<Item>): string =>
+export const renderTranscript = (
+  items: ReadonlyArray<Item>,
+  projected?: ReadonlyMap<string, ProjectedAttachment>,
+): string =>
   items
     .flatMap((item): Array<string> => {
       switch (item.kind) {
-        case "user":
-          return [userBlock(item.text)]
+        case "user": {
+          const projection = projected?.get(item.entryId)
+          const available = projection?.contributions.some(
+            (contribution) => contribution.transformation !== "attachment-placeholder",
+          ) === true
+          const retained = (item.attachments ?? []).map((attachment) =>
+            available
+              ? `[Attachment ${attachment.name} (${attachment.mediaType}) is retained and follows this transcript.]`
+              : `[Attachment ${attachment.name} (${attachment.mediaType}) is retained but unavailable to this model in the transcript.]`)
+          return [userBlock([item.text, ...retained].join("\n\n"))]
+        }
         case "component":
           return [block("developer", escapeTags(item.component.text))]
         case "assistant": {
@@ -68,13 +107,13 @@ export const renderTranscript = (items: ReadonlyArray<Item>): string =>
     .join("\n")
 
 /** The transcript component of a run of items another model owns. */
-export const transcriptComponent = (items: ReadonlyArray<Item>) => {
+export const transcriptComponent = (items: ReadonlyArray<Item>, projected?: ReadonlyMap<string, ProjectedAttachment>) => {
   const source = items[0]
   const origin =
     source === undefined
       ? ""
       : `\n\nSource session: \`${escapeTags(source.authorshipSessionId)}\`; title: \`${escapeTags(source.agentTitle)}\`; model: ${source.model === null ? "none" : `\`${escapeTags(source.model)}\``}.`
-  return `# Transcript\n\nTurns another model ran in this session, recorded verbatim; they are not your own work.${origin}\n\n${renderTranscript(items)}`
+  return `# Transcript\n\nTurns another model ran in this session, recorded verbatim; they are not your own work.${origin}\n\n${renderTranscript(items, projected)}`
 }
 
 /**
@@ -100,21 +139,84 @@ const replayable = (message: AIMessage): AIMessage => {
 export const renderNativeMessage = (message: AIMessage): AIMessage => replayable(message)
 
 /** A tool result as a model call carries it: images as images for a model that takes them, else as placeholders. */
-const toolMessage = (item: ResultItem, imageInput: boolean) => {
-  const content = resultContent(item)
-  if (typeof content === "string" || !imageInput || !content.some((part) => part.type === "image")) {
+const toolMessage = (item: ResultItem, imageInput: boolean, pdfInput: boolean, projected?: ToolContent) => {
+  const content = projected ?? resultContent(item)
+  if (typeof content === "string") {
     return new ToolMessage({ tool_call_id: item.callId, content: toolContentText(content) })
+  }
+  const supported = content.some((part) =>
+    part.type === "image" ? imageInput : part.type === "pdf" ? pdfInput : false,
+  )
+  if (!supported) return new ToolMessage({ tool_call_id: item.callId, content: toolContentText(content) })
+  const mediaRepresentations = content.flatMap((part) => part.representation === undefined
+    ? []
+    : [{
+        representationId: part.representation.representationId,
+        mediaType: part.representation.mediaType,
+        transformation: part.representation.transformation,
+        ...(part.metadata === undefined ? {} : { metadata: part.metadata }),
+      }])
+  if (content.some((part) => part.type === "pdf")) {
+    return new ToolMessage({
+      tool_call_id: item.callId,
+      content: content.flatMap((part): Array<Record<string, unknown>> => {
+        if (part.type === "text") return [{ type: "input_text", text: part.text }]
+        if (part.type === "image") {
+          return imageInput
+            ? [{ type: "input_image", image_url: `data:${part.mimeType};base64,${part.data}`, detail: "auto" }]
+            : []
+        }
+        return pdfInput
+          ? [{
+              type: "input_file",
+              file_data: `data:application/pdf;base64,${part.data}`,
+              filename: part.filename,
+            }]
+          : []
+      }) as never,
+      additional_kwargs: { mediaRepresentations },
+    })
   }
   return new ToolMessage({
     tool_call_id: item.callId,
-    content: content.map((part) =>
-      part.type === "text" ? { type: "text" as const, text: part.text } : { type: "image" as const, mimeType: part.mimeType, data: part.data },
-    ),
+    content: content.flatMap((part): Array<Record<string, unknown>> => {
+      if (part.type === "text") {
+        return [{
+          type: "text" as const,
+          text: part.text,
+          ...(part.representation === undefined ? {} : { representation: part.representation }),
+          ...(part.metadata === undefined ? {} : { metadata: part.metadata }),
+        }]
+      }
+      if (part.type === "image") {
+        return imageInput
+          ? [{
+              type: "image" as const,
+              mimeType: part.mimeType,
+              data: part.data,
+              ...(part.representation === undefined ? {} : { representation: part.representation }),
+              ...(part.metadata === undefined ? {} : { metadata: part.metadata }),
+            }]
+          : []
+      }
+      return pdfInput
+        ? [{
+            type: "file" as const,
+            source_type: "base64",
+            mime_type: "application/pdf",
+            data: part.data,
+            ...(part.representation === undefined ? {} : { representation: part.representation }),
+            metadata: { filename: part.filename, ...part.metadata },
+          }]
+        : []
+    }) as never,
+    additional_kwargs: { mediaRepresentations },
   })
 }
 
 /** The provider tool message a retained result renders to. */
-export const renderToolResultMessage = (item: ResultItem, imageInput: boolean): ToolMessage => toolMessage(item, imageInput)
+export const renderToolResultMessage = (item: ResultItem, imageInput: boolean, pdfInput = false): ToolMessage =>
+  toolMessage(item, imageInput, pdfInput)
 
 /**
  * The messages of a model call by `model` in a checkpoint window: its
@@ -134,32 +236,96 @@ export const renderWindow = (
   imageInput: boolean,
   agentTitle = items[0]?.agentTitle ?? "untitled",
   observe?: (sourceEntryIds: ReadonlyArray<string>, rendered: string) => void,
+  attachments?: ReadonlyMap<string, ProjectedAttachment>,
+  pdfInput = false,
+  projectedResults?: ReadonlyMap<string, ToolContent>,
+  observeMessage?: (sourceEntryIds: ReadonlyArray<string>, rendered: string) => void,
 ): Array<BaseMessage> => {
   const messages: Array<BaseMessage> = []
   let blocks: Array<string> = [systemBlock(harness)]
+  let blockEvidence: Array<{ sourceEntryIds: ReadonlyArray<string>; rendered: string }> = []
   let components: Array<{ text: string; sourceEntryIds: ReadonlyArray<string> }> = []
   let foreign: Array<Item> = []
+  let foreignContent: Array<Record<string, unknown>> = []
+  let foreignRepresentations: Array<Record<string, unknown>> = []
   let inputOwner: string | null | undefined
   const closeComponents = () => {
     if (components.length > 0) {
       const rendered = developerBlock(components)
       blocks.push(rendered)
+      blockEvidence.push({ sourceEntryIds: components.flatMap((component) => component.sourceEntryIds), rendered })
       observe?.(components.flatMap((component) => component.sourceEntryIds), rendered)
     }
     components = []
   }
   const closeForeign = () => {
     if (foreign.length > 0) {
-      const rendered = transcriptComponent(foreign)
+      const rendered = transcriptComponent(foreign, attachments)
       components.push({ text: rendered, sourceEntryIds: foreign.map((item) => item.entryId) })
+      for (const item of foreign) {
+        const projected = item.kind === "user" ? attachments?.get(item.entryId)?.parts : undefined
+        const result = item.kind === "result" ? projectedResults?.get(item.entryId) : undefined
+        const parts = projected ?? (typeof result === "string" || result === undefined ? [] : result)
+        for (const part of parts) {
+          if (part.representation !== undefined) {
+            foreignRepresentations.push({
+              representationId: part.representation.representationId,
+              mediaType: part.representation.mediaType,
+              transformation: part.representation.transformation,
+              ...(part.metadata === undefined ? {} : { metadata: part.metadata }),
+            })
+          }
+          if (part.type === "text") {
+            foreignContent.push({
+              type: "text",
+              text: part.text,
+              ...(part.representation === undefined ? {} : { representation: part.representation }),
+              ...(part.metadata === undefined ? {} : { metadata: part.metadata }),
+            })
+          } else if (part.type === "image") {
+            if (!imageInput) continue
+            foreignContent.push({
+              type: "input_image",
+              image_url: `data:${part.mimeType};base64,${part.data}`,
+              detail: "auto",
+              ...(part.representation === undefined ? {} : { representation: part.representation }),
+              ...(part.metadata === undefined ? {} : { metadata: part.metadata }),
+            })
+          }
+          else if (pdfInput) {
+            foreignContent.push({
+              type: "file",
+              source_type: "base64",
+              mime_type: part.mimeType,
+              data: part.data,
+              ...(part.representation === undefined ? {} : { representation: part.representation }),
+              metadata: { filename: part.filename, ...part.metadata },
+            })
+          }
+        }
+      }
     }
     foreign = []
   }
   const flush = () => {
     closeForeign()
     closeComponents()
-    if (blocks.length > 0) messages.push(new HumanMessage(blocks.join("\n")))
+    if (blocks.length > 0) {
+      messages.push(foreignContent.length === 0
+        ? new HumanMessage(blocks.join("\n"))
+        : new HumanMessage({
+            content: [{ type: "text", text: blocks.join("\n") }, ...foreignContent] as never,
+            additional_kwargs: { mediaRepresentations: foreignRepresentations },
+          }))
+      observeMessage?.(
+        blockEvidence.flatMap((entry) => entry.sourceEntryIds),
+        blocks.join("\n"),
+      )
+    }
     blocks = []
+    blockEvidence = []
+    foreignContent = []
+    foreignRepresentations = []
   }
   for (const item of items) {
     const seed = item.kind === "component" && item.component.type === "seed"
@@ -189,20 +355,59 @@ export const renderWindow = (
         break
       case "user": {
         closeComponents()
-        const rendered = userBlock(item.text)
-        blocks.push(rendered)
+        const projected = attachments?.get(item.entryId)
+        if (projected === undefined || projected.parts.length === 0) {
+          const rendered = userBlock(item.text)
+          blocks.push(rendered)
+          blockEvidence.push({ sourceEntryIds: [item.entryId], rendered })
+          observe?.([item.entryId], rendered)
+          break
+        }
+        flush()
+        const content: Array<Record<string, unknown>> = [{ type: "text", text: userBlock(item.text) }]
+        const renderedParts: Array<string> = []
+        for (const part of projected.parts) {
+          if (part.type === "text") {
+            content.push({ type: "text", text: part.text })
+            renderedParts.push(part.text)
+          } else if (part.type === "image") {
+            content.push({
+              type: "input_image",
+              image_url: `data:${part.mimeType};base64,${part.data}`,
+              detail: "auto",
+            })
+            renderedParts.push(`[image: ${part.representation.representationId}]`)
+          } else {
+            content.push({
+              type: "file",
+              source_type: "base64",
+              mime_type: part.mimeType,
+              data: part.data,
+              metadata: { filename: part.filename },
+            })
+            renderedParts.push(`[pdf: ${part.filename}]`)
+          }
+        }
+        messages.push(new HumanMessage({ content: content as never }))
+        const rendered = [userBlock(item.text), ...renderedParts].join("\n")
         observe?.([item.entryId], rendered)
+        observeMessage?.([item.entryId], rendered)
         break
       }
       case "assistant":
         flush()
         messages.push(replayable(item.message))
-        observe?.([item.entryId], JSON.stringify(replayable(item.message)))
+        const assistantRendered = JSON.stringify(replayable(item.message))
+        observe?.([item.entryId], assistantRendered)
+        observeMessage?.([item.entryId], assistantRendered)
         break
       case "result":
         flush()
-        messages.push(toolMessage(item, imageInput))
-        observe?.([item.entryId], JSON.stringify(toolMessage(item, imageInput)))
+        const message = toolMessage(item, imageInput, pdfInput, projectedResults?.get(item.entryId))
+        messages.push(message)
+        const resultRendered = JSON.stringify(message)
+        observe?.([item.entryId], resultRendered)
+        observeMessage?.([item.entryId], resultRendered)
         break
     }
   }
@@ -216,23 +421,12 @@ export const renderWindow = (
  * summaries included, each image at a fixed estimate, and the offered
  * tool definitions.
  */
-export const estimateCall = (instructions: string, messages: ReadonlyArray<BaseMessage>, tools: ReadonlyArray<ToolSpec>): number => {
-  let text = instructions
-  let images = 0
-  for (const message of messages) {
-    if (typeof message.content === "string") text += message.content
-    else {
-      for (const part of message.content) {
-        if (typeof part !== "object") continue
-        if (part.type === "text" && typeof part.text === "string") text += part.text
-        else if (part.type === "reasoning" && typeof part.reasoning === "string") text += part.reasoning
-        else if (part.type === "image" || part.type === "image_url") images += 1
-      }
-    }
-    if (message instanceof AIMessage) text += JSON.stringify(message.tool_calls ?? [])
-  }
-  return estimateTokens(text) + images * IMAGE_TOKENS + estimateTokens(JSON.stringify(tools))
-}
+export const estimateCall = (
+  instructions: string,
+  messages: ReadonlyArray<BaseMessage>,
+  tools: ReadonlyArray<ToolSpec>,
+  options: { readonly imageTokens?: number; readonly pdfTokens?: number } = {},
+): number => measureCall(instructions, messages, tools, options).knownSubtotal
 
 /** The tool calls of the assistant items that have no result item, in order. */
 export const unansweredCalls = (items: ReadonlyArray<Item>) => {

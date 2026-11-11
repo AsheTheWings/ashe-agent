@@ -6,7 +6,7 @@ import { logs, SeverityNumber } from "@opentelemetry/api-logs"
  * with its attributes, units, and error classes. Bump the version whenever
  * a name, attribute, unit, or error class changes.
  */
-export const SIGNAL_CATALOG_VERSION = 7
+export const SIGNAL_CATALOG_VERSION = 8
 
 /** The instrumentation scope of every signal. */
 export const SCOPE = "ashe-agent"
@@ -45,6 +45,13 @@ export const ERROR_CLASSES = [
   "not_owner",
   "github_failed",
   "sign_in_unknown_state",
+  "attachment_unsupported",
+  "conversion_failed",
+  "conversion_timeout",
+  "conversion_output",
+  "retention_failed",
+  "upload_invalid",
+  "upload_quota",
 ] as const
 
 export type ErrorClass = (typeof ERROR_CLASSES)[number]
@@ -115,6 +122,35 @@ export const ATTRIBUTES = {
     values: SUBSCRIPTION_SUPPRESSION_REASONS,
     description: "Why an automatic subscription delivery was suppressed.",
   },
+  "ashe_agent.content.operation": {
+    type: "string",
+    values: ["retention", "projection", "upload"] as const,
+    description: "Which bounded content operation emitted the signal.",
+  },
+  "ashe_agent.content.outcome": {
+    type: "string",
+    values: ["success", "failed", "partial", "unavailable"] as const,
+    description: "How a content operation ended.",
+  },
+  "ashe_agent.content.capture_loss": {
+    type: "boolean",
+    description: "Whether producer capture omitted bytes before retention.",
+  },
+  "ashe_agent.media.route": {
+    type: "string",
+    values: ["image", "native-pdf", "pdf-pages", "pdf-text", "document", "text", "placeholder"] as const,
+    description: "The model-facing representation selected for one attachment.",
+  },
+  "ashe_agent.conversion.outcome": {
+    type: "string",
+    values: ["success", "failed", "timeout", "output", "queue", "canceled", "unsupported"] as const,
+    description: "How a bounded conversion worker job ended.",
+  },
+  "ashe_agent.communication.action": {
+    type: "string",
+    values: ["message", "subscribe", "unsubscribe", "fork", "wait", "list"] as const,
+    description: "The session communication operation.",
+  },
 } as const
 
 export type AttributeName = keyof typeof ATTRIBUTES
@@ -178,6 +214,26 @@ export const SPANS = {
     description: "One GitHub sign-in callback, from GitHub's redirect to the redirect back to the client.",
     attributes: ["ashe_agent.sign_in.outcome", "error.type"],
   },
+  "ashe_agent.content_retention": {
+    description: "Retaining one tool result as a history-owned reference.",
+    attributes: ["ashe_agent.content.operation", "ashe_agent.content.outcome", "ashe_agent.content.capture_loss", "error.type"],
+  },
+  "ashe_agent.content_upload": {
+    description: "Staging, appending, or finalizing one attachment upload.",
+    attributes: ["ashe_agent.content.operation", "ashe_agent.content.outcome", "error.type"],
+  },
+  "ashe_agent.media_projection": {
+    description: "Projecting one retained attachment for a model's explicit capabilities.",
+    attributes: ["ashe_agent.media.route", "ashe_agent.content.outcome", "error.type"],
+  },
+  "ashe_agent.conversion": {
+    description: "One bounded PDF conversion worker job.",
+    attributes: ["ashe_agent.conversion.outcome", "error.type"],
+  },
+  "ashe_agent.communication": {
+    description: "One direct session communication operation.",
+    attributes: ["ashe_agent.communication.action", "error.type"],
+  },
 } as const satisfies Record<string, { description: string; attributes: ReadonlyArray<AttributeName> }>
 
 export const METRICS = {
@@ -213,6 +269,12 @@ export const METRICS = {
     description: "Failed validations of context turns.",
     attributes: ["ashe_agent.validation.attempt"],
   },
+  "ashe_agent.conversion.duration": {
+    kind: "histogram",
+    unit: "s",
+    description: "Duration of one bounded PDF conversion worker job.",
+    attributes: ["ashe_agent.conversion.outcome"],
+  },
 } as const satisfies Record<string, { kind: "histogram" | "counter"; unit: string; description: string; attributes: ReadonlyArray<AttributeName> }>
 
 export const LOGS = {
@@ -232,6 +294,11 @@ export const LOGS = {
     severity: "WARN",
     description: "An automatic subscription delivery would reenter a session already visited by its causal root.",
     attributes: ["ashe_agent.subscription.suppression_reason"],
+  },
+  "ashe_agent.content.retention_failed": {
+    severity: "WARN",
+    description: "Full captured output could not be retained; the tool outcome is preserved with explicit loss.",
+    attributes: ["ashe_agent.content.operation", "error.type"],
   },
 } as const satisfies Record<string, { severity: "ERROR" | "WARN"; description: string; attributes: ReadonlyArray<AttributeName> }>
 

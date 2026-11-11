@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto"
 import { HumanMessage } from "@langchain/core/messages"
+import { estimateText } from "@ashe-agent/protocol"
 import type { ModelPort } from "../agent/model.ts"
 import { renderTranscript, toolContentText } from "../agent/window.ts"
 import type { CallSettings } from "../models/registry.ts"
 import type { Item } from "../sessions/conversation.ts"
-import { estimateTokens, HANDOFF_TOOL_OUTPUT_CLIP, RESEARCH_INPUT_CLIP } from "./constants.ts"
+import { HANDOFF_TOOL_OUTPUT_CLIP, RESEARCH_INPUT_CLIP } from "./constants.ts"
 import { clipMiddle } from "./entries.ts"
 import compactionText from "./prompts/compaction.md" with { type: "text" }
 import handoffText from "./prompts/handoff.md" with { type: "text" }
@@ -149,7 +150,7 @@ export const handoffTranscript = (items: ReadonlyArray<Item>, budget: number): s
     return text
   }
   const levels: Array<Level> = exchanges.map(() => 0)
-  const fits = () => levels.reduce<number>((sum, level, index) => sum + estimateTokens(render(index, level)), 0) <= budget
+  const fits = () => levels.reduce<number>((sum, level, index) => sum + estimateText(render(index, level)), 0) <= budget
   if (fits()) return levels.map((level, index) => render(index, level)).join("").trimEnd()
   for (const level of [1, 2, 3] as const) {
     for (let index = 0; index < exchanges.length; index += 1) {

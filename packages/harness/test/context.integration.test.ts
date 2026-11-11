@@ -82,6 +82,18 @@ describe("conversation state rows on a real SQLite database", () => {
       expect(rows(h, id, "tool_result_clearings")).toBeGreaterThan(0)
       expect(rows(h, id, "timeline_trims")).toBeGreaterThan(0)
       expect(rows(h, id, "compaction_texts")).toBe(3)
+      const committed = ofType(h, id, "MODEL_CALL_COMMITTED").map((event) => event.inputBoundaryId)
+      const manifests = h.db
+        .query<{ manifest_id: string }, [string]>("SELECT manifest_id FROM request_manifests WHERE session_id = ?")
+        .all(id)
+        .map((row) => row.manifest_id)
+      expect(committed.every((boundary) => manifests.includes(boundary))).toBe(true)
+      const successful = h.hub.store.conversation.successfulManifests(id)
+      const providerInput = (entry: (typeof successful)[number]) => {
+        const manifest = entry.manifest as { providerInput: { contentId: string } }
+        return Buffer.from(h.hub.store.conversation.contentBytes(manifest.providerInput.contentId)!).toString("utf8")
+      }
+      expect(successful.some((entry) => providerInput(entry).includes("[Result cleared to free context"))).toBe(true)
 
       // A fork through the third turn copies its rows and none of the later turns'.
       const runOf = (text: string) => {
@@ -89,6 +101,13 @@ describe("conversation state rows on a real SQLite database", () => {
         return ofType(h, id, "RUN_STARTED").find((event) => event.userMessageIds.includes(input.inputId))!.runId
       }
       const fork = h.hub.fork(id, runOf("three")).id
+      expect(h.hub.store.conversation.successfulManifests(fork).length).toBeGreaterThan(0)
+      const forkManifests = h.db
+        .query<{ manifest_id: string }, [string]>("SELECT manifest_id FROM request_manifests WHERE session_id = ?")
+        .all(fork)
+        .map((row) => row.manifest_id)
+      expect(forkManifests.length).toBeGreaterThan(0)
+      expect(forkManifests.every((manifest) => manifests.includes(manifest))).toBe(true)
       expect(rows(h, fork, "checkpoint_windows")).toBe(1)
       expect(rows(h, fork, "tool_result_clearings")).toBe(0)
       expect(rows(h, fork, "timeline_trims")).toBe(0)
@@ -114,6 +133,8 @@ describe("conversation state rows on a real SQLite database", () => {
       expect(rerun).toContain(filler(40_000, "f"))
       expect(rerun).not.toContain("[Result cleared")
       expect(rerun).toContain("Requests:\n- three")
+      const rerunBoundary = h.hub.store.conversation.latestSuccessfulManifest(id)!
+      expect(providerInput(rerunBoundary)).not.toContain("[Result cleared")
     })
   })
 

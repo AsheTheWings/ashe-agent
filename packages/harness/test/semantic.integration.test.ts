@@ -123,6 +123,8 @@ describe("semantic history migrations", () => {
         "0029_tool_ownership.sql",
         "0030_communication.sql",
         "0031_subscription_operation_ownership.sql",
+        "0032_content_pipeline.sql",
+        "0033_model_provider_usage.sql",
       ])
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([])
       const store = new SessionStore(db, runDir)
@@ -184,7 +186,7 @@ describe("semantic history migrations", () => {
     }
   })
 
-  test("a database at the reviewed migration 28 upgrades through migration 31", () => {
+  test("a database at the reviewed migration 28 upgrades through migration 33", () => {
     const db = legacyDatabase()
     try {
       expect(applyMigrations(db, migrations.slice(0, 28)).map((migration) => migration.name)).toEqual([
@@ -194,6 +196,8 @@ describe("semantic history migrations", () => {
         "0029_tool_ownership.sql",
         "0030_communication.sql",
         "0031_subscription_operation_ownership.sql",
+        "0032_content_pipeline.sql",
+        "0033_model_provider_usage.sql",
       ])
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([])
       const columns = db.query<{ name: string }, []>("PRAGMA table_info(agent_tools)").all().map((column) => column.name)
@@ -402,7 +406,7 @@ describe("retained attachments and uploads", () => {
       const manifest = h.hub.store.conversation.successfulManifests(id)[0]!.manifest as any
       expect(
         manifest.contributions.some(
-          (part: any) => part.transformation === "attachment-original" && part.representation.contentId === digest,
+          (part: any) => part.representation?.contentId === digest,
         ),
       ).toBe(true)
       h.db
@@ -540,8 +544,18 @@ describe("model request boundaries on real persistence", () => {
         const manifest = entry.manifest as { version: number; contributions: Array<Record<string, any>> }
         expect(manifest.version).toBe(1)
         expect(manifest.contributions[0]).toMatchObject({ kind: "instruction", sourceEntryId: null })
+        const positions = manifest.contributions.map((part) => part.position as number)
+        expect(positions).toEqual([...positions].sort((left, right) => left - right))
         expect(manifest.contributions.some((part) => part.kind === "tool-definition" && part.name === "echo")).toBe(true)
         expect(manifest).not.toHaveProperty("messages")
+        const measurement = (manifest as any).measurement as {
+          purpose: string
+          contributions: Array<{ basis: string; representationIds: Array<string> }>
+        }
+        expect(measurement.purpose).toBe("execution")
+        for (const contribution of measurement.contributions) {
+          if (contribution.basis !== "unavailable") expect(contribution.representationIds.length).toBeGreaterThan(0)
+        }
         for (const part of manifest.contributions) {
           expect(h.hub.store.conversation.contentBytes(part.rendered.contentId)).not.toBeNull()
           expect(part.transformation).not.toBeNull()
@@ -558,7 +572,9 @@ describe("model request boundaries on real persistence", () => {
         expect(providerInput.digest).toBe(
           new Bun.CryptoHasher("sha256").update(JSON.stringify(renderedProvider)).digest("hex"),
         )
-        const grouped = manifest.contributions.find((part) => (part.sourceEntryIds?.length ?? 0) > 1)
+        const grouped = manifest.contributions.find(
+          (part) => part.transformation !== "provider-message" && (part.sourceEntryIds?.length ?? 0) > 1,
+        )
         if (grouped !== undefined) {
           const groupedText = Buffer.from(h.hub.store.conversation.contentBytes(grouped.rendered.contentId)!).toString("utf8")
           expect(JSON.stringify(renderedProvider)).toContain(JSON.stringify(groupedText).slice(1, -1))
@@ -594,6 +610,20 @@ describe("model request boundaries on real persistence", () => {
         .all(id)
       expect(calls.map((call) => call.outcome)).toEqual(["success", "success", "failed"])
       expect(calls.map((call) => call.manifests)).toEqual([1, 1, 1])
+      const usage = h.db.query<{
+        outcome: string
+        provider_input_tokens: number | null
+        provider_output_tokens: number | null
+        provider_total_tokens: number | null
+      }, [string]>(
+        `SELECT outcome, provider_input_tokens, provider_output_tokens, provider_total_tokens
+          FROM model_calls WHERE session_id = ? ORDER BY started_at, ordinal`,
+      ).all(id)
+      expect(usage).toEqual([
+        { outcome: "success", provider_input_tokens: 1_000, provider_output_tokens: 1, provider_total_tokens: 1_001 },
+        { outcome: "success", provider_input_tokens: 1_000, provider_output_tokens: 1, provider_total_tokens: 1_001 },
+        { outcome: "failed", provider_input_tokens: null, provider_output_tokens: null, provider_total_tokens: null },
+      ])
 
       h.input(id, "recover")
       await h.turnsEnded(id, 3)
@@ -601,6 +631,80 @@ describe("model request boundaries on real persistence", () => {
         h.hub.store.conversation.successfulManifests(id).at(-1)?.modelCallId,
       )
       expect(h.hub.store.conversation.successfulManifests(id)).toHaveLength(3)
+      const boundaryIds = h.hub.store.conversation.successfulManifests(id).map((entry) => entry.modelCallId)
+      await h.restart()
+      expect(h.hub.store.conversation.successfulManifests(id).map((entry) => entry.modelCallId)).toEqual(boundaryIds)
+      const fork = h.hub.fork(id, undefined)
+      expect(h.hub.store.conversation.successfulManifests(fork.id).map((entry) => entry.modelCallId)).toEqual(boundaryIds)
+    } finally {
+      await h.cleanup()
+    }
+  })
+
+  test("a coalesced provider message records every source group and its rendered identities", async () => {
+    const h = new AgentHarness()
+    try {
+      const id = h.create()
+      const first = gate()
+      h.model.next(hold(first.promise, say("first")), say("second"))
+      h.input(id, "one")
+      await waitFor("the held model call", () => h.model.calls.length === 1 ? true : undefined)
+      h.input(id, "two", "steer")
+      h.input(id, "three", "steer")
+      first.open()
+      await h.turnsEnded(id, 2)
+      const turn = h.hub.store.turns(id).at(-1)!
+      const users = h.hub.store.conversation.turnItems(id, turn.runId).filter((item) => item.kind === "user")
+      expect(users).toHaveLength(2)
+      const manifest = h.hub.store.conversation.latestSuccessfulManifest(id)!.manifest as any
+      const harness = manifest.contributions.find((part: any) => part.transformation === "harness-system").representation.representationId
+      const providerMessage = manifest.contributions.find(
+        (part: any) => part.transformation === "provider-message" && users.every((user) => part.sourceEntryIds.includes(user.entryId)),
+      ).representation.representationId
+      const represented = new Set<string>(
+        manifest.contributions.flatMap((part: any) => [part.representation?.representationId, ...(part.representationIds ?? [])]).filter(Boolean),
+      )
+      const message = manifest.measurement.contributions.find(
+        (part: any) =>
+          part.basis === "ashe-agent-text-v1" &&
+          users.every((user) => part.representationIds.includes(user.representationId)),
+      )
+      expect(message).toBeDefined()
+      expect(manifest.measurement.contributions.some((part: any) => part.representationIds?.includes(harness))).toBe(true)
+      expect(message.representationIds).toContain(providerMessage)
+      expect(message.representationIds.every((representation: string) => represented.has(representation))).toBe(true)
+    } finally {
+      await h.cleanup()
+    }
+  })
+
+  test("a successful-boundary rewind replaces the rerun boundary and a canceled model call retains none", async () => {
+    const h = new AgentHarness()
+    try {
+      const id = h.create()
+      h.model.next(say("one"), say("two"), say("rewound"))
+      h.input(id, "first")
+      await h.turnsEnded(id, 1)
+      h.input(id, "second")
+      await h.turnsEnded(id, 2)
+      const before = h.hub.store.conversation.successfulManifests(id)
+      expect(before).toHaveLength(2)
+      const second = h.hub.store.turns(id).at(-1)!
+      await h.hub.rewind(id, second.runId, undefined, h.sender)
+      await h.turnsEnded(id, 2)
+      const after = h.hub.store.conversation.successfulManifests(id)
+      expect(after).toHaveLength(2)
+      expect(after[0]!.modelCallId).toBe(before[0]!.modelCallId)
+      expect(after[1]!.modelCallId).not.toBe(before[1]!.modelCallId)
+
+      const canceled = h.create()
+      const held = gate()
+      h.model.next(hold(held.promise))
+      h.input(canceled, "cancel the model call")
+      await waitFor("the model call to start", () => h.model.calls.length > 0 ? true : undefined)
+      h.hub.cancel(canceled)
+      await h.turnsEnded(canceled, 1)
+      expect(h.hub.store.conversation.successfulManifests(canceled)).toEqual([])
     } finally {
       await h.cleanup()
     }

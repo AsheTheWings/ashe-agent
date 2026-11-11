@@ -3,9 +3,6 @@
  * name says otherwise. No other module writes one of these as a literal.
  */
 
-/** Characters per estimated token, for every model. */
-export const CHARACTERS_PER_TOKEN = 4
-
 /** The most of a model's context window a checkpoint window takes when nothing configures its size. */
 export const CHECKPOINT_WINDOW_CAP = 480_000
 
@@ -40,9 +37,6 @@ export const TOOL_DEFINITIONS_ALLOWANCE = 4_000
 export const RESERVE = 40_000
 /** The least a checkpoint window size may leave after the seed, the tool definitions, and the reserve. */
 export const WORKING_MARGIN = 100_000
-
-/** The estimate of one image in a model call's input. */
-export const IMAGE_TOKENS = 1_500
 
 /** The characters of a new session id. */
 export const SESSION_ID_LENGTH = 12
@@ -95,6 +89,3 @@ export const HANDOFF_TOOL_OUTPUT_CLIP = 2_000
 
 /** The bytes of apparent file size a fork copies from its source's scratch at most. */
 export const SCRATCH_FORK_MAX_BYTES = 2 * 1024 ** 3
-
-/** Estimated tokens of `text`: its characters divided by four, rounded up. */
-export const estimateTokens = (text: string) => Math.ceil(text.length / CHARACTERS_PER_TOKEN)

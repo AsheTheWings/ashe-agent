@@ -12,6 +12,7 @@ import {
   type Model,
   PERMISSION_ACTION,
   type PermissionActionResult,
+  type RepresentationRef,
   type RetainedAttachmentRef,
   type SelectionPatch,
   type Sender,
@@ -24,8 +25,11 @@ import {
 import type { ModelPort } from "../agent/model.ts"
 import { programCallsNote, unfinishedResult } from "../agent/notes.ts"
 import { withholdingName, type Tool, type ToolResult, type ToolRun } from "../agent/tools.ts"
+import type { ConversionPort } from "../content/conversion.ts"
+import { AttachmentMedia, type ModelCapabilities, type ProjectedAttachment, type ProjectedPart } from "../content/media.ts"
+import { ContentReferences, type ContentPolicy, type RetainedResult } from "../content/retention.ts"
 import { databaseGuide, sessionTools, type SessionToolHost } from "../tools/session/index.ts"
-import type { ToolContent, ToolOutcome } from "../agent/window.ts"
+import { toolContentText, type ToolContent, type ToolOutcome } from "../agent/window.ts"
 import type { SessionAgent } from "../agents/agents.ts"
 import { AttachmentError, AttachmentStore, type UploadLimits } from "../content/attachments.ts"
 import { InstructionsUnreadable, type KnownInstructions } from "../agents/setup.ts"
@@ -47,6 +51,7 @@ import {
 } from "../context/components.ts"
 import { SCRATCH_FORK_MAX_BYTES, SESSION_ID_LENGTH } from "../context/constants.ts"
 import { allowanceMessage, catalogChanges, instructionsChange, renderSeed, seedTokens } from "../context/seed.ts"
+import { projectedItemMedia } from "../context/sizes.ts"
 import { CONTEXT_TURN_TOOLS, UNCHECKED_CONTEXT_TOOLS } from "../context/tools.ts"
 import type { AuxiliaryModels, Permission } from "../inputs/shapes.ts"
 import { checkpointWindowSize, type ConfiguredModel } from "../models/registry.ts"
@@ -85,7 +90,7 @@ export interface TurnContext {
   /** The tools the session's rules leave offered now. */
   readonly tools: () => ReadonlyArray<Tool>
   /** Freezes a model call's request before it is sent and records that it started. */
-  readonly storeContent: (sha256: string, text: string) => void
+  readonly storeContent: (sha256: string, data: string | Uint8Array, format?: string) => void
   /** Freezes a model call's request before it is sent and records that it started. */
   readonly beginModelCall: (call: {
     readonly modelCallId: string
@@ -113,13 +118,55 @@ export interface TurnContext {
   ) => void
   /** Records a tool result as an item, in one transaction with its `TOOL_CALL_RESULT` event. */
   readonly commitResult: (
-    result: { readonly callId: string; readonly name: string; readonly content: ToolContent; readonly outcome: ToolOutcome },
+    result: {
+      readonly callId: string
+      readonly name: string
+      readonly content: ToolContent
+      readonly outcome: ToolOutcome
+      readonly retentionFallback?: ToolContent
+    },
     event: SessionEventBody,
     modelCallId: string,
     invocationId?: string,
+    retention?: RetainedResult,
   ) => void
   /** Records the actual start of an owned tool invocation. */
   readonly toolStarted: (invocationId: string) => void
+  /** Resolves retained attachment bytes into model-facing representations. */
+  readonly projectAttachment: (
+    item: Extract<Item, { kind: "user" }>,
+    capabilities: ModelCapabilities,
+    current: boolean,
+    signal: AbortSignal,
+  ) => Promise<ProjectedAttachment>
+  /** Projects a retained PDF tool-result part for the model's declared capabilities. */
+  readonly projectToolPdf: (
+    source: {
+      readonly filename: string
+      readonly data: string
+      readonly path?: string
+      readonly attachmentId?: string
+      readonly pageOffset?: number
+      readonly pageLimit?: number
+      readonly representation?: RepresentationRef
+    },
+    capabilities: ModelCapabilities,
+    signal: AbortSignal,
+  ) => Promise<ReadonlyArray<ProjectedPart>>
+  /** Metadata of a retained attachment referenced by this session. */
+  readonly retainedAttachmentInfo: (attachmentId: string) => {
+    readonly name: string
+    readonly mediaType: string
+    readonly format: string
+  } | null
+  /** The retained original of an attachment referenced by this session. */
+  readonly readRetainedAttachment: (attachmentId: string) => {
+    readonly name: string
+    readonly mediaType: string
+    readonly format: string
+    readonly prefix: Uint8Array
+    readonly load: () => Uint8Array
+  } | null
   /**
    * At a complete step boundary, whether another input batch is eligible to
    * start the next turn. It never appends to the admitted turn.
@@ -230,6 +277,19 @@ export interface HubOptions {
   readonly communicationWaitMinMs?: number
   readonly communicationWaitDefaultMs?: number
   readonly communicationWaitMaxMs?: number
+  readonly contentPolicy?: ContentPolicy
+  readonly contentReferences?: ContentReferences
+  readonly conversion?: ConversionPort | null
+  readonly contentMediaOptions?: {
+    readonly dpi: number
+    readonly maxLongEdge: number
+    readonly maxPixelsPerPage: number
+    readonly pagesPerWindow: number
+    readonly previewLines?: number
+    readonly previewBytes: number
+    readonly imageTokens?: number
+    readonly pdfTokens?: number
+  }
   readonly now?: () => number
 }
 
@@ -320,6 +380,8 @@ export class SessionHub {
   readonly toolPolicy: ToolExecutionPolicy
   readonly attachments: AttachmentStore
   readonly communication: CommunicationStore
+  readonly contentReferences: ContentReferences
+  readonly attachmentMedia: AttachmentMedia
   private readonly sessionTools: ReadonlyArray<Tool>
   private stopping = false
   private starting = true
@@ -333,6 +395,16 @@ export class SessionHub {
     this.now = options.now ?? Date.now
     this.attachments = options.uploads ?? new AttachmentStore(store.db, options.uploadLimits)
     this.communication = new CommunicationStore(store.db)
+    this.contentReferences = options.contentReferences ?? new ContentReferences(store.db, options.files.sessionsDir)
+    this.attachmentMedia = new AttachmentMedia(store.db, options.conversion ?? null, {
+      dpi: options.contentMediaOptions?.dpi ?? 144,
+      maxLongEdge: options.contentMediaOptions?.maxLongEdge ?? 2_048,
+      maxPixelsPerPage: options.contentMediaOptions?.maxPixelsPerPage ?? 4_194_304,
+      pagesPerWindow: options.contentMediaOptions?.pagesPerWindow ?? 8,
+      previewLines: options.contentMediaOptions?.previewLines ?? 2_000,
+      previewBytes: options.contentMediaOptions?.previewBytes ?? 50 * 1024,
+      now: () => this.now(),
+    })
     this.sessionTools = sessionTools(this)
     this.toolPolicy = options.toolPolicy ?? defaultToolPolicy()
     this.context = new ContextTurns(
@@ -345,7 +417,27 @@ export class SessionHub {
         seedSources: (session, window) => this.laterSeedSources(session, window),
         trace: (sessionId) => this.traceOf(sessionId),
       },
-      { port: options.port, models: options.models, auxiliaryModels: options.auxiliaryModels ?? {}, actions: this.actions },
+      {
+        port: options.port,
+        models: options.models,
+        auxiliaryModels: options.auxiliaryModels ?? {},
+        actions: this.actions,
+        estimator: {
+          ...(options.contentMediaOptions?.imageTokens === undefined ? {} : { imageTokens: options.contentMediaOptions.imageTokens }),
+          ...(options.contentMediaOptions?.pdfTokens === undefined ? {} : { pdfTokens: options.contentMediaOptions.pdfTokens }),
+        },
+        projectedMedia: (item, turnModel) => {
+          const selected = options.models.find((model) => model.id === (turnModel ?? item.model))
+          return selected === undefined
+            ? undefined
+            : projectedItemMedia(
+                item,
+                { image: selected.imageInput, pdf: selected.pdfInput },
+                options.contentMediaOptions?.pagesPerWindow ?? 8,
+                options.contentMediaOptions?.previewBytes ?? 50 * 1024,
+              )
+        },
+      },
     )
   }
 
@@ -1800,6 +1892,7 @@ export class SessionHub {
       const recorded = this.files.writeGeneration(branchId, 1, memory)
       this.files.pointMemory(branchId, 1)
       const { skipped } = this.files.copyScratch(sourceSessionId, branchId)
+      this.contentReferences.copyFiles(sourceSessionId, branchId)
       return { recorded, generations, skipped }
     })
   }
@@ -1837,6 +1930,7 @@ export class SessionHub {
       }
       const createdAt = this.now()
       branch = this.store.fork(input.source, { id: input.branchId, createdAt }, input.sourceRunId)
+      this.contentReferences.cleanup(input.branchId)
       this.fileState.recordGeneration(input.branchId, 1, input.prepared.recorded, createdAt)
       this.fileState.setGenerations(input.branchId, {
         scratch: input.prepared.generations.scratch,
@@ -2297,7 +2391,7 @@ export class SessionHub {
       beginModelCall: (call) => {
         this.commit(sessionId, () => this.conversation.beginModelCall(sessionId, turn.runId, call, this.now()))
       },
-      storeContent: (sha256, text) => this.conversation.putContent(sha256, text),
+      storeContent: (sha256, data, format) => this.conversation.putContent(sha256, data, format),
       discardModelCall: (modelCallId, outcome) => {
         this.commit(sessionId, () => this.conversation.endModelCall(sessionId, modelCallId, outcome, this.now()))
       },
@@ -2335,6 +2429,43 @@ export class SessionHub {
       toolStarted: (invocationId) => {
         this.commit(sessionId, () => this.conversation.markToolStarted(sessionId, invocationId, this.now()))
       },
+      projectAttachment: (item, capabilities, current, projectionSignal) =>
+        this.attachmentMedia.project(item, capabilities, current, projectionSignal),
+      projectToolPdf: (source, capabilities, projectionSignal) =>
+        this.attachmentMedia.projectPdf(source, capabilities, projectionSignal),
+      retainedAttachmentInfo: (attachmentId) => {
+        const row = this.store.db.query<{ name: string; mediaType: string; format: string }, [string, string]>(
+          `SELECT u.name, a.mime_type AS mediaType, a.format AS format
+            FROM attachment_references r
+            JOIN attachments a ON a.id = r.attachment_id
+            JOIN uploads u ON u.attachment_id = a.id
+            WHERE r.session_id = ? AND a.id = ?
+            ORDER BY u.created_at LIMIT 1`,
+        ).get(sessionId, attachmentId)
+        return row === null ? null : { name: row.name, mediaType: row.mediaType, format: row.format }
+      },
+      readRetainedAttachment: (attachmentId) => {
+        const info = this.store.db.query<{ name: string; mediaType: string; format: string }, [string, string]>(
+          `SELECT u.name, a.mime_type AS mediaType, a.format AS format
+            FROM attachment_references r
+            JOIN attachments a ON a.id = r.attachment_id
+            JOIN uploads u ON u.attachment_id = a.id
+            WHERE r.session_id = ? AND a.id = ?
+            ORDER BY u.created_at LIMIT 1`,
+        ).get(sessionId, attachmentId)
+        if (info === null) return null
+        const prefix = this.store.db.query<{ prefix: Uint8Array }, [string]>(
+          `SELECT substr(c.data, 1, 1024) AS prefix
+            FROM attachments a JOIN contents c ON c.sha256 = a.content_sha256 WHERE a.id = ?`,
+        ).get(attachmentId)?.prefix ?? new Uint8Array()
+        return {
+          name: info.name,
+          mediaType: info.mediaType,
+          format: info.format,
+          prefix: new Uint8Array(prefix),
+          load: () => this.attachmentMedia.original(attachmentId).bytes,
+        }
+      },
       afterCommit: () => this.context.afterItems(sessionId, turn),
       publishAssistant: (entryId, text, category) => {
         let published: ReadonlyArray<string> = []
@@ -2343,12 +2474,36 @@ export class SessionHub {
         })
         this.wakePublished(published)
       },
-      commitResult: (result, event, modelCallId, invocationId) => {
-        this.commit(sessionId, (append) => {
-          const window = this.conversation.currentWindow(sessionId)!
-          this.conversation.appendToolResult(sessionId, window.position, owner, result, modelCallId, invocationId)
-          append(event)
-        })
+      commitResult: (result, event, modelCallId, invocationId, retention) => {
+        try {
+          this.commit(sessionId, (append) => {
+            const window = this.conversation.currentWindow(sessionId)!
+            const item = this.conversation.appendToolResult(sessionId, window.position, owner, result, modelCallId, invocationId)
+            let observed = event
+            if (retention !== undefined) {
+              try {
+                const contentId = new Bun.CryptoHasher("sha256").update(retention.text).digest("hex")
+                this.conversation.putContent(contentId, retention.text)
+                this.contentReferences.attach(sessionId, item.entryId, retention, contentId, this.now())
+              } catch {
+                const fallback = result.retentionFallback ?? `${toolContentText(result.content)}
+[Full captured output was not retained because the content store failed; the tool outcome remains ${result.outcome}.]`
+                const bounded = { ...result, content: fallback }
+                this.conversation.replaceToolResultContent(sessionId, item.entryId, bounded)
+                if (observed.type === "TOOL_CALL_RESULT") {
+                  observed = {
+                    ...observed,
+                    content: toolContentText(fallback),
+                  }
+                }
+              }
+            }
+            append(observed)
+          })
+        } catch (error) {
+          this.contentReferences.cleanup(sessionId)
+          throw error
+        }
         this.context.afterItems(sessionId, turn)
       },
       deliver: () => {
@@ -2612,9 +2767,11 @@ export class SessionHub {
       const recorded = this.files.writeGeneration(id, 1, memory)
       this.files.pointMemory(id, 1)
       const { skipped } = this.files.copyScratch(sessionId, id)
+      this.contentReferences.copyFiles(sessionId, id)
       this.store.db.transaction(() => {
         const createdAt = this.now()
         this.store.fork(source, { id, createdAt }, point.runId)
+        this.contentReferences.cleanup(id)
         this.fileState.recordGeneration(id, 1, recorded, createdAt)
         this.fileState.setGenerations(id, { scratch: generations.scratch, memoryRestore: generations.memoryRestore, forkSkipped: skipped })
         this.queueReconciledNotifications(id, "fork")
@@ -2716,6 +2873,7 @@ export class SessionHub {
           append({ type: "INPUT_WAITING", inputId: message.inputId, text: message.text, mode: "steer", sender })
         }
       })
+      this.contentReferences.cleanup(sessionId)
       this.context.historyChanged(sessionId)
     } catch (error) {
       failed = true

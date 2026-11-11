@@ -264,6 +264,7 @@ export type ContributionMeasurement = typeof ContributionMeasurement.Type
 export const Measurement = Schema.Struct({
   method: Schema.Literal("ashe-agent-estimator"),
   methodVersion: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+  purpose: Schema.Literals(["execution", "analysis"]),
   coverage: Schema.Literals(["complete", "partial"]),
   knownSubtotal: Count,
   contributions: Schema.Array(ContributionMeasurement),

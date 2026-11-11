@@ -18,9 +18,13 @@ builds each later checkpoint window, as
 
 Creation fails, naming what is too large, its estimated tokens, and its
 allowance, when the harness instructions, a seed component, or the tool
-definitions the session is offered exceed their allowance. Tokens are
-estimated at one per four characters. The allowances live in
-`packages/harness/src/context/constants.ts`. Creation also fails, naming
+definitions the session is offered exceed their allowance. The shared
+`ashe-agent-estimator` counts text at four characters per token and
+structured input as canonical JSON; [content](content.md#measurements)
+owns media allowances and partial coverage. Configured image and PDF
+allowances flow through item, boundary, clearing, and pre-call estimates, and
+the same structured estimator measures tool definitions. The allowances live
+in `packages/harness/src/context/constants.ts`. Creation also fails, naming
 the file and the reason, when the session's chosen user instructions
 file exists but cannot be read.
 
@@ -80,6 +84,31 @@ accepts one: the active title's override for that model, else the model
 entry's setting.
 
 [Configuration](configuration.md) explains the model entries.
+
+Current user attachments are projected for the selected model's declared
+image and native PDF capabilities. Other PDFs lower to ordered page images
+and text or to extractable text; an attachment carried only in an older
+transcript keeps compatible representations and makes only an incompatible
+representation an explicit placeholder. [Content](content.md) owns the
+routing, derived representations, and failure behavior.
+
+Each model call stores a request manifest with the ordered contributions that
+formed its input. A measurement names its purpose, execution or analysis, and
+the representation identities of its instructions, messages, attachments, and
+tool definitions. Opaque encrypted provider replay state contributes
+unavailable coverage. Provider input, output, and total usage are persisted
+separately on the model call; product state, not either number, decides
+correctness or readiness.
+
+When adjoining developer components or user messages become one provider
+message, that message's measurement names every source representation. The
+measurement also names the digest of the complete rendered provider message,
+the harness system block, and every projected attachment, page, or result
+representation. Current and same-model result media names its raw content
+representations as well. Internal media metadata is known coverage rather than
+opaque provider state. The instruction representation is attached to the
+initial system input. This keeps the measured message aligned with the recorded
+model-facing groups rather than the order in which those groups were assembled.
 
 The server reads no `OPENAI_*`, `LANGCHAIN_*`, `LANGSMITH_*`, or `LC_*`
 process variable: `serve` removes them before the turn loop starts, so the libraries cannot take configuration or tracing
@@ -190,7 +219,9 @@ allowance and 20,000 its recent transcript allowance. The tool
 definitions a model call offers, names, descriptions, and parameter
 schemas, have an allowance of 4,000. The reserve, 40,000, is the part of
 the checkpoint window size whose shortfall starts a context turn. Each
-image in a call's input is estimated at 1,500 tokens.
+image in a call's input is estimated at 1,500 tokens by default; a native
+PDF is estimated at 2,000 with provider page expansion recorded as
+unavailable coverage.
 
 ## Timelines
 
@@ -262,6 +293,13 @@ the estimated tokens of the session's items from that message on, across
 checkpoint windows, leaving out seed components and the items of a
 context turn from its context turn component on. It closes when its size
 reaches 60,000, and the next user message opens another.
+
+Media in a boundary is counted after the turn model's capability projection:
+a native PDF counts as one PDF, a PDF lowered to page images counts the
+configured page-window images, a compatible image counts as an image, and a
+text-only fallback counts the configured preview bytes as text. The active
+turn model supplies these capabilities across a model switch. Clearing
+estimates use the same projected counts.
 
 A closing starts a compaction call in the background, without delaying
 turns. It runs on the `compaction` auxiliary model with the versioned
