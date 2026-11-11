@@ -44,6 +44,12 @@ export class ToolTimedOut extends Error {
 export interface ToolRun {
   readonly sessionId: string
   readonly runId: string
+  /** The calling AgentTurn's frozen selection, used to attribute peer submissions. */
+  readonly agentTitle?: string
+  readonly modelId?: string | null
+  readonly reasoningEffort?: string | null
+  readonly modelCallId?: string
+  readonly invocationId?: string
   readonly toolCallId: string
   /** The session directory, where shell commands start and against which relative paths resolve. */
   readonly cwd: string
@@ -103,6 +109,8 @@ export interface Tool {
   readonly namespace: string | null
   readonly name: string
   readonly permission: string | null
+  /** A tool the turn coordinator runs once after the response's ordinary tools settle. */
+  readonly defer?: "fork"
   /** Declared client actions the tool needs to produce a result; it is offered only when a subscriber supports all of them. */
   readonly actions?: ReadonlyArray<string>
   readonly spec: ToolSpec
@@ -140,6 +148,7 @@ export const builtinTool = <S extends Schema.Codec<unknown, unknown, never, neve
   readonly permission: string | null
   readonly description: string
   readonly actions?: ReadonlyArray<string>
+  readonly defer?: "fork"
   readonly args: S
   readonly prepare?: (args: S["Type"], run: ToolRun) => Prepared<P> | ToolResult | Promise<Prepared<P> | ToolResult>
   readonly run: (args: S["Type"], run: ToolRun, plan: P) => Promise<ToolResult>
@@ -150,6 +159,7 @@ export const builtinTool = <S extends Schema.Codec<unknown, unknown, never, neve
     namespace,
     name: definition.name,
     permission: definition.permission,
+    ...(definition.defer === undefined ? {} : { defer: definition.defer }),
     ...(definition.actions === undefined ? {} : { actions: definition.actions }),
     spec: {
       name: namespace === null ? definition.name : `${namespace}_${definition.name}`,

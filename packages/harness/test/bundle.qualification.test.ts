@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { CliRun, Client, waitFor } from "./support/cli.ts"
+import { databaseGuide } from "../src/tools/session/index.ts"
 
 /*
  * Qualifies the bundle `bun run test:qualification` names: the binary it
@@ -65,6 +66,25 @@ describe("the bundle", () => {
     expect(existsSync(join(extracted, "web/index.html"))).toBe(true)
     expect(readFileSync(join(extracted, "web/revision.txt"), "utf8").trim()).toBe(revision)
   })
+
+  test("the official sqlite3 CLI reads the migrated bundle database through the documented bounded queries", async () => {
+    const sqlite3 = Bun.which("sqlite3")
+    if (sqlite3 === null) throw new Error("the official sqlite3 executable is unavailable on PATH")
+    const run = new CliRun({}, [binary])
+    try {
+      await run.prepare()
+      const guide = databaseGuide(sqlite3, run.databasePath)
+      expect(guide.available).toBe(true)
+      for (const query of guide.queries) {
+        expect(query.sql).toContain("LIMIT 100")
+        const result = Bun.spawnSync([sqlite3, "-readonly", run.databasePath, query.sql])
+        expect(result.exitCode).toBe(0)
+        expect(result.stderr.toString()).toBe("")
+      }
+    } finally {
+      await run.cleanup()
+    }
+  }, 30_000)
 
   test("its binary migrates, authenticates an API token, routes a permission action, crosses a steering boundary, times out a shell call, and reads a docx", async () => {
     const replies = [

@@ -111,6 +111,92 @@ question and permission decision are client actions, not UserTurns;
 [model context](model-context.md#questions) and
 [permissions](permissions.md) explain their domain behavior.
 
+## Session tools
+
+An agent has five direct tools for working with sessions. They are
+withheld under the standard `session` permission and are not in the code
+mode inventory.
+
+- `session_message` takes `text`, optionally `sessionId`, retained
+  `attachments`, a `selection` patch, and an optional `subscribe`.
+  Omitting `sessionId` creates a session with the caller's effective title,
+  model, and effort, applies the supplied selection, and submits only the
+  supplied text to it. A named target receives the text as steered input,
+  and naming the caller's own session is rejected. The receipt gives the
+  resolved `sessionId`, the waiting `inputId`, and whether the session was
+  created.
+- `session_fork` branches the calling session after the model response's
+  other tools settle. The first accepted fork call in a response succeeds;
+  later fork calls in that response fail without changing the first. An
+  ordinary failed tool result does not suppress the fork. The response
+  resumes the copied AgentTurn in the branch with no synthetic user input.
+- `session_subscription` takes a source `sessionId`, an `action` of
+  `subscribe` or `unsubscribe`, and optional message categories.
+  Categories are `user`, `agent_intermediate`, and `agent_final`;
+  omission selects only `agent_final`. Subscriptions start with later
+  messages, keep one filter per receiver/source pair, and reject a source
+  equal to the receiver.
+- `session_wait` waits for activity without returning message content. Its
+  optional `timeout_ms` defaults to 30,000 ms, is raised to a configured
+  minimum of 10,000 ms, and is rejected above a configured maximum of
+  3,600,000 ms. The normal tool execution budget still applies.
+- `session_list` returns every session's selected and active settings and
+  its current working or idle activity, together with the database
+  discovery guide described below.
+
+A peer message records the sender's session id, effective title, and
+effective model from the executing tool turn. The recipient never trusts
+an origin supplied in the message body. Retained attachments become
+recipient-owned references when the input is accepted and remain readable
+when the sender later rewinds or no longer references them.
+
+## Publications and subscriptions
+
+A subscription delivers durable developer notifications. User messages are
+published only after admission, in their original order. Assistant text is
+published after its model call commits: text committed with tool calls is
+an intermediate message, and text from a reply with no tool calls is final
+only when no eligible input continues the turn. Silent successful
+completion publishes nothing. Context-turn output is excluded. A receipt
+retains the source session id, title, model, and message identity at
+publication time, so later selection changes do not rewrite it.
+
+An abnormal idle settles a failed, cancelled, or restart-interrupted turn
+only when no eligible input continues the session, and publishes a notice
+that no message-category filter can exclude. Automatic notices carry each
+failure root independently. The notice records the root's visited sessions
+and suppresses a delivery that would re-enter one, reporting `reentry`
+through the subscription suppression log without including message
+content. Explicit `session_message` work starts a fresh chain.
+
+Subscriptions and their pending deliveries are stored with the server.
+Restart restores their progress, and a recipient rewind reconciles
+subscription definitions from the operations in retained turns. A filter
+update removes pending optional deliveries immediately. Unsubscribe removes
+every pending delivery from that receiver/source pair, including abnormal
+notices; both removals release the recipient's attachment references for the
+discarded input, and admitted notifications remain in recipient history. Rewinding a
+source does not remove copies already published to recipients.
+
+## Database discovery
+
+`session_list` includes a read-only database guide with the resolved
+database path and official `sqlite3` executable. Its commands use
+`sqlite3 -readonly`. Named queries with their columns cover current settings,
+conversation history, historical turns, waiting input, context workflows, and
+pending restores, each bounded to 100 rows. Conversation previews join
+`contents` by content identity; waiting queries include mode, trigger, and a
+bounded body; restore queries include each file's area, name, and content
+identity. A restore with no files remains listed with null file fields.
+Stored unsettled turn rows describe settlement state; they do not prove a
+process is live after a crash. Mutations go through harness operations.
+
+The official `sqlite3` executable is an external prerequisite for this
+workflow. The harness reports its absence in the guide and does not install
+it while starting; a path that is not an executable also reports unavailable.
+Qualification runs the documented commands against a
+built, migrated database.
+
 `session.cancel` ends the running turn with a `RUN_FINISHED` event whose
 outcome is `cancelled`. It aborts the running model call and tool call,
 and gives each of the turn's tool calls without a result a `canceled`
@@ -159,6 +245,15 @@ content, and the source's
 client actions, and shell processes are not copied. Its first eligible
 delivery carries the fork component, which reconciles identity and file
 generations without starting a model call by itself.
+
+The agent-facing `session_fork` tool forks the calling session and
+continues the copied AgentTurn. Its branch keeps the source turn's
+effective title, model, and effort, while the branch's selected settings
+come from the source at fork time. It copies every title-scoped grant,
+research and memory state, and retained references. It does not copy
+subscriptions, pending input, live processes, executing interpreter state,
+or delegated actions. Each branch changes grants independently. A fork
+creates no subscription.
 
 `session.rewind` removes a rewind point's turn and every later turn with
 their events, the conversation state they own, and the `INPUT_WAITING`

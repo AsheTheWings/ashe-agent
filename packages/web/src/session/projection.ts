@@ -6,7 +6,7 @@ import type {
   AgentProfile,
   InputMode,
   PermissionAnswer,
-  Sender,
+  MessageSender,
   SessionEvent,
   SessionEventBody,
 } from "@ashe-agent/protocol"
@@ -54,7 +54,7 @@ export type UserItem = {
     readonly id: string
     readonly text: string
     readonly mode: InputMode
-    readonly sender: Sender
+    readonly sender: MessageSender
   }>
   readonly runId: string | null
 }
@@ -130,7 +130,7 @@ export type PendingInput = {
   readonly seq: number
   readonly text: string
   readonly mode: InputMode
-  readonly sender: Sender
+  readonly sender: MessageSender
 }
 
 export type PendingPermission = {

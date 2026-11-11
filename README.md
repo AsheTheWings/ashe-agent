@@ -33,6 +33,12 @@ bun install --frozen-lockfile
 bun run gate
 ```
 
+The agent's read-only database discovery workflow uses the official
+`sqlite3` executable. Harness startup does not install it; `session_list`
+reports its resolved path and availability. Bundle qualification requires
+the executable on `PATH` and runs the documented queries against the
+migrated bundle database.
+
 ## Build
 
 `bun run bundle` builds, from a commit with no uncommitted changes,

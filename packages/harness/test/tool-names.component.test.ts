@@ -8,6 +8,7 @@ import type { RequestContext } from "../src/server/websocket.ts"
 import { sessionHandlers } from "../src/sessions/handlers.ts"
 import { builtinTools } from "../src/tools/builtin.ts"
 import { executeTool } from "../src/tools/codemode/execute.ts"
+import { sessionTools } from "../src/tools/session/index.ts"
 import { ShellProcesses } from "../src/tools/shell/index.ts"
 import { AgentHarness, configuredModel, say, testTools } from "./support/agent.ts"
 
@@ -52,6 +53,11 @@ const sampleArgs: Record<string, unknown> = {
   web_search: { query: "q" },
   web_fetch: { urls: ["https://example.com/"] },
   execute: { code: "1" },
+  session_message: { text: "hello" },
+  session_fork: {},
+  session_subscription: { sourceSessionId: "other", action: "subscribe" },
+  session_wait: {},
+  session_list: {},
 }
 
 const permissionOf = async (tool: Tool) => {
@@ -79,6 +85,11 @@ describe("tool names", () => {
         "web_search",
         "web_fetch",
         "execute",
+        "session_message",
+        "session_fork",
+        "session_subscription",
+        "session_wait",
+        "session_list",
         "context_append",
         "context_get_open_items",
         "context_ask_question",
@@ -92,7 +103,7 @@ describe("tool names", () => {
   test("each built-in tool is decided under its permission name", async () => {
     const shell = processes()
     try {
-      const tools = [...builtin(shell), executeTool(() => testTools(), {})]
+      const tools = [...builtin(shell), executeTool(() => testTools(), {}), ...sessionTools({} as any)]
       const permissions: Record<string, string | null> = {}
       for (const tool of tools) permissions[tool.spec.name] = await permissionOf(tool)
       expect(permissions).toEqual({
@@ -104,6 +115,11 @@ describe("tool names", () => {
         web_search: "web",
         web_fetch: "web",
         execute: "execute",
+        session_message: "session",
+        session_fork: "session",
+        session_subscription: "session",
+        session_wait: "session",
+        session_list: "session",
       })
     } finally {
       shell.stopAll()

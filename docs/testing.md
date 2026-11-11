@@ -57,7 +57,10 @@ that file, or the bundle it is given: it checks that `web/` holds
 `--version` prints, then
 migrates, creates an API token, authenticates over WebSocket, and exercises a
 steering-created turn boundary, one exclusively assigned permission action, a
-shell timeout followed by model continuation, and a `file_read` of a docx.
+shell timeout followed by model continuation, and a `file_read` of a docx. It
+also runs the documented `sqlite3 -readonly` database queries against the
+binary's migrated state, which needs the official `sqlite3` executable on
+`PATH`.
 
 `bun run release-gate` is the release gate: the fast gate, then the
 bundle built and qualified, then the web image built with

@@ -17,6 +17,11 @@ without running.
 | `web_fetch` | `web` | each URL |
 | `skill` | `skill` | the skill's name; [agents and skills](agents-and-skills.md) describes it |
 | `execute` | `execute` | `*`; [code mode](code-mode.md) describes the calls a program makes |
+| `session_message` | `session` | the target session id, or `new`, and a requested title |
+| `session_fork` | `session` | the calling session id |
+| `session_subscription` | `session` | the source session id |
+| `session_wait` | `session` | the calling session id |
+| `session_list` | `session` | the calling session id |
 | `context_append` | none, never checked | none |
 | `context_get_open_items` | none, never checked | none |
 | `context_ask_question` | `context_ask_question` | `*` |
@@ -25,6 +30,12 @@ without running.
 The `context` tools record and read the session's timelines and ask the
 user questions; [model context](model-context.md#timelines) explains
 them.
+
+The `session` tools message, fork, subscribe to, wait on, and list
+sessions; [sessions](sessions.md#session-tools) explains their inputs,
+receipts, and lifecycle. Session and context tools are offered only
+directly to the model. They are omitted from code mode discovery, search,
+and program execution even though a program can call MCP tools.
 
 [Permissions](permissions.md) explains how subjects are resolved and
 decided. A tool resolves its paths once, when the call is checked, and

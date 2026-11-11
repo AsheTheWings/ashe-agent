@@ -32,6 +32,21 @@ export const AgentTitle = Schema.NonEmptyString
 
 export type AgentTitle = typeof AgentTitle.Type
 
+/** A session-originated message's authored identity, taken from the executing AgentTurn. */
+export const AgentSender = Schema.Struct({
+  kind: Schema.Literal("session"),
+  sessionId: Id,
+  agentTitle: AgentTitle,
+  modelId: Schema.NullOr(Id),
+})
+
+export type AgentSender = typeof AgentSender.Type
+
+/** Who authored session content: an owner credential, or another session's AgentTurn. */
+export const MessageSender = Schema.Union([Sender, AgentSender])
+
+export type MessageSender = typeof MessageSender.Type
+
 /** The selected model and effort. A null model is explicitly unconfigured; null effort is the model default. */
 export const ModelSettings = Schema.Struct({
   modelId: Schema.NullOr(Id),
@@ -115,6 +130,18 @@ export type SessionSummary = typeof SessionSummary.Type
 export const InputMode = Schema.Literals(["steer", "queue"])
 
 export type InputMode = typeof InputMode.Type
+
+/** The message categories an agent subscription can select. */
+export const MessageCategory = Schema.Literals(["user", "agent_intermediate", "agent_final"])
+
+export type MessageCategory = typeof MessageCategory.Type
+
+/** A subscription's category selection, with agent final messages as the default. */
+export const SubscriptionFilter = Schema.Struct({
+  messages: Schema.optionalKey(Schema.Array(MessageCategory)),
+})
+
+export type SubscriptionFilter = typeof SubscriptionFilter.Type
 
 export const PermissionAnswer = Schema.Literals(["once", "always", "reject"])
 

@@ -1,4 +1,5 @@
 import type { FileMetadata } from "../agents/titles.ts"
+import type { AgentIdentity, MessageCategory } from "@ashe-agent/protocol"
 import { block, escapeTags, lowerHeadings } from "../agent/blocks.ts"
 import harness from "./harness.md" with { type: "text" }
 
@@ -227,6 +228,37 @@ export const forkComponent = (source: string, target: string, skipped = 0): Comp
     "Fork",
     `This session was forked: session \`${target}\` is a copy of session \`${source}\` through the turns above. It has its own session directory, with \`research/\` and \`memory/\` as they stood at that point and a copy of \`scratch/\`${skipped === 0 ? "" : `, without ${skipped} sockets, FIFOs, and devices`}. Absolute paths above, and files in \`scratch/\`, may still refer to the source's directory; arrange what the work needs. Other files, processes, and effects of the source's turns may persist.`,
     { identity: { sessionId: target } },
+  )
+
+/** A subscription publication as an attributed developer transcript message. */
+export const sessionMessage = (
+  author: AgentIdentity,
+  category: MessageCategory,
+  messageId: string,
+  text: string,
+  attachments: ReadonlyArray<{ readonly name: string }>,
+): Component =>
+  component(
+    "notification",
+    "session_message",
+    "Session Message",
+    [
+      `A subscribed message from session \`${escapeTags(author.sessionId)}\` (title \`${escapeTags(author.agentTitle)}\`, model \`${escapeTags(author.modelId ?? "none")}\`, message \`${escapeTags(messageId)}\`, category \`${category}\`):`,
+      "",
+      content(text),
+      ...(attachments.length === 0
+        ? []
+        : ["", `Attachments named by the source: ${attachments.map((attachment) => `\`${escapeTags(attachment.name)}\``).join(", ")}.`]),
+    ].join("\n"),
+  )
+
+/** An abnormal idle notice with no message content. */
+export const abnormalIdle = (outcome: "failed" | "cancelled" | "interrupted", reason: string | null): Component =>
+  component(
+    "notification",
+    "session_abnormal_idle",
+    "Subscribed Session Stopped Abnormally",
+    `A subscribed source session reached idle after an abnormal outcome (\`${outcome}\`).${reason === null ? "" : ` ${escapeTags(reason)}`}`,
   )
 
 /** The rewind notification component. */

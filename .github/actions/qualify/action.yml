@@ -34,6 +34,12 @@ runs:
         bundle="$PWD/dist/ashe-agent-linux-x64.tar"
         echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
         echo "digest=$(sha256sum "$bundle" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+    - name: Install the official sqlite3 CLI
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install --yes sqlite3
+
     - name: Qualify the bundle
       shell: bash
       env:

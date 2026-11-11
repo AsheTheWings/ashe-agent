@@ -132,12 +132,27 @@ describe("MCP servers", () => {
           "local_echo",
           "local_quit",
           "other_echo",
+          "session_fork",
+          "session_list",
+          "session_message",
+          "session_subscription",
+          "session_wait",
         ])
         await waitFor("the stopped server's tools to leave", () => (names(registry.tools(true)).length === 1 ? true : undefined))
         h.model.next(say("after"))
         h.input(id, "next")
         await h.turnsEnded(id, 2)
-        expect(h.model.last().tools.map((spec) => spec.name)).toEqual(["other_echo", "context_append", "context_get_open_items", "context_ask_question"])
+        expect(h.model.last().tools.map((spec) => spec.name)).toEqual([
+          "other_echo",
+          "session_message",
+          "session_fork",
+          "session_subscription",
+          "session_wait",
+          "session_list",
+          "context_append",
+          "context_get_open_items",
+          "context_ask_question",
+        ])
       } finally {
         await h.cleanup()
       }
@@ -251,7 +266,17 @@ describe("MCP servers", () => {
       h.model.next(say("after"))
       h.input(id, "next")
       await h.turnsEnded(id, 2)
-      expect(h.model.last().tools.map((spec) => spec.name)).toEqual(["local_echo", "context_append", "context_get_open_items", "context_ask_question"])
+      expect(h.model.last().tools.map((spec) => spec.name)).toEqual([
+        "local_echo",
+        "session_message",
+        "session_fork",
+        "session_subscription",
+        "session_wait",
+        "session_list",
+        "context_append",
+        "context_get_open_items",
+        "context_ask_question",
+      ])
     } finally {
       await h.cleanup()
       await registry.stop()

@@ -3,9 +3,12 @@ import { context as otelContext, type Context as TraceContext, type Span } from 
 import { Context, Effect, Exit, Fiber, Layer } from "effect"
 import {
   type Agent,
+  type AgentSender,
   type AgentProfile,
   ErrorCode,
   type InputMode,
+  type MessageCategory,
+  type MessageSender,
   type Model,
   PERMISSION_ACTION,
   type PermissionActionResult,
@@ -20,7 +23,8 @@ import {
 } from "@ashe-agent/protocol"
 import type { ModelPort } from "../agent/model.ts"
 import { programCallsNote, unfinishedResult } from "../agent/notes.ts"
-import { withholdingName, type Tool } from "../agent/tools.ts"
+import { withholdingName, type Tool, type ToolResult, type ToolRun } from "../agent/tools.ts"
+import { databaseGuide, sessionTools, type SessionToolHost } from "../tools/session/index.ts"
 import type { ToolContent, ToolOutcome } from "../agent/window.ts"
 import type { SessionAgent } from "../agents/agents.ts"
 import { AttachmentError, AttachmentStore, type UploadLimits } from "../content/attachments.ts"
@@ -28,12 +32,14 @@ import { InstructionsUnreadable, type KnownInstructions } from "../agents/setup.
 import { displayTitle, type FileMetadata } from "../agents/titles.ts"
 import {
   currentDates,
+  abnormalIdle,
   continuationComponent,
   datesChanged,
   forkComponent,
   harnessInstructions,
   memoryRestored,
   rewindComponent,
+  sessionMessage,
   scratchLost,
   sameDates,
   type Component,
@@ -59,6 +65,7 @@ import { endSpan, isErrorClass, recordDuration, startSpan, traced, withSpan, typ
 import { toolPolicy as defaultToolPolicy, type ToolExecutionPolicy } from "../agent/tools.ts"
 import { ContextTurns } from "./context-turns.ts"
 import { ActionBroker } from "./actions.ts"
+import { CommunicationStore, type Delivery, type Publication, type Reaction } from "./communication.ts"
 import { IntegrityFailure } from "../agent/failure.ts"
 import type { Item, NewWaitingEntry, WaitingEntry } from "./conversation.ts"
 import type { FileRef } from "./file-state.ts"
@@ -95,9 +102,15 @@ export interface TurnContext {
     message: AIMessage,
     events: ReadonlyArray<SessionEventBody>,
     modelCallId: string,
-  ) => ReadonlyArray<string>
+  ) => { readonly entryId: string; readonly invocationIds: ReadonlyArray<string> }
   /** Runs post-commit context work after the assistant commit becomes durable. */
   readonly afterCommit: () => void
+  /** Publishes a completed non-context assistant message to matching agent subscriptions. */
+  readonly publishAssistant: (
+    entryId: string,
+    text: string,
+    category: "agent_intermediate" | "agent_final",
+  ) => void
   /** Records a tool result as an item, in one transaction with its `TOOL_CALL_RESULT` event. */
   readonly commitResult: (
     result: { readonly callId: string; readonly name: string; readonly content: ToolContent; readonly outcome: ToolOutcome },
@@ -130,6 +143,8 @@ export interface TurnContext {
   readonly toolPolicy: ToolExecutionPolicy
   /** The checkpoint window size of the turn's model for the session's agent. */
   readonly checkpointWindowSize: number
+  /** The next model-call ordinal of this turn. */
+  readonly nextModelCallOrdinal: number
   /** Whether the turn is a context turn now. */
   readonly isContextTurn: () => boolean
   /** A model call would leave less than the reserve: start a context workflow and end this turn. */
@@ -209,6 +224,12 @@ export interface HubOptions {
   readonly toolPolicy?: ToolExecutionPolicy
   readonly uploads?: AttachmentStore
   readonly uploadLimits?: UploadLimits
+  /** The resolved database file agents inspect with the official SQLite CLI. */
+  readonly databasePath?: string
+  readonly sqlite3Path?: string
+  readonly communicationWaitMinMs?: number
+  readonly communicationWaitDefaultMs?: number
+  readonly communicationWaitMaxMs?: number
   readonly now?: () => number
 }
 
@@ -296,10 +317,14 @@ export class SessionHub {
   private readonly states = new Map<string, SessionState>()
   readonly actions = new ActionBroker((sessionId, body) => this.emit(sessionId, body))
   private readonly now: () => number
-  private readonly toolPolicy: ToolExecutionPolicy
+  readonly toolPolicy: ToolExecutionPolicy
   readonly attachments: AttachmentStore
+  readonly communication: CommunicationStore
+  private readonly sessionTools: ReadonlyArray<Tool>
   private stopping = false
+  private starting = true
   private readonly context: ContextTurns
+  private readonly activityWaiters = new Map<string, Set<() => void>>()
 
   constructor(
     readonly store: SessionStore,
@@ -307,6 +332,8 @@ export class SessionHub {
   ) {
     this.now = options.now ?? Date.now
     this.attachments = options.uploads ?? new AttachmentStore(store.db, options.uploadLimits)
+    this.communication = new CommunicationStore(store.db)
+    this.sessionTools = sessionTools(this)
     this.toolPolicy = options.toolPolicy ?? defaultToolPolicy()
     this.context = new ContextTurns(
       {
@@ -324,6 +351,26 @@ export class SessionHub {
 
   private get conversation() {
     return this.store.conversation
+  }
+
+  get databasePath() {
+    return this.options.databasePath ?? "(the open harness database)"
+  }
+
+  get sqlite3Path() {
+    return this.options.sqlite3Path ?? "/usr/bin/sqlite3"
+  }
+
+  get communicationWaitMinMs() {
+    return this.options.communicationWaitMinMs ?? 10_000
+  }
+
+  get communicationWaitDefaultMs() {
+    return this.options.communicationWaitDefaultMs ?? 30_000
+  }
+
+  get communicationWaitMaxMs() {
+    return this.options.communicationWaitMaxMs ?? 3_600_000
   }
 
   /** The trace context of the session's running turn, the parent of the spans of its work; else the active one. */
@@ -351,8 +398,8 @@ export class SessionHub {
    */
   recover() {
     for (const { sessionId, runId } of this.store.runningTurns()) {
+      const turn = this.store.getTurn(sessionId, runId)!
       this.store.db.transaction(() => {
-        const turn = this.store.getTurn(sessionId, runId)!
         const window = this.conversation.currentWindow(sessionId)!
         for (const requestId of this.openRequests(sessionId, runId)) {
           this.store.appendEvent(sessionId, { type: "PERMISSION_WITHDRAWN", requestId, reason: "restart" }, this.now())
@@ -403,6 +450,12 @@ export class SessionHub {
         this.store.endTurn(sessionId, runId, "interrupted", this.now())
         this.store.appendEvent(sessionId, { type: "RUN_INTERRUPTED", threadId: sessionId, runId }, this.now())
       })()
+      const waiting = this.conversation.waiting(sessionId)
+      const continues =
+        waiting.some(isIndependent) || waiting.some(isContinuation) || waiting.some(isContextInput)
+      if (!continues) {
+        this.store.db.transaction(() => this.publishAbnormal(sessionId, turn, "interrupted", null))()
+      }
     }
   }
 
@@ -416,6 +469,7 @@ export class SessionHub {
    */
   start() {
     this.files.sweep((id) => this.store.getSession(id) !== null)
+    this.recoverForkIntents()
     for (const { id } of this.store.sessions()) this.reportingFailure(id, "memory_publish_failed", () => this.completePublish(id))
     const failed = new Set(this.fileState.sessionsPendingRestore().filter((id) => !this.restoreIfPending(id)))
     this.context.settleAtStart()
@@ -423,7 +477,50 @@ export class SessionHub {
     for (const { id } of this.store.sessions()) {
       if (!failed.has(id)) this.reportingFailure(id, "memory_check_failed", () => this.checkMemory(id))
     }
+    this.starting = false
     this.resumeWaiting(failed)
+  }
+
+  /** Finalizes durable fork intents whose effects never became visible, or abandons removed source invocations. */
+  private recoverForkIntents() {
+    for (const intent of this.communication.pendingForkIntents()) {
+      const source = this.store.getSession(intent.source_session_id)
+      const eligible =
+        source !== null &&
+        this.store.getTurn(source.id, intent.source_run_id) !== null &&
+        this.store.db
+          .query<{ n: number }, [string, string, string, string]>(
+            `SELECT count(*) AS n FROM agent_tools
+              WHERE session_id = ? AND entry_id = ? AND model_call_id = ? AND provider_call_id = ?
+                AND settled_at IS NULL`,
+          )
+          .get(
+            source.id,
+            intent.source_invocation_id,
+            intent.source_model_call_id,
+            intent.source_provider_call_id,
+          )!.n > 0
+      if (!eligible) {
+        this.files.removeSession(intent.branch_session_id)
+        this.communication.abandonFork(intent.intent_id)
+        continue
+      }
+      try {
+        const prepared = this.prepareForkFiles(source.id, intent.branch_session_id)
+        this.finalizeFork({
+          intentId: intent.intent_id,
+          source,
+          sourceRunId: intent.source_run_id,
+          sourceModelCallId: intent.source_model_call_id,
+          sourceProviderCallId: intent.source_provider_call_id,
+          sourceInvocationId: intent.source_invocation_id,
+          branchId: intent.branch_session_id,
+          prepared,
+        })
+      } catch {
+        // Keep the intent for the next start; ordinary interruption still records no unperformed effect.
+      }
+    }
   }
 
   /** Runs `work` for the session, turning a failure into a session error event of `code`. */
@@ -959,7 +1056,7 @@ export class SessionHub {
    * `context_get_open_items` under any rules.
    */
   private offeredTools(rules: ReadonlyArray<Rule>, sessionId?: string): ReadonlyArray<Tool> {
-    return [...(this.options.tools?.() ?? []), ...this.context.tools].filter((tool) => {
+    return [...(this.options.tools?.() ?? []), ...this.sessionTools, ...this.context.tools].filter((tool) => {
       if (!UNCHECKED_CONTEXT_TOOLS.includes(tool.spec.name) && whollyDenied(rules, withholdingName(tool))) return false
       return tool.actions === undefined || (sessionId !== undefined && tool.actions.every((name) => this.actions.available(sessionId, name)))
     })
@@ -1252,8 +1349,20 @@ export class SessionHub {
     sessionId: string,
     text: string,
     mode: InputMode | undefined,
-    sender: Sender,
-    options: { readonly selection?: SelectionPatch; readonly attachments?: ReadonlyArray<RetainedAttachmentRef> } = {},
+    sender: MessageSender,
+    options: {
+      readonly selection?: SelectionPatch
+      readonly attachments?: ReadonlyArray<RetainedAttachmentRef>
+      /** The sending session for a peer submission, whose retained attachments it owns. */
+      readonly fromSessionId?: string
+      /** The session whose turn owns an optional atomic subscription operation. */
+      readonly actorSessionId?: string
+      /** The sender's turn that owns an optional atomic subscription operation. */
+      readonly actorRunId?: string
+      readonly subscribeTo?: ReadonlyArray<MessageCategory>
+      /** Leaves activity notification and turn start to the caller after an enclosing transaction commits. */
+      readonly deferStart?: boolean
+    } = {},
   ): string {
     this.session(sessionId)
     if (this.stopping) throw conflict("the server is stopping")
@@ -1269,14 +1378,544 @@ export class SessionHub {
       ...(options.attachments === undefined || options.attachments.length === 0 ? {} : { attachments: options.attachments }),
     }
     this.commit(sessionId, (append) => {
+      if (options.subscribeTo !== undefined) {
+        if (
+          options.fromSessionId === undefined ||
+          options.actorSessionId === undefined ||
+          options.actorRunId === undefined
+        ) {
+          throw invalid("a peer subscription needs its source session and turn")
+        }
+        this.communication.subscribe(
+          options.actorSessionId,
+          sessionId,
+          options.subscribeTo,
+          options.actorSessionId,
+          options.actorRunId,
+          this.now(),
+        )
+      }
       if (options.attachments !== undefined && options.attachments.length > 0) {
-        this.attachments.claim(senderOwner(sender), sessionId, inputId, options.attachments, this.now())
+        if (sender.kind === "session") {
+          this.attachments.claimFromSession(sender.sessionId, sessionId, inputId, options.attachments, this.now())
+        } else {
+          this.attachments.claim(senderOwner(sender), sessionId, inputId, options.attachments, this.now())
+        }
       }
       this.conversation.addWaiting(sessionId, entry, this.now())
       append({ type: "INPUT_WAITING", inputId, text, mode: entry.mode, sender })
     })
-    this.startNext(sessionId)
+    if (options.deferStart !== true) {
+      this.notifyActivity(sessionId)
+      this.startNext(sessionId)
+    }
     return inputId
+  }
+
+  private notifyActivity(sessionId: string) {
+    for (const listener of [...(this.activityWaiters.get(sessionId) ?? [])]) listener()
+  }
+
+  /**
+   * Waits for this session's next activity without consuming message
+   * content. Registration precedes the pending-input check, so activity at
+   * the boundary is reported; pending steering wins over a running turn.
+   */
+  async awaitActivity(sessionId: string, timeoutMs: number, signal: AbortSignal, clock: ToolExecutionPolicy["clock"]) {
+    return await new Promise<"steering" | "activity" | "timeout" | "cancelled">((resolve) => {
+      let settled = false
+      let timer: unknown = null
+      const finish = (outcome: "steering" | "activity" | "timeout" | "cancelled") => {
+        if (settled) return
+        settled = true
+        if (timer !== null) clock.clearTimeout(timer)
+        signal.removeEventListener("abort", aborted)
+        const waiters = this.activityWaiters.get(sessionId)
+        waiters?.delete(listener)
+        if (waiters?.size === 0) this.activityWaiters.delete(sessionId)
+        resolve(outcome)
+      }
+      const listener = () => {
+        const waiting = this.conversation.waiting(sessionId)
+        finish(waiting.some(isIndependent) ? "steering" : "activity")
+      }
+      const aborted = () => finish("cancelled")
+      let waiters = this.activityWaiters.get(sessionId)
+      if (waiters === undefined) {
+        waiters = new Set()
+        this.activityWaiters.set(sessionId, waiters)
+      }
+      waiters.add(listener)
+      signal.addEventListener("abort", aborted, { once: true })
+      timer = clock.setTimeout(() => finish("timeout"), timeoutMs)
+      const waiting = this.conversation.waiting(sessionId)
+      if (waiting.some(isIndependent)) finish("steering")
+      else if (waiting.length > 0) finish("activity")
+    })
+  }
+
+  /**
+   * Records one publication and queues each selected recipient delivery as
+   * a developer notification. The caller's surrounding transaction makes
+   * the publication, delivery, and waiting input atomic.
+   */
+  private publishToSubscribers(
+    publication: Omit<Publication, "publicationId">,
+  ): ReadonlyArray<string> {
+    const deliveries = this.communication.publish({ ...publication, publicationId: crypto.randomUUID() })
+    for (const delivery of deliveries) {
+      if (delivery.publication.attachments.length > 0) {
+        this.attachments.claimFromSession(
+          delivery.publication.author.sessionId,
+          delivery.receiverSessionId,
+          delivery.inputId,
+          delivery.publication.attachments,
+          this.now(),
+        )
+      }
+      const component =
+        delivery.publication.category === "abnormal"
+          ? abnormalIdle(
+              delivery.publication.text.split("\n", 1)[0] as "failed" | "cancelled" | "interrupted",
+              delivery.publication.text.split("\n").slice(1).join("\n") || null,
+            )
+          : sessionMessage(
+              delivery.publication.author,
+              delivery.publication.category,
+              delivery.publication.sourceMessageId ?? delivery.publication.publicationId,
+              delivery.publication.text,
+              delivery.publication.attachments,
+            )
+      const reaction: Reaction | undefined =
+        delivery.rootId === null
+          ? undefined
+          : {
+              publicationId: delivery.publication.publicationId,
+              rootId: delivery.rootId,
+              visited: delivery.visited,
+              automatic: true,
+            }
+      this.conversation.addWaiting(
+        delivery.receiverSessionId,
+        {
+          kind: "notification",
+          inputId: delivery.inputId,
+          component,
+          trigger: "notification",
+          ...(reaction === undefined ? {} : { reaction }),
+        },
+        this.now(),
+      )
+    }
+    return deliveries.map((delivery) => delivery.receiverSessionId)
+  }
+
+  private wakePublished(receivers: ReadonlyArray<string>) {
+    for (const receiver of new Set(receivers)) {
+      this.notifyActivity(receiver)
+      if (!this.stopping) this.startNext(receiver)
+    }
+  }
+
+  private publishUser(sessionId: string, turn: TurnRecord, input: { inputId: string; text: string; attachments?: ReadonlyArray<RetainedAttachmentRef> }) {
+    return this.publishToSubscribers({
+      sourceSessionId: sessionId,
+      sourceMessageId: input.inputId,
+      category: "user",
+      author: { sessionId, agentTitle: turn.agentTitle, modelId: turn.model },
+      text: input.text,
+      attachments: input.attachments ?? [],
+      rootId: null,
+      rootVisited: [],
+      createdAt: this.now(),
+    })
+  }
+
+  private publishAssistant(sessionId: string, turn: TurnRecord, entryId: string, text: string, category: "agent_intermediate" | "agent_final") {
+    return this.publishToSubscribers({
+      sourceSessionId: sessionId,
+      sourceMessageId: entryId,
+      category,
+      author: { sessionId, agentTitle: turn.agentTitle, modelId: turn.model },
+      text,
+      attachments: [],
+      rootId: null,
+      rootVisited: [],
+      createdAt: this.now(),
+    })
+  }
+
+  private publishAbnormal(sessionId: string, turn: TurnRecord, outcome: "failed" | "cancelled" | "interrupted", reason: string | null) {
+    const roots = this.communication.reactions(sessionId, turn.runId)
+    const effective =
+      roots.length === 0
+        ? [{ rootId: crypto.randomUUID(), visited: [] as ReadonlyArray<string>, automatic: true }]
+        : roots
+    const receivers: Array<string> = []
+    for (const root of effective) {
+      receivers.push(
+        ...this.publishToSubscribers({
+          sourceSessionId: sessionId,
+          sourceMessageId: null,
+          category: "abnormal",
+          author: { sessionId, agentTitle: turn.agentTitle, modelId: turn.model },
+          text: reason === null ? outcome : `${outcome}\n${reason}`,
+          attachments: [],
+          rootId: root.rootId,
+          rootVisited: root.visited,
+          createdAt: this.now(),
+        }),
+      )
+    }
+    return receivers
+  }
+
+  message(run: ToolRun, args: {
+    sessionId?: string
+    text: string
+    attachments?: ReadonlyArray<RetainedAttachmentRef>
+    selection?: SelectionPatch
+    subscribe?: { messages?: ReadonlyArray<MessageCategory> }
+  }): Promise<ToolResult> {
+    if (args.sessionId === run.sessionId) throw invalid("a session cannot message itself")
+    if (this.stopping) throw conflict("the server is stopping")
+    let recipient = args.sessionId
+    let created = false
+    if (recipient === undefined) {
+      const current: AgentProfile = {
+        agentTitle: run.agentTitle ?? UNTITLED_AGENT_TITLE,
+        modelSettings: { modelId: run.modelId ?? null, reasoningEffort: run.reasoningEffort ?? null },
+      }
+      const profile = args.selection === undefined ? current : this.nextAdmissionProfile(current, args.selection)
+      const sender: AgentSender = {
+        kind: "session",
+        sessionId: run.sessionId,
+        agentTitle: run.agentTitle ?? UNTITLED_AGENT_TITLE,
+        modelId: run.modelId ?? null,
+      }
+      let inputId = ""
+      let fresh: string | undefined
+      try {
+        this.store.db.transaction(() => {
+          fresh = this.create({
+            agent: profile.agentTitle,
+            model: profile.modelSettings.modelId,
+            reasoningEffort: profile.modelSettings.reasoningEffort,
+          }).id
+          recipient = fresh
+          inputId = this.input(fresh, args.text, "steer", sender, {
+            ...(args.selection === undefined ? {} : { selection: args.selection }),
+            ...(args.attachments === undefined ? {} : { attachments: args.attachments }),
+            fromSessionId: run.sessionId,
+            actorSessionId: run.sessionId,
+            actorRunId: run.runId,
+            deferStart: true,
+            ...(args.subscribe === undefined
+              ? {}
+              : { subscribeTo: args.subscribe.messages ?? (["agent_final"] as const) }),
+          })
+        })()
+      } catch (error) {
+        if (fresh !== undefined) {
+          this.states.delete(fresh)
+          try {
+            this.options.files.removeSession(fresh)
+          } catch {
+            // Startup removes an unrecorded session directory left by a failed cleanup.
+          }
+        }
+        throw error
+      }
+      const recipientId = fresh
+      if (recipientId === undefined) throw new IntegrityFailure("the fresh session was not created")
+      this.notifyActivity(recipientId)
+      this.startNext(recipientId)
+      created = true
+      return Promise.resolve({
+        outcome: "success",
+        content: JSON.stringify({ sessionId: recipientId, inputId, created }),
+      })
+    } else {
+      this.session(recipient)
+    }
+    const sender: AgentSender = {
+      kind: "session",
+      sessionId: run.sessionId,
+      agentTitle: run.agentTitle ?? UNTITLED_AGENT_TITLE,
+      modelId: run.modelId ?? null,
+    }
+    const inputId = this.input(recipient, args.text, "steer", sender, {
+      ...(args.selection === undefined ? {} : { selection: args.selection }),
+      ...(args.attachments === undefined ? {} : { attachments: args.attachments }),
+      fromSessionId: run.sessionId,
+      actorSessionId: run.sessionId,
+      actorRunId: run.runId,
+      ...(args.subscribe === undefined
+        ? {}
+        : { subscribeTo: args.subscribe.messages ?? (["agent_final"] as const) }),
+    })
+    return Promise.resolve({
+      outcome: "success",
+      content: JSON.stringify({ sessionId: recipient, inputId, created }),
+    })
+  }
+
+  subscription(run: ToolRun, args: {
+    sourceSessionId: string
+    action: "subscribe" | "unsubscribe"
+    messages?: ReadonlyArray<MessageCategory>
+  }): Promise<ToolResult> {
+    if (args.sourceSessionId === run.sessionId) throw invalid("a session cannot subscribe to itself")
+    this.session(args.sourceSessionId)
+    this.commit(run.sessionId, () => {
+      const now = this.now()
+      if (args.action === "subscribe") {
+        this.communication.subscribe(
+          run.sessionId,
+          args.sourceSessionId,
+          args.messages ?? ["agent_final"],
+          run.sessionId,
+          run.runId,
+          now,
+        )
+      } else {
+        this.communication.unsubscribe(run.sessionId, args.sourceSessionId, run.sessionId, run.runId, now)
+      }
+    })
+    const messages = args.action === "subscribe" ? (args.messages ?? ["agent_final"]) : []
+    return Promise.resolve({
+      outcome: "success",
+      content: JSON.stringify({ sourceSessionId: args.sourceSessionId, subscribed: args.action === "subscribe", messages }),
+    })
+  }
+
+  async wait(run: ToolRun, args: { timeout_ms?: number }): Promise<ToolResult> {
+    const requested = args.timeout_ms ?? this.communicationWaitDefaultMs
+    if (requested > this.communicationWaitMaxMs) {
+      throw invalid(`the wait timeout ${requested} ms is over the configured maximum ${this.communicationWaitMaxMs} ms`)
+    }
+    const timeoutMs = Math.max(requested, this.communicationWaitMinMs)
+    const outcome = await this.awaitActivity(run.sessionId, timeoutMs, run.signal, run.clock)
+    return { outcome: "success", content: JSON.stringify({ outcome }) }
+  }
+
+  listSessions(_run: ToolRun): ToolResult {
+    return {
+      outcome: "success",
+      content: JSON.stringify({
+        sessions: this.list(),
+        database: databaseGuide(this.sqlite3Path, this.databasePath),
+      }),
+    }
+  }
+
+  async forkSession(run: ToolRun): Promise<ToolResult> {
+    if (run.modelCallId === undefined || run.invocationId === undefined) {
+      throw invalid("the fork call has no durable model-call or invocation identity")
+    }
+    const source = this.session(run.sessionId)
+    const turn = this.store.getTurn(run.sessionId, run.runId)
+    if (turn === null) throw notFound(`turn ${run.runId}`)
+    if (this.state(run.sessionId).live?.cancelled === true) throw conflict("the source turn is canceled")
+    const branchId = this.newSessionId()
+    const intent = this.communication.forkIntent({
+      sourceSessionId: run.sessionId,
+      sourceRunId: run.runId,
+      sourceInvocationId: run.invocationId,
+      sourceModelCallId: run.modelCallId,
+      sourceProviderCallId: run.toolCallId,
+      branchSessionId: branchId,
+      createdAt: this.now(),
+    })
+    if (intent.status === "ready") {
+      return {
+        outcome: "success",
+        content: JSON.stringify({
+          sourceSessionId: run.sessionId,
+          sessionId: intent.branchSessionId,
+          continued: true,
+        }),
+      }
+    }
+    const prepared = this.prepareForkFiles(run.sessionId, intent.branchSessionId)
+    try {
+      const branch = this.finalizeFork({
+        intentId: intent.id,
+        source,
+        sourceRunId: run.runId,
+        sourceModelCallId: run.modelCallId,
+        sourceProviderCallId: run.toolCallId,
+        sourceInvocationId: run.invocationId,
+        branchId: intent.branchSessionId,
+        prepared,
+      })
+      this.startForkContinuation(branch, turn.runId)
+      return {
+        outcome: "success",
+        content: JSON.stringify({ sourceSessionId: run.sessionId, sessionId: branch.id, continued: true }),
+      }
+    } catch (error) {
+      if (this.communication.forkStatus(intent.id) !== "ready") throw error
+      const branch = this.session(intent.branchSessionId)
+      this.startForkContinuation(branch, turn.runId)
+      return {
+        outcome: "success",
+        content: JSON.stringify({ sourceSessionId: run.sessionId, sessionId: branch.id, continued: true }),
+      }
+    }
+  }
+
+  private startForkContinuation(branch: SessionRecord, sourceRunId: string) {
+    try {
+      const copied = this.store.getTurn(branch.id, sourceRunId)
+      if (copied === null) throw new IntegrityFailure("the forked turn was not copied")
+      this.launchTurn(branch.id, branch, copied)
+    } catch (error) {
+      try {
+        this.commit(branch.id, (append) =>
+          append({
+            type: "SESSION_ERROR",
+            code: "fork_continuation_failed",
+            message: `the forked turn could not start: ${error instanceof Error ? error.message : String(error)}`,
+          }),
+        )
+      } catch {
+        // Restart recovery interrupts the copied running turn.
+      }
+    }
+  }
+
+  private prepareForkFiles(sourceSessionId: string, branchId: string) {
+    const size = this.files.scratchSize(sourceSessionId)
+    if (size > SCRATCH_FORK_MAX_BYTES) {
+      throw invalid(`the session's scratch holds ${size} bytes, over the fork limit of ${SCRATCH_FORK_MAX_BYTES} bytes`)
+    }
+    const files = this.currentFiles(sourceSessionId)
+    const research = files.research
+    const memory = this.fileState.files(files.refs.filter((ref) => ref.area === "memory"))
+    const generations = this.fileState.generations(sourceSessionId)
+    this.files.removeSession(branchId)
+    return this.withSessionFiles(branchId, () => {
+      this.files.writeResearch(branchId, research)
+      const recorded = this.files.writeGeneration(branchId, 1, memory)
+      this.files.pointMemory(branchId, 1)
+      const { skipped } = this.files.copyScratch(sourceSessionId, branchId)
+      return { recorded, generations, skipped }
+    })
+  }
+
+  private finalizeFork(input: {
+    readonly intentId: string
+    readonly source: SessionRecord
+    readonly sourceRunId: string
+    readonly sourceModelCallId: string
+    readonly sourceProviderCallId: string
+    readonly sourceInvocationId: string
+    readonly branchId: string
+    readonly prepared: ReturnType<SessionHub["prepareForkFiles"]>
+  }): SessionRecord {
+    let branch: SessionRecord | null = null
+    const emittedEvents: Array<readonly [string, SessionEvent]> = []
+    const append = (sessionId: string, body: SessionEventBody, at: number) => {
+      const event = this.store.appendEvent(sessionId, body, at)
+      emittedEvents.push([sessionId, event] as const)
+      return event
+    }
+    this.store.db.transaction(() => {
+      const eligible = this.store.db
+        .query<{ name: string }, [string, string, string, string]>(
+          `SELECT name FROM agent_tools
+            WHERE session_id = ? AND entry_id = ? AND model_call_id = ? AND provider_call_id = ?
+              AND settled_at IS NULL`,
+        )
+        .get(input.source.id, input.sourceInvocationId, input.sourceModelCallId, input.sourceProviderCallId)
+      if (eligible === null || this.store.getTurn(input.source.id, input.sourceRunId) === null) {
+        throw conflict("the source fork invocation is no longer retained and eligible")
+      }
+      if (this.state(input.source.id).live?.cancelled === true) {
+        throw conflict("the source turn is canceled")
+      }
+      const createdAt = this.now()
+      branch = this.store.fork(input.source, { id: input.branchId, createdAt }, input.sourceRunId)
+      this.fileState.recordGeneration(input.branchId, 1, input.prepared.recorded, createdAt)
+      this.fileState.setGenerations(input.branchId, {
+        scratch: input.prepared.generations.scratch,
+        memoryRestore: input.prepared.generations.memoryRestore,
+        forkSkipped: input.prepared.skipped,
+      })
+      const window = this.conversation.currentWindow(input.branchId)!
+      const owner = {
+        runId: input.sourceRunId,
+        model: branch.model,
+        agentTitle: input.source.agent ?? UNTITLED_AGENT_TITLE,
+      }
+      const component = forkComponent(input.source.id, input.branchId, input.prepared.skipped)
+      this.conversation.appendItem(input.branchId, window.position, owner, { kind: "component", component })
+      append(
+        input.branchId,
+        { type: "DEVELOPER_MESSAGE", runId: input.sourceRunId, components: [wire(component)] },
+        createdAt,
+      )
+      const content = JSON.stringify({
+        sourceSessionId: input.source.id,
+        sessionId: input.branchId,
+        continued: true,
+      })
+      this.conversation.appendToolResult(
+        input.branchId,
+        window.position,
+        owner,
+        { callId: input.sourceProviderCallId, name: "session_fork", content, outcome: "success" },
+        input.sourceModelCallId,
+        input.sourceInvocationId,
+      )
+      append(
+        input.branchId,
+        {
+          type: "TOOL_CALL_RESULT",
+          modelCallId: input.sourceModelCallId,
+          messageId: crypto.randomUUID(),
+          toolCallId: input.sourceProviderCallId,
+          role: "tool",
+          content,
+          outcome: "success",
+          invocationId: input.sourceInvocationId,
+        },
+        createdAt,
+      )
+      const sourceWindow = this.conversation.currentWindow(input.source.id)!
+      this.conversation.appendToolResult(
+        input.source.id,
+        sourceWindow.position,
+        {
+          runId: input.sourceRunId,
+          model: input.source.model,
+          agentTitle: input.source.agent ?? UNTITLED_AGENT_TITLE,
+        },
+        { callId: input.sourceProviderCallId, name: "session_fork", content, outcome: "success" },
+        input.sourceModelCallId,
+        input.sourceInvocationId,
+      )
+      append(
+        input.source.id,
+        {
+          type: "TOOL_CALL_RESULT",
+          modelCallId: input.sourceModelCallId,
+          messageId: crypto.randomUUID(),
+          toolCallId: input.sourceProviderCallId,
+          role: "tool",
+          content,
+          outcome: "success",
+          invocationId: input.sourceInvocationId,
+        },
+        createdAt,
+      )
+      this.communication.forkReady(input.intentId)
+    })()
+    for (const [sessionId, event] of emittedEvents) {
+      for (const listener of this.state(sessionId).listeners) listener(event)
+    }
+    return branch!
   }
 
   cancel(sessionId: string) {
@@ -1312,7 +1951,7 @@ export class SessionHub {
    */
   private startNext(sessionId: string) {
     const state = this.state(sessionId)
-    if (this.stopping || state.controlled || state.live !== null) return
+    if (this.starting || this.stopping || state.controlled || state.live !== null) return
     if (this.conversation.waiting(sessionId).length === 0) return
     if (!this.restoreIfPending(sessionId)) return
     try {
@@ -1353,6 +1992,27 @@ export class SessionHub {
         // The input stays waiting either way; the next input or server start tries again.
       }
     }
+  }
+
+  /** Whether the ordinary next-turn selector has input it can admit now, without starting it. */
+  private hasEligiblePending(sessionId: string): boolean {
+    const waiting = this.conversation.waiting(sessionId)
+    if (waiting.length === 0) return false
+    const workflow = this.context.activeWorkflow(sessionId)
+    if (workflow !== null) {
+      return waiting.some(
+        (entry) =>
+          (entry.kind === "notification" && entry.trigger === "context" && entry.workflowId === workflow.id) ||
+          (entry.kind === "notification" && entry.component.name === "memory_restored"),
+      )
+    }
+    return waiting.some(
+      (entry) =>
+        isContinuation(entry) ||
+        isIndependent(entry) ||
+        (entry.kind === "user" && entry.mode === "queue") ||
+        isContextInput(entry),
+    )
   }
 
   /**
@@ -1460,6 +2120,7 @@ export class SessionHub {
     errors: ReturnType<SessionHub["assembleDelivery"]>["errors"],
     taken: ReadonlyArray<WaitingEntry>,
     append: Append,
+    published: Array<string>,
   ) {
     const window = this.conversation.currentWindow(sessionId)!
     for (const error of errors) append({ type: "SESSION_ERROR", code: error.code, message: error.message, runId: turn.runId })
@@ -1491,9 +2152,22 @@ export class SessionHub {
         mode: entry.entry.mode,
         sender: entry.entry.sender,
       })
+      published.push(
+        ...this.publishUser(sessionId, turn, {
+          inputId: entry.entry.inputId,
+          text: entry.entry.text,
+          ...(entry.entry.attachments === undefined ? {} : { attachments: entry.entry.attachments }),
+        }),
+      )
     }
     closeMessage()
-    for (const entry of taken) this.conversation.removeWaiting(sessionId, entry.position)
+    for (const entry of taken) {
+      if (entry.kind === "notification") {
+        if (entry.reaction !== undefined) this.communication.recordReaction(sessionId, turn.runId, entry.reaction)
+        this.communication.admitted(sessionId, entry.inputId, this.now())
+      }
+      this.conversation.removeWaiting(sessionId, entry.position)
+    }
   }
 
   /**
@@ -1529,6 +2203,7 @@ export class SessionHub {
     const { delivered, membership, errors } = this.assembleDelivery(sessionId, taken, admission.effective)
     const contextInput = taken.find(isContextInput)
     const association = contextInput?.kind === "notification" ? this.context.association(contextInput.workflowId) : null
+    const published: Array<string> = []
     const { session, turn } = this.commit(sessionId, (append) => {
       const revisions = new Map<string, string>()
       for (const step of admission.steps) {
@@ -1560,7 +2235,7 @@ export class SessionHub {
       )
       this.fileState.putFiles(snapshot.research)
       this.fileState.recordSnapshot(sessionId, turn.runId, snapshot.refs)
-      this.deliverInto(sessionId, turn, delivered, errors, taken, append)
+      this.deliverInto(sessionId, turn, delivered, errors, taken, append, published)
       for (const [inputId, revision] of revisions) this.store.setInputSettingsRevision(sessionId, turn.runId, inputId, revision)
       append({
         type: "RUN_STARTED",
@@ -1578,6 +2253,7 @@ export class SessionHub {
         turn,
       }
     })
+    this.wakePublished(published)
     const readiness = this.selectionFailure(turn)
     if (readiness !== undefined) {
       this.failBeforeRun(sessionId, turn.runId, readiness.message, readiness.code)
@@ -1590,6 +2266,12 @@ export class SessionHub {
       this.failBeforeRun(sessionId, turn.runId, message, "turn_start_failed")
       return
     }
+    this.launchTurn(sessionId, session, turn)
+  }
+
+  /** Starts the live runner for an admitted or copied AgentTurn. */
+  private launchTurn(sessionId: string, session: SessionRecord, turn: TurnRecord) {
+    const state = this.state(sessionId)
     const model = this.options.models.find((candidate) => candidate.id === turn.model)
     const span = startSpan("ashe_agent.turn", {
       ...(turn.model === null ? {} : { "ashe_agent.model": turn.model }),
@@ -1620,7 +2302,8 @@ export class SessionHub {
         this.commit(sessionId, () => this.conversation.endModelCall(sessionId, modelCallId, outcome, this.now()))
       },
       commitAssistant: (message, events, modelCallId) => {
-        return this.commit(sessionId, (append) => {
+        const published: Array<string> = []
+        const result = this.commit(sessionId, (append) => {
           const window = this.conversation.currentWindow(sessionId)!
           this.conversation.commitModelCall(sessionId, modelCallId, message, this.now())
           const assistant = this.conversation.appendAssistant(sessionId, window.position, owner, message, modelCallId)
@@ -1638,13 +2321,28 @@ export class SessionHub {
               append(body)
             }
           }
-          return assistant.toolInvocationIds
+          const text = typeof message.content === "string"
+            ? message.content
+            : message.content.flatMap((part) => (typeof part === "object" && part.type === "text" ? [part.text] : [])).join("")
+          if ((message.tool_calls?.length ?? 0) > 0 && text !== "" && !this.context.isContextTurn(turn.runId)) {
+            published.push(...this.publishAssistant(sessionId, turn, assistant.item.entryId, text, "agent_intermediate"))
+          }
+          return { entryId: assistant.item.entryId, invocationIds: assistant.toolInvocationIds }
         })
+        this.wakePublished(published)
+        return result
       },
       toolStarted: (invocationId) => {
         this.commit(sessionId, () => this.conversation.markToolStarted(sessionId, invocationId, this.now()))
       },
       afterCommit: () => this.context.afterItems(sessionId, turn),
+      publishAssistant: (entryId, text, category) => {
+        let published: ReadonlyArray<string> = []
+        this.commit(sessionId, () => {
+          published = this.publishAssistant(sessionId, turn, entryId, text, category)
+        })
+        this.wakePublished(published)
+      },
       commitResult: (result, event, modelCallId, invocationId) => {
         this.commit(sessionId, (append) => {
           const window = this.conversation.currentWindow(sessionId)!
@@ -1668,6 +2366,7 @@ export class SessionHub {
       offered: (tool) => !whollyDenied(rules(), withholdingName(tool)),
       toolPolicy: this.toolPolicy,
       checkpointWindowSize: model === undefined ? Number.POSITIVE_INFINITY : checkpointWindowSize(model, session.modelOverrides[model.id]),
+      nextModelCallOrdinal: this.conversation.nextTurnModelCallOrdinal(sessionId, turn.runId),
       isContextTurn: () => this.context.isContextTurn(turn.runId),
       reserveReached: (signal) => this.context.start(this.session(sessionId), turn, "threshold", signal),
       limitReached: (signal) => this.context.limitReached(this.session(sessionId), turn, signal),
@@ -1695,7 +2394,30 @@ export class SessionHub {
         // The persisted workflow remains active; the next turn or restart settles it.
       }
     }
+    const turn = this.store.getTurn(sessionId, runId)
+    if (turn !== null && !this.stopping && !this.state(sessionId).controlled && !this.hasEligiblePending(sessionId)) {
+      try {
+        let receivers: ReadonlyArray<string> = []
+        this.commit(sessionId, () => {
+          receivers = this.publishAbnormal(sessionId, turn, "failed", message)
+        })
+        this.wakePublished(receivers)
+      } catch (error) {
+        try {
+          this.commit(sessionId, (append) =>
+            append({
+              type: "SESSION_ERROR",
+              code: "abnormal_publication_failed",
+              message: `publishing the abnormal notice failed: ${error instanceof Error ? error.message : String(error)}`,
+            }),
+          )
+        } catch {
+          // The failed turn remains durable; the next start retries remaining work.
+        }
+      }
+    }
     const state = this.state(sessionId)
+    this.notifyActivity(sessionId)
     if (!this.stopping && !state.controlled) this.startNext(sessionId)
   }
 
@@ -1757,6 +2479,7 @@ export class SessionHub {
               ? "cancelled"
               : "failed"
       let status = finalizationFailure === null ? baseStatus : "failed"
+      let abnormalReason: string | null = null
       try {
         this.commit(sessionId, (append) => {
           // No answer can apply to an ended turn, so its open requests are withdrawn with it.
@@ -1777,6 +2500,7 @@ export class SessionHub {
                   ? exit.value
                   : { message: "the turn failed", code: "internal" }
             this.store.endTurn(sessionId, runId, "failed", this.now())
+            abnormalReason = failure.message
             append({ type: "RUN_ERROR", runId, message: failure.message, ...(failure.code === undefined ? {} : { code: failure.code }) })
           }
         })
@@ -1795,6 +2519,23 @@ export class SessionHub {
           // The persisted workflow remains active; the next turn or restart settles it.
         }
       }
+      if (status !== "finished" && !this.hasEligiblePending(sessionId)) {
+        try {
+          let receivers: ReadonlyArray<string> = []
+          this.commit(sessionId, () => {
+            receivers = this.publishAbnormal(
+              sessionId,
+              live.turn,
+              status === "cancelled" ? "cancelled" : "failed",
+              abnormalReason,
+            )
+          })
+          this.wakePublished(receivers)
+        } catch (error) {
+          rememberFailure(error)
+        }
+      }
+      this.notifyActivity(sessionId)
       if (finalizationFailure === null && !state.controlled) this.startNext(sessionId)
     } finally {
       const settled = state.settled
@@ -1951,10 +2692,12 @@ export class SessionHub {
         }
         this.store.removeFrom(sessionId, turn)
         const cleared = this.conversation.clearWaiting(sessionId)
+        this.communication.removeCleared(sessionId, [...cleared])
         append({ type: "SESSION_REWOUND", runId: turn.runId, firstRemovedSeq: turn.firstSeq, clearedInputIds: [...cleared] })
         if (continuation?.kind === "component") this.queue(sessionId, continuation.component, "continuation")
         this.queue(sessionId, rewindComponent())
         this.queueReconciledNotifications(sessionId)
+        this.communication.reconcile(sessionId)
         for (const message of reconstructed) {
           const selection = message.selection
           this.conversation.addWaiting(

@@ -270,6 +270,10 @@ export class AgentHarness {
       readonly now?: () => number
       /** The model of each auxiliary task; the latest turn's model by default. */
       readonly auxiliaryModels?: AuxiliaryModels
+      readonly communicationWaitMinMs?: number
+      readonly communicationWaitDefaultMs?: number
+      readonly communicationWaitMaxMs?: number
+      readonly sqlite3Path?: string
       /** Attach a capable subscribed test connection to each created session; true by default. */
       readonly clientActions?: boolean
       /** Elapsed-time limits for tool invocations. */
@@ -298,6 +302,11 @@ export class AgentHarness {
       ...(this.options.userTimeZone === undefined ? {} : { userTimeZone: this.options.userTimeZone }),
       ...(this.options.now === undefined ? {} : { now: this.options.now }),
       ...(this.options.toolPolicy === undefined ? {} : { toolPolicy: this.options.toolPolicy }),
+      ...(this.options.communicationWaitMinMs === undefined ? {} : { communicationWaitMinMs: this.options.communicationWaitMinMs }),
+      ...(this.options.communicationWaitDefaultMs === undefined ? {} : { communicationWaitDefaultMs: this.options.communicationWaitDefaultMs }),
+      ...(this.options.communicationWaitMaxMs === undefined ? {} : { communicationWaitMaxMs: this.options.communicationWaitMaxMs }),
+      ...(this.options.sqlite3Path === undefined ? {} : { sqlite3Path: this.options.sqlite3Path }),
+      databasePath: join(this.dir, "ashe-agent.db"),
       serverTimeZone: "UTC",
       home: realpathSync(this.dir),
       runner:

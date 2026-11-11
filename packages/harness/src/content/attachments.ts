@@ -231,6 +231,51 @@ export class AttachmentStore {
     for (const ref of refs) insert.run(ref.attachmentId, sessionId, inputId, now)
   }
 
+  /**
+   * Claims attachments already accepted by `sourceSessionId` for a peer
+   * message. Ownership is the source session's retained reference, so a
+   * peer cannot name another owner's staging upload.
+   */
+  claimFromSession(
+    sourceSessionId: string,
+    sessionId: string,
+    inputId: string,
+    refs: ReadonlyArray<RetainedAttachmentRef>,
+    now: number,
+  ) {
+    if (refs.length > this.limits.maxAttachments) {
+      throw new AttachmentError("invalid", `the input has ${refs.length} attachments, over ${this.limits.maxAttachments}`)
+    }
+    let bytes = 0
+    this.expire(now)
+    for (const ref of refs) {
+      const attachment = this.db
+        .query<{ content_sha256: string; size: number }, [string, string]>(
+          `SELECT a.content_sha256, a.size FROM attachments a
+            WHERE a.id = ? AND EXISTS (
+              SELECT 1 FROM attachment_references r
+              WHERE r.attachment_id = a.id AND r.session_id = ?)`,
+        )
+        .get(ref.attachmentId, sourceSessionId)
+      if (attachment === null) throw new AttachmentError("not_found", `session ${sourceSessionId} does not retain attachment ${ref.attachmentId}`)
+      if (attachment.content_sha256 !== ref.contentId || ref.representationId !== ref.contentId) {
+        throw new AttachmentError("invalid", `attachment ${ref.attachmentId} does not match its retained content`)
+      }
+      if (attachment.content_sha256 !== ref.digest.toLowerCase().replace(/^sha256:/, "")) {
+        throw new AttachmentError("invalid", `attachment ${ref.attachmentId} does not match its digest`)
+      }
+      bytes += attachment.size
+    }
+    if (bytes > this.limits.maxSubmissionBytes) {
+      throw new AttachmentError("invalid", `the input's ${bytes} bytes are over ${this.limits.maxSubmissionBytes}`)
+    }
+    const insert = this.db.query(
+      `INSERT INTO attachment_references (attachment_id, session_id, kind, reference_id, created_at)
+        VALUES (?, ?, 'input', ?, ?) ON CONFLICT DO NOTHING`,
+    )
+    for (const ref of refs) insert.run(ref.attachmentId, sessionId, inputId, now)
+  }
+
   /** Deletes only unclaimed staging whose creation-based expiry has passed. */
   expire(now: number) {
     const expired = this.db
