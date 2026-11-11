@@ -112,6 +112,17 @@ shows along with its selected model and effort. Choosing another model
 there switches the session's model from its next turn, at the model's
 default effort; choosing another effort keeps the model.
 
+The existing client's title, model, and effort controls keep their requested
+patch local until a message or rewind submits it. The readout
+separates that requested patch from the applied session selection and the
+selection active for the running turn. A null model renders as unconfigured
+while the rest of the session remains usable. A rejected or superseded request
+does not change the applied or active selection.
+
+The client consumes owned semantic items and model-call commit or discard
+events directly. Committed output stays when a later provisional model call is
+discarded; provisional text and tool state disappear with their call.
+
 Input is steering delivery unless the queue switch is on, which holds it
 for idle; [session input](sessions.md#input) owns admission. The stop button
 cancels the running turn. Continue is offered only while execution is idle
@@ -129,6 +140,10 @@ answered here or by its executor, canceled, timed out, or withdrawn. A call
 can wait on several requests at once, as a code mode program's
 concurrent calls do: the call shows the first, and a list above the
 conversation shows the others, with the same answers.
+
+Action authority remains per connection and per assigned action. Permission
+decisions and question answers each require their own current assignment;
+neither grants the other, and a replayed event cannot dispatch an action.
 
 Model text renders as Markdown. Raw HTML in it shows as text and is
 never rendered.

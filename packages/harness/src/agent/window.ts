@@ -288,8 +288,6 @@ export const renderWindow = (
               type: "input_image",
               image_url: `data:${part.mimeType};base64,${part.data}`,
               detail: "auto",
-              ...(part.representation === undefined ? {} : { representation: part.representation }),
-              ...(part.metadata === undefined ? {} : { metadata: part.metadata }),
             })
           }
           else if (pdfInput) {

@@ -7,7 +7,7 @@ import { convertMessagesToResponsesInput } from "@langchain/openai"
 import { analyzeContributions, canonicalJson, estimateContributions } from "@ashe-agent/protocol"
 import { builtinTool } from "../src/agent/tools.ts"
 import { contentDigest, measureCall, renderedMessageEvidence } from "../src/agent/measurement.ts"
-import { renderWindow, type ToolContent } from "../src/agent/window.ts"
+import { renderToolResultMessage, renderWindow, type ToolContent } from "../src/agent/window.ts"
 import type { ConversionPort, PdfConversionJob } from "../src/content/conversion.ts"
 import { observeToolResult, type ContentPolicy } from "../src/content/retention.ts"
 import type { Item } from "../src/sessions/conversation.ts"
@@ -248,6 +248,71 @@ describe("content measurement and retention", () => {
     }
   })
 
+  test("cleared and unsupported current results do not measure absent media", () => {
+    const resultItem = (cleared: boolean): Item => ({
+      kind: "result",
+      entryId: "result",
+      position: 1,
+      runId: "run",
+      model: "model",
+      agentTitle: "untitled",
+      contentId: "result-ref",
+      modelCallId: null,
+      authorshipSessionId: "session",
+      ownershipKind: "local",
+      sourceSessionId: null,
+      contentFormat: "application/json",
+      representationId: "result-ref",
+      callId: "call",
+      name: "picture",
+      outcome: "success",
+      ...(cleared ? { cleared: true } : {}),
+      content: [{
+        type: "image",
+        path: "page.png",
+        mimeType: "image/png",
+        data: "AAAA",
+        representation: {
+          representationId: "page-ref",
+          contentId: "page-content",
+          mediaType: "image/png",
+          digest: "page-content",
+          transformation: "image-original",
+        },
+      }],
+    })
+    for (const { cleared, imageInput } of [
+      { cleared: true, imageInput: true },
+      { cleared: false, imageInput: false },
+    ]) {
+      const item = resultItem(cleared)
+      const rendered: Array<{ sourceEntryIds: ReadonlyArray<string> }> = []
+      const messages = renderWindow(
+        "harness",
+        [item],
+        "model",
+        imageInput,
+        "untitled",
+        undefined,
+        undefined,
+        false,
+        undefined,
+        (sourceEntryIds) => rendered.push({ sourceEntryIds: [...sourceEntryIds] }),
+      )
+      const evidence = renderedMessageEvidence({
+        harness: "harness",
+        messages,
+        rendered,
+        items: [item],
+        imageInput,
+      })
+      const measurement = measureCall("instructions", messages, [], {}, { messages: evidence })
+      const ids = measurement.contributions.flatMap((contribution) => contribution.representationIds ?? [])
+      expect(ids).not.toContain("page-ref")
+      expect(measurement.contributions.some((contribution) => contribution.basis === "configured-image-allowance")).toBe(false)
+    }
+  })
+
   test("a native PDF contribution lowers through the Responses adapter to a sanitized input_file", () => {
     const converted = convertMessagesToResponsesInput({
       messages: [new HumanMessage({
@@ -271,6 +336,57 @@ describe("content measurement and retention", () => {
         filename: "report.pdf",
       }],
     }])
+  })
+
+  test("a native PDF tool result measures its input_file allowance and representation", () => {
+    const message = renderToolResultMessage({
+      kind: "result",
+      entryId: "result",
+      position: 1,
+      runId: "run",
+      model: "model",
+      agentTitle: "untitled",
+      contentId: "result-ref",
+      modelCallId: null,
+      authorshipSessionId: "session",
+      ownershipKind: "local",
+      sourceSessionId: null,
+      contentFormat: "application/json",
+      representationId: "result-ref",
+      callId: "call",
+      name: "file_read",
+      outcome: "success",
+      content: [
+        { type: "text", text: "report" },
+        {
+          type: "pdf",
+          path: "report.pdf",
+          mimeType: "application/pdf",
+          filename: "report.pdf",
+          data: "JVBERi0=",
+          representation: {
+            representationId: "pdf-ref",
+            contentId: "pdf-content",
+            mediaType: "application/pdf",
+            digest: "pdf-content",
+            transformation: "file-native-pdf",
+          },
+        },
+      ],
+    }, false, true)
+    const measurement = measureCall("instructions", [message], [], { pdfTokens: 7_000 }, {
+      messages: [["pdf-ref"]],
+    })
+    expect(measurement.contributions).toContainEqual(expect.objectContaining({
+      basis: "configured-pdf-allowance",
+      tokens: 7_000,
+      representationIds: ["pdf-ref"],
+    }))
+    expect(measurement.contributions).toContainEqual(expect.objectContaining({
+      basis: "ashe-agent-text-v1",
+      representationIds: ["pdf-ref"],
+    }))
+    expect(measurement.coverage).toBe("partial")
   })
 
   test("the collection cap bounds retained bytes and reports its loss without emptying a long line", () => {

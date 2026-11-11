@@ -538,6 +538,8 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
         items: window.items,
         attachments: projectedAttachments,
         results: projectedResults,
+        imageInput: model.imageInput,
+        pdfInput: model.pdfInput,
       }),
       tools: specs.map((spec) => contentDigest(JSON.stringify(spec))),
     })

@@ -35,6 +35,8 @@ export const renderedMessageEvidence = (options: {
   readonly items: ReadonlyArray<Item>
   readonly attachments?: ReadonlyMap<string, ProjectedAttachment>
   readonly results?: ReadonlyMap<string, ToolContent>
+  readonly imageInput?: boolean
+  readonly pdfInput?: boolean
 }): ReadonlyArray<ReadonlyArray<string>> => {
   const byEntry = new Map(options.items.map((item) => [item.entryId, item]))
   return options.rendered.map((message, index) => {
@@ -51,9 +53,15 @@ export const renderedMessageEvidence = (options: {
         for (const attachment of projected ?? []) ids.add(attachment.representation.representationId)
         for (const attachment of projected === undefined ? item.attachments ?? [] : []) ids.add(attachment.representationId)
       } else if (item.kind === "result") {
-        const content = options.results?.get(entryId) ?? item.content
+        const content = item.cleared === true
+          ? undefined
+          : options.results?.get(entryId) ?? item.content
         if (typeof content !== "string" && content !== undefined) {
           for (const part of content) {
+            if (options.results?.has(entryId) !== true) {
+              if (part.type === "image" && options.imageInput !== true) continue
+              if (part.type === "pdf" && options.pdfInput !== true) continue
+            }
             if (part.representation !== undefined) ids.add(part.representation.representationId)
           }
         }
@@ -68,6 +76,7 @@ const contentText = (message: BaseMessage): string => {
   return message.content.flatMap((part) => {
     if (typeof part !== "object") return []
     if (part.type === "text" && typeof part.text === "string") return [part.text]
+    if (part.type === "input_text" && typeof part.text === "string") return [part.text]
     if (part.type === "reasoning" && typeof part.reasoning === "string") return [part.reasoning]
     return []
   }).join("")
@@ -81,6 +90,13 @@ const media = (message: BaseMessage): { images: number; pdfs: number } => {
     if (typeof part !== "object") continue
     if (part.type === "image" || part.type === "image_url" || part.type === "input_image") images += 1
     if (part.type === "file" && (part as { mime_type?: unknown }).mime_type === "application/pdf") pdfs += 1
+    const fileData = (part as { file_data?: unknown }).file_data
+    if (part.type === "input_file" && (
+      (part as { mime_type?: unknown }).mime_type === "application/pdf" ||
+      typeof fileData === "string" && fileData.startsWith("data:application/pdf;base64,")
+    )) {
+      pdfs += 1
+    }
   }
   return { images, pdfs }
 }
