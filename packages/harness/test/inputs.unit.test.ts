@@ -85,6 +85,24 @@ describe("defaults", () => {
       "/home/owner/.config/ashe-agent/skills",
     ])
     expect(resolution.inputs.shellYieldMs).toBe(10_000)
+    expect(resolution.inputs.contentMaxOriginalBytes).toBe(32 * 1024 ** 2)
+    expect(resolution.inputs.contentMaxImageBytes).toBe(20 * 1024 ** 2)
+    expect(resolution.inputs.contentMaxAttachments).toBe(10)
+    expect(resolution.inputs.contentMaxSubmissionBytes).toBe(128 * 1024 ** 2)
+    expect(resolution.inputs.contentUploadQuotaBytes).toBe(512 * 1024 ** 2)
+    expect(resolution.inputs.contentUploadExpiryMs).toBe(24 * 60 * 60 * 1_000)
+    expect(resolution.inputs.contentUploadChunkBytes).toBe(1024 ** 2)
+    expect(resolution.inputs.communicationWaitMinMs).toBe(10_000)
+    expect(resolution.inputs.communicationWaitDefaultMs).toBe(30_000)
+    expect(resolution.inputs.communicationWaitMaxMs).toBe(3_600_000)
+    expect(resolution.inputs.conversionDataLimitBytes).toBe(512 * 1024 ** 2)
+    expect(resolution.inputs.conversionStackLimitBytes).toBe(8 * 1024 ** 2)
+    expect(resolution.inputs.conversionCpuSeconds).toBe(20)
+    expect(resolution.inputs.conversionWallMs).toBe(30_000)
+    expect(resolution.inputs.conversionOutputBytes).toBe(128 * 1024 ** 2)
+    expect(resolution.inputs.conversionActiveWorkers).toBe(2)
+    expect(resolution.inputs.conversionQueuedJobs).toBe(16)
+    expect(resolution.inputs.sqlite3Path).toBe("/usr/bin/sqlite3")
   })
 
   test("an input without a production default is required in production", () => {
@@ -210,6 +228,14 @@ describe("malformed values", () => {
     expect(issuesOf(resolveInputs("serve", sources(env, serveFiles)))).toEqual(["ASHE_AGENT_MCP_SERVERS"])
   })
 
+  test("an MCP server cannot claim the session namespace", () => {
+    const env = {
+      ...serveEnv,
+      ASHE_AGENT_MCP_SERVERS: JSON.stringify({ session: { type: "stdio", command: "server" } }),
+    }
+    expect(issuesOf(resolveInputs("serve", sources(env, serveFiles)))).toEqual(["ASHE_AGENT_MCP_SERVERS"])
+  })
+
   test("an MCP server accepts only codemode false", () => {
     const withCodemode = (codemode: boolean) =>
       resolveInputs("serve", sources({
@@ -253,6 +279,16 @@ describe("boundaries", () => {
     expect(accepts({ ASHE_AGENT_SHELL_MAX_OUTPUT_TOKENS: "0" })).toBe(false)
     expect(accepts({ ASHE_AGENT_CODE_MODE_LIMITS: JSON.stringify({ toolCalls: 1 }) })).toBe(true)
     expect(accepts({ ASHE_AGENT_CODE_MODE_LIMITS: JSON.stringify({ toolCalls: 0 }) })).toBe(false)
+  })
+
+  test("communication wait bounds must stay coherent", () => {
+    expect(accepts({ ASHE_AGENT_COMMUNICATION_WAIT_MIN_MS: "40000" })).toBe(false)
+    expect(accepts({ ASHE_AGENT_COMMUNICATION_WAIT_MAX_MS: "20000" })).toBe(false)
+    expect(accepts({
+      ASHE_AGENT_COMMUNICATION_WAIT_MIN_MS: "5000",
+      ASHE_AGENT_COMMUNICATION_WAIT_DEFAULT_MS: "10000",
+      ASHE_AGENT_COMMUNICATION_WAIT_MAX_MS: "20000",
+    })).toBe(true)
   })
 })
 

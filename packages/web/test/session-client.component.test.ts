@@ -13,8 +13,8 @@ const SERVER_URL = "ws://server.test/v1/ws"
 const SESSION = "s1"
 const START = 1_800_000_000_000
 const models: Array<Model> = [
-  { id: "alpha", name: "Alpha", contextLimit: 200_000, imageInput: false, reasoningEfforts: [], reasoningEffort: null },
-  { id: "beta", name: "Beta", contextLimit: 480_000, imageInput: true, reasoningEfforts: ["low", "high"], reasoningEffort: "low" },
+  { id: "alpha", name: "Alpha", contextLimit: 200_000, imageInput: false, pdfInput: false, reasoningEfforts: [], reasoningEffort: null },
+  { id: "beta", name: "Beta", contextLimit: 480_000, imageInput: true, pdfInput: true, reasoningEfforts: ["low", "high"], reasoningEffort: "low" },
 ]
 const summary = { id: SESSION, sessionDir: "/state/sessions/s1", agent: null, model: "alpha", reasoningEffort: null, createdAt: START, running: false, lastSeq: 0 }
 const principal = { kind: "login", loginId: "l1" } as const

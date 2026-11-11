@@ -67,7 +67,8 @@
                         "type": "string",
                         "enum": [
                           "text",
-                          "image"
+                          "image",
+                          "pdf"
                         ]
                       }
                     },
@@ -474,6 +475,172 @@
       },
       "additionalProperties": false,
       "description": "Optional limits on a code mode program's tool calls and output bytes."
+    },
+    "contentMaxOriginalBytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Largest submitted original file the harness accepts."
+    },
+    "contentMaxImageBytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Largest submitted image original the harness accepts."
+    },
+    "contentMaxAttachments": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Most attachments one submission may hold."
+    },
+    "contentMaxSubmissionBytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Largest combined original bytes one submission may hold."
+    },
+    "contentCollectionBytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Bytes a tool producer may collect before recording capture loss."
+    },
+    "contentPreviewLines": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Lines of oversized retained text a model observation includes."
+    },
+    "contentPreviewBytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Bytes of oversized retained text a model observation includes."
+    },
+    "contentPdfPagesPerWindow": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Most PDF pages one fallback model observation includes."
+    },
+    "contentPdfDpi": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Dots per inch used to render fallback PDF pages."
+    },
+    "contentPdfMaxLongEdge": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Longest pixel edge of one rendered PDF page."
+    },
+    "contentPdfMaxPixelsPerPage": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Most pixels one rendered PDF page may allocate."
+    },
+    "contentPdfDocumentTokens": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Estimated token allowance for one native PDF contribution."
+    },
+    "contentImageTokens": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Estimated token allowance for one model-facing image."
+    },
+    "contentUploadQuotaBytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Unclaimed upload staging bytes allowed for one owner."
+    },
+    "contentUploadExpiryMs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Milliseconds after creation that unclaimed upload staging expires."
+    },
+    "contentUploadChunkBytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Largest bytes one upload append may send."
+    },
+    "conversionPrlimitPath": {
+      "type": "string",
+      "pattern": "^\\/",
+      "description": "util-linux prlimit executable that launches conversion workers."
+    },
+    "conversionDataLimitBytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "RLIMIT_DATA private-allocation ceiling for one conversion worker."
+    },
+    "conversionStackLimitBytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "RLIMIT_STACK ceiling for one conversion worker."
+    },
+    "conversionCpuSeconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "RLIMIT_CPU seconds for one conversion worker."
+    },
+    "conversionWallMs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Milliseconds after launch when the parent terminates a conversion worker."
+    },
+    "conversionOutputBytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Largest result bytes one conversion worker may return."
+    },
+    "conversionActiveWorkers": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Conversion workers the harness runs concurrently."
+    },
+    "conversionQueuedJobs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Reference-only conversion jobs the harness queues."
+    },
+    "communicationWaitMinMs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Shortest accepted session wait, in milliseconds; shorter requests clamp."
+    },
+    "communicationWaitDefaultMs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "session.wait timeout when the call omits one, in milliseconds."
+    },
+    "communicationWaitMaxMs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Longest accepted session wait, in milliseconds; longer requests fail."
+    },
+    "sqlite3Path": {
+      "type": "string",
+      "pattern": "^\\/",
+      "description": "Official sqlite3 executable used for bounded read-only session discovery."
     },
     "toolTimeoutMs": {
       "type": "integer",

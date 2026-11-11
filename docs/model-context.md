@@ -10,7 +10,7 @@ A session's model context is its current checkpoint window: the harness
 instructions and a list of items. An item is a developer component, a
 user message, an assistant message, or a tool result. A session's first
 checkpoint window is built when the session is created: its harness
-instructions, from `packages/server/src/context/harness.md`, and its
+instructions, from `packages/harness/src/context/harness.md`, and its
 seed, the developer components that open it. Every model call of a turn
 sends the whole window, rendered for the turn's model. A context turn
 builds each later checkpoint window, as
@@ -20,7 +20,7 @@ Creation fails, naming what is too large, its estimated tokens, and its
 allowance, when the harness instructions, a seed component, or the tool
 definitions the session is offered exceed their allowance. Tokens are
 estimated at one per four characters. The allowances live in
-`packages/server/src/context/constants.ts`. Creation also fails, naming
+`packages/harness/src/context/constants.ts`. Creation also fails, naming
 the file and the reason, when the session's chosen user instructions
 file exists but cannot be read.
 
@@ -263,7 +263,7 @@ reaches 60,000, and the next user message opens another.
 
 A closing starts a compaction call in the background, without delaying
 turns. It runs on the `compaction` auxiliary model with the versioned
-prompt `packages/server/src/context/prompts/compaction.md`, asks for at
+prompt `packages/harness/src/context/prompts/compaction.md`, asks for at
 most 8,000 output tokens, and receives the primary timeline and the
 boundary's user messages and final agent messages in order. A turn that
 ended by cancel, reject, failure, or server stop without a final message
@@ -296,7 +296,7 @@ that appends research entries, the files those entries saw. When a
 context turn starts, the server starts
 a research call for each file created or changed against the baseline,
 on the `research` auxiliary model with the versioned prompt
-`packages/server/src/context/prompts/research.md`. A call receives the
+`packages/harness/src/context/prompts/research.md`. A call receives the
 file's name, change, and description, its diff from the baseline or its
 content when created, each cut to 16,000 characters from each end, and
 the names of the other files created and deleted. A deleted file gets no
@@ -389,7 +389,7 @@ tools it offered.
 
 Reaching the limit after the third clearing runs a handoff call on the
 `handoff` auxiliary model with the versioned prompt
-`packages/server/src/context/prompts/handoff.md`. It receives the
+`packages/harness/src/context/prompts/handoff.md`. It receives the
 primary timeline and a transcript of the checkpoint window without its
 seed, rendered as a transcript component renders it. A transcript over
 its budget, the handoff model's checkpoint window size less the prompt,
@@ -425,7 +425,7 @@ the items after the old window's last user message and before its
 context turn, whole items newest first within its allowance, in their
 order; it is left out when the last of those items other than a
 developer component is a user message. The section explanations are
-the files in `packages/server/src/context/checkpoint/`.
+the files in `packages/harness/src/context/checkpoint/`.
 
 The continuation turn starts the new window with the continuation
 component, which forms one developer message with the seed, followed by

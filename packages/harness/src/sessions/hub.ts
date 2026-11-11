@@ -780,6 +780,7 @@ export class SessionHub {
         name: model.name,
         contextLimit: model.contextLimit,
         imageInput: model.imageInput,
+        pdfInput: model.pdfInput,
         reasoningEfforts: [...model.efforts],
         reasoningEffort: model.settings.reasoningEffort ?? null,
       })),

@@ -8,7 +8,7 @@ SDK through `@effect/opentelemetry`. Command output, such as the URL
 
 ## Signals
 
-`packages/server/src/telemetry/signals.ts` is the signal catalog: every
+`packages/harness/src/telemetry/signals.ts` is the signal catalog: every
 span, metric, and log record with its attributes, units, and error
 classes, under a version that changes with any of them.
 `schemas/signals.json` is generated from it with `bun run generate`.

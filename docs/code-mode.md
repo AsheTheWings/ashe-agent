@@ -63,7 +63,7 @@ JavaScript engine, and they differ from ordinary JavaScript:
 - Programs get no host globals, as stated above; the code mode component
   test "code mode programs > get no fetch, timer, process, or module
   globals and cause no host effect" in
-  `packages/server/test/codemode.component.test.ts` shows them absent.
+  `packages/harness/test/codemode.component.test.ts` shows them absent.
 - Some syntax and built-ins are not supported, among them classes,
   user-defined constructors, getters and setters in object literals,
   BigInt, and typed arrays other than `Uint8Array`.

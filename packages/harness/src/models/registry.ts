@@ -18,6 +18,8 @@ export interface ConfiguredModel {
   readonly name: string
   readonly contextLimit: number
   readonly imageInput: boolean
+  /** Whether the model accepts native PDF input. */
+  readonly pdfInput: boolean
   /** Whether the model accepts a temperature. */
   readonly temperatureCapable: boolean
   /** The reasoning efforts the model lists; empty for a model without reasoning. */
@@ -37,6 +39,7 @@ export const configuredModels = (providers: Providers): ReadonlyArray<Configured
         name: model.name ?? `${provider}/${upstream}`,
         contextLimit: model.limit.context,
         imageInput: model.capabilities.input.includes("image"),
+        pdfInput: model.capabilities.input.includes("pdf"),
         temperatureCapable: model.capabilities.temperature === true,
         efforts: model.capabilities.reasoning?.efforts ?? [],
         settings: {

@@ -91,8 +91,8 @@ describe("sessions", () => {
       expect(view.events[0].event.sessionDir).toBe(sessionDir)
       expect((await client.request("models.list")).result).toEqual({
         models: [
-          { id: "test/first", name: "test/first", contextLimit: 400_000, imageInput: false, reasoningEfforts: ["low", "high"], reasoningEffort: "low" },
-          { id: "test/second", name: "test/second", contextLimit: 300_000, imageInput: true, reasoningEfforts: [], reasoningEffort: null },
+          { id: "test/first", name: "test/first", contextLimit: 400_000, imageInput: false, pdfInput: false, reasoningEfforts: ["low", "high"], reasoningEffort: "low" },
+          { id: "test/second", name: "test/second", contextLimit: 300_000, imageInput: true, pdfInput: false, reasoningEfforts: [], reasoningEffort: null },
         ],
         defaultModel: "test/first",
       })

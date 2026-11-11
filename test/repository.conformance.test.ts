@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Glob } from "bun"
 import { join } from "node:path"
 import { generatedFiles } from "../scripts/generated-files.ts"
-import { migrationFiles } from "../packages/server/src/store/migration-files.ts"
+import { migrationFiles } from "../packages/harness/src/store/migration-files.ts"
 
 const root = join(import.meta.dir, "..")
 const read = (path: string) => Bun.file(join(root, path)).text()
@@ -34,10 +34,10 @@ describe("generated files", () => {
 describe("migrations", () => {
   test("the embedded migration list is the migration directory", async () => {
     const directory: Array<string> = []
-    for await (const path of new Glob("*").scan(join(root, "packages/server/migrations"))) directory.push(path)
+    for await (const path of new Glob("*").scan(join(root, "packages/harness/migrations"))) directory.push(path)
     expect(migrationFiles.map((file) => file.file)).toEqual(directory.sort())
     for (const file of migrationFiles) {
-      expect(file.sql).toBe(await read(`packages/server/migrations/${file.file}`))
+      expect(file.sql).toBe(await read(`packages/harness/migrations/${file.file}`))
     }
   })
 })

@@ -1,5 +1,5 @@
 {
-  "name": "@ashe-agent/server",
+  "name": "@ashe-agent/harness",
   "version": "0.0.0",
   "private": true,
   "type": "module",

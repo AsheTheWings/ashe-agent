@@ -1,7 +1,7 @@
 # Configuration
 
 Every value AsheAgent reads as configuration is an *input*. One schema,
-`packages/server/src/inputs/catalog.ts`, declares every input: its name,
+`packages/harness/src/inputs/catalog.ts`, declares every input: its name,
 its shape, whether it is configuration or protected, and its default in
 each profile. Two files are generated from that schema and tracked:
 

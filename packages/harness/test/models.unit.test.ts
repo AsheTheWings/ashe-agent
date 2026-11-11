@@ -48,11 +48,17 @@ describe("providers and model ids", () => {
       name: "main/thinker",
       contextLimit: 400_000,
       imageInput: false,
+      pdfInput: false,
       temperatureCapable: false,
       efforts: ["low", "medium", "high"],
       settings: { reasoningEffort: "medium" },
     })
     expect(sampler).toMatchObject({ imageInput: true, temperatureCapable: true, efforts: [], settings: { temperature: 0.7 } })
+    expect(sampler).toMatchObject({ pdfInput: false })
+    const reader = models({
+      main: { ...config().providers.main, models: { reader: entry({ capabilities: { input: ["text", "pdf"] } }) } },
+    }).get("main/reader")
+    expect(reader).toMatchObject({ imageInput: false, pdfInput: true })
     const nested = models({ main: { ...config().providers.main, models: { "org/deep": entry({ name: "Deep" }) } } as never })
     expect(nested.get("main/org/deep")).toMatchObject({ provider: "main", upstream: "org/deep", name: "Deep" })
     expect(resolve().ok).toBe(true)

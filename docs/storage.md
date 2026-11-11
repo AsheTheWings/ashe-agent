@@ -91,10 +91,10 @@ and refusing a scratch over 2 GiB.
 
 ## Migrations
 
-The schema comes only from the migrations in `packages/server/migrations`.
+The schema comes only from the migrations in `packages/harness/migrations`.
 Each file is named `NNNN_name.sql`, numbered from `0001` with no gap or
 repeat, and is embedded in the server through
-`packages/server/src/store/migration-files.ts`, which a conformance test
+`packages/harness/src/store/migration-files.ts`, which a conformance test
 keeps equal to the directory.
 
 The ledger table `schema_migrations` records each applied migration's
