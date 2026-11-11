@@ -5,8 +5,11 @@ export const titleControlValue = (patch: SelectionPatch | undefined, applied: st
   patch !== undefined && Object.hasOwn(patch, "agentTitle") ? patch.agentTitle! : (applied ?? "untitled")
 
 /** Title choices submit configured keys and show display titles only as labels. */
-export const titleOptions = (agents: ReadonlyArray<Agent>) =>
-  agents.map((agent) => ({ value: agent.key, label: agent.title }))
+export const titleOptions = (agents: ReadonlyArray<Agent>) => {
+  const choices = new Map(agents.map((agent) => [agent.key, agent.title]))
+  if (!choices.has("untitled")) choices.set("untitled", "untitled")
+  return [...choices].map(([value, label]) => ({ value, label }))
+}
 
 /** The model a control shows: an explicitly requested value, else the applied value. */
 export const modelControlValue = (patch: SelectionPatch | undefined, applied: string | null): string | null => {

@@ -473,7 +473,10 @@ describe("session client", () => {
         titleFile: { state: "absent" as const },
       },
     ]
-    expect(titleOptions(agents)).toEqual([{ value: "code-reviewer", label: "Code Reviewer" }])
+    expect(titleOptions(agents)).toEqual([
+      { value: "code-reviewer", label: "Code Reviewer" },
+      { value: "untitled", label: "untitled" },
+    ])
     expect(titleControlValue(undefined, "code-reviewer")).toBe("code-reviewer")
     const active = { agentTitle: "untitled", modelSettings: { modelId: "alpha", reasoningEffort: null } }
     const requested = { agentTitle: "code-reviewer", modelSettings: { modelId: "beta", reasoningEffort: "high" } }

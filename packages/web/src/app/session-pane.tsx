@@ -45,7 +45,6 @@ const TitleSwitch = () => {
         <SelectValue placeholder="Title" />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="untitled">untitled</SelectItem>
         {titleOptions(agents).map((agent) => (
           <SelectItem key={agent.value} value={agent.value}>
             {agent.label}
