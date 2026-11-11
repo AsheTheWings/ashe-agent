@@ -51,14 +51,28 @@ each contribution's rendered representation.
 `context_result_replacements` records a clearing as a replacement over the
 retained result.
 
+The database is the harness's persistence boundary. Agents and clients
+discover state through harness operations and the documented read-only
+query guide; they do not receive a general mutation API. Direct SQL
+investigation opens the existing database through the official `sqlite3`
+executable with its read-only mode and bounded queries described in
+[sessions](sessions.md#database-discovery). Schema changes go only through
+the migration runner below, with application startup validating
+compatibility.
+
 `uploads` holds draft-owned resumable staging, with fixed one-MiB chunks in
 `upload_chunks`, while `attachments` holds finalized originals.
 `attachment_references` claims an original for pending or admitted input.
 Unclaimed staging expires from its creation time; a claimed original stays
 while its input, retained history, request manifest, or fork references it.
-Owner clients resolve a retained original through `content.get` by session,
+Owner clients resolve retained content through `content.get` by session,
 content, and attachment, entry, or manifest reference; a reference from
-another session is not found.
+another session is not found. The result reports availability and every
+representation's kind, media type, digest, byte length, optional filename,
+source page, transformation, and bounded renderer metadata alongside its
+bytes. Attachment references resolve their original and derived
+representations, entry references resolve the retained entry content, and
+manifest references resolve provider messages and rendered contributions.
 
 `content_references` binds a history-owned tool result to the full captured
 bytes in the session's `references/` directory. `attachment_representations`

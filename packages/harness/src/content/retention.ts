@@ -46,7 +46,8 @@ const cutUtf8 = (text: string, limit: number) => {
 
 /** A bounded observation of retained text with explicit continuation information. */
 export const boundedPreview = (text: string, policy: Pick<ContentPolicy, "previewLines" | "previewBytes">) => {
-  const lines = text.split("\n")
+  const lines = text === "" ? [] : text.split("\n")
+  if (lines.length > 0 && text.endsWith("\n")) lines.pop()
   const head: Array<string> = []
   let size = 0
   for (const line of lines.slice(0, policy.previewLines)) {
@@ -68,7 +69,7 @@ export const boundedPreview = (text: string, policy: Pick<ContentPolicy, "previe
   return {
     text: head.join("\n"),
     includedLines: head.length,
-    totalLines: lines.length - (text.endsWith("\n") ? 1 : 0),
+    totalLines: lines.length,
     includedBytes: size,
     totalBytes: bytes(text),
   }
@@ -80,7 +81,39 @@ export const boundedPreview = (text: string, policy: Pick<ContentPolicy, "previe
  * results carry no captured source and stay as returned by their tool.
  */
 export const observeToolResult = (result: ToolResult, policy: ContentPolicy, referenceId: string): ToolResult => {
-  if (result.alreadyBounded === true) return result
+  if (result.alreadyBounded === true) {
+    const source = result.capturedText
+    const sourceBytes = source === undefined ? 0 : bytes(source)
+    if (source === undefined || source === "" || (result.projectionTruncated !== true && (result.captureLossBytes ?? 0) === 0)) {
+      return result
+    }
+    let captureLossBytes = result.captureLossBytes ?? 0
+    const retainedText = sourceBytes <= policy.collectionBytes ? source : cutUtf8(source, policy.collectionBytes)
+    if (retainedText !== source) captureLossBytes += Math.max(0, sourceBytes - bytes(retainedText))
+    const retention: RetainedResult = {
+      text: retainedText,
+      name: referenceName(referenceId),
+      mediaType: "text/plain",
+      captureLossBytes,
+    }
+    const loss = captureLossBytes === 0
+      ? ""
+      : ` Capture loss: ${captureLossBytes} bytes were omitted before the retained capture.`
+    const withFooter = (fallback: boolean): ToolContent => {
+      const footer = fallback
+        ? `Captured output was not retained because the content store failed.${loss}`
+        : `${captureLossBytes === 0 ? "Full captured text" : "The retained capture"} is available at references/${retention.name}.${loss}`
+      return typeof result.content === "string"
+        ? `${result.content}\n\n[${footer}]`
+        : [...result.content, { type: "text", text: `[${footer}]` }]
+    }
+    return {
+      ...result,
+      content: withFooter(false),
+      retention,
+      retentionFallback: withFooter(true),
+    }
+  }
   if (typeof result.content !== "string") {
     const textParts = result.content.filter((part) => part.type === "text")
     if (textParts.length === 0 && result.capturedText === undefined) return result
@@ -92,7 +125,9 @@ export const observeToolResult = (result: ToolResult, policy: ContentPolicy, ref
     let captureLossBytes = result.captureLossBytes ?? 0
     const retainedText = sourceBytes <= policy.collectionBytes ? source : cutUtf8(source, policy.collectionBytes)
     if (retainedText !== source) captureLossBytes += Math.max(0, sourceBytes - bytes(retainedText))
-    const totalLines = retainedText.split("\n").length
+    const totalLines = retainedText === ""
+      ? 0
+      : retainedText.split("\n").length - (retainedText.endsWith("\n") ? 1 : 0)
     const totalBytes = bytes(retainedText)
     let remainingLines = policy.previewLines
     let remainingBytes = policy.previewBytes
@@ -160,7 +195,9 @@ export const observeToolResult = (result: ToolResult, policy: ContentPolicy, ref
   if (sourceBytes <= policy.collectionBytes && sourceBytes <= policy.previewBytes) return result
   const retainedText = sourceBytes <= policy.collectionBytes ? source : cutUtf8(source, policy.collectionBytes)
   if (retainedText !== source) captureLossBytes += Math.max(0, sourceBytes - bytes(retainedText))
-  const lineCount = retainedText.split("\n").length
+  const lineCount = retainedText === ""
+    ? 0
+    : retainedText.split("\n").length - (retainedText.endsWith("\n") ? 1 : 0)
   const preview = bytes(retainedText) <= policy.previewBytes
     ? {
         text: retainedText,

@@ -122,6 +122,8 @@ export type ToolResult =
       readonly captureLossBytes?: number
       /** The tool already applied its own model-facing window, including its execution metadata. */
       readonly alreadyBounded?: boolean
+      /** The already-bounded content omits some captured text that history can retain. */
+      readonly projectionTruncated?: boolean
       /** Full output selected for history-owned retention. */
       readonly retention?: { readonly text: string; readonly name: string; readonly mediaType: string; readonly captureLossBytes: number }
       /** The bounded observation to keep if recording the retained file fails. */
@@ -135,6 +137,7 @@ export type ToolResult =
       readonly capturedText?: string
       readonly captureLossBytes?: number
       readonly alreadyBounded?: boolean
+      readonly projectionTruncated?: boolean
       readonly retention?: { readonly text: string; readonly name: string; readonly mediaType: string; readonly captureLossBytes: number }
       readonly retentionFallback?: ToolContent
     }

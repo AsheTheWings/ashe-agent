@@ -15,13 +15,21 @@ states how far that reach goes and what limits it.
   data, stack, CPU, wall, input, and output limits. The server passes it only
   the bytes selected for conversion; no PDF content is sent to a conversion
   service, and OCR is not performed. A worker failure fails the current
-  projection without an in-process fallback.
+  projection without an in-process fallback. These are allocation and
+  resource limits, not a security sandbox and not a full resident-memory
+  ceiling: code running as the server user remains reachable within that
+  user's OS permissions.
 - Upload staging and attachment originals stay on this host. A model call
   sends only the representation selected for that model: a sanitized native
   PDF, page images and text, or extractable text.
 - Retained tool output and derived attachment representations are readable by
   the server's user and by processes with that user's rights; their modes do
   not protect them from those processes.
+- Owner-original downloads use authenticated, session-scoped references.
+  Every response is an attachment with `nosniff` and a sandbox CSP, so even
+  active-looking or unknown content is not served as a privileged inline
+  application document. Downloading the bytes grants the same reach the
+  owner credential has over them.
 - `context_append` and `context_get_open_items` are never
   permission-checked; they only record and read the session's timeline
   entries. The user's answers to `context_ask_question` are recorded as

@@ -4,16 +4,25 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { SessionEvent } from "@ashe-agent/protocol"
 import { systemToolClock, type Tool, type ToolRun } from "../src/agent/tools.ts"
+import type { ContentPolicy } from "../src/content/retention.ts"
 import type { Permission } from "../src/inputs/shapes.ts"
 import { holderScript, LeftGroup } from "../src/tools/shell/groups.ts"
 import { ShellProcesses, shellTools } from "../src/tools/shell/index.ts"
+import { fileReadTool } from "../src/tools/file/read-tool.ts"
 import { waitFor } from "./support/cli.ts"
 import { AgentHarness, callTools, gate, hold, say } from "./support/agent.ts"
 
 const options = { yieldMs: 10_000, maxOutputTokens: 10_000 }
 
 const withShell = async (
-  config: { maxProcesses?: number; envFile?: string; permission?: Permission; home?: Record<string, string> },
+  config: {
+    maxProcesses?: number
+    envFile?: string
+    permission?: Permission
+    home?: Record<string, string>
+    contentPolicy?: ContentPolicy
+    extraTools?: () => ReadonlyArray<Tool>
+  },
   body: (h: AgentHarness, processes: ShellProcesses, tool: (name: string) => Tool, envFile: string | null) => Promise<void>,
 ) => {
   const scripts = mkdtempSync(join(tmpdir(), "ashe-agent-shell-"))
@@ -29,8 +38,12 @@ const withShell = async (
     env: { PATH: process.env.PATH, HOME: scripts },
     maxProcesses: config.maxProcesses ?? 64,
   })
-  const tools = shellTools(processes, options)
-  const harness = new AgentHarness({ tools, ...(config.permission === undefined ? {} : { permission: config.permission }) })
+  const tools = [...shellTools(processes, options), ...(config.extraTools?.() ?? [])]
+  const harness = new AgentHarness({
+    tools,
+    ...(config.permission === undefined ? {} : { permission: config.permission }),
+    ...(config.contentPolicy === undefined ? {} : { contentPolicy: config.contentPolicy }),
+  })
   try {
     await body(harness, processes, (name) => tools.find((candidate) => candidate.spec.name === name)!, envFile)
   } finally {
@@ -67,6 +80,53 @@ const ofType = (events: ReadonlyArray<SessionEvent>, type: string) =>
   (events.map((event) => event.event) as Array<any>).filter((event) => event.type === type)
 
 describe("shell processes", () => {
+  test("the real shell retains omitted output, retrieves it, and keeps a fork's copy through restart and source rewind", async () => {
+    await withShell(
+      {
+        contentPolicy: { collectionBytes: 1_000_000, previewLines: 2, previewBytes: 64 },
+        extraTools: () => [fileReadTool()],
+      },
+      async (h) => {
+        const id = h.create()
+        h.model.next(
+          callTools([{
+            name: "shell_exec_command",
+            args: { cmd: "seq -f 'line-%g' 1 200000", max_output_tokens: 50 },
+          }]),
+          say("captured"),
+        )
+        h.input(id, "produce output")
+        await h.turnsEnded(id, 1)
+        const result = ofType(h.events(id), "TOOL_CALL_RESULT")[0]
+        expect(result.content).toContain("The retained capture is available at references/")
+        expect(result.content).toContain("Capture loss:")
+        const row = h.db.query<{ name: string; capture_loss_bytes: number }, [string]>(
+          "SELECT name, capture_loss_bytes FROM content_references WHERE session_id = ?",
+        ).get(id)
+        expect(row).toBeDefined()
+        expect(row!.capture_loss_bytes).toBeGreaterThan(0)
+        const retained = readFileSync(join(h.sessionDir(id), "references", row!.name), "utf8")
+        expect(retained).toContain("line-1\n")
+        expect(retained).toContain("line-200000\n")
+        const run = ofType(h.events(id), "RUN_STARTED")[0].runId
+        const fork = h.hub.fork(id, run).id
+        await h.restart()
+        h.model.next(say("rewound"))
+        await h.hub.rewind(id, run, undefined, h.sender)
+        await waitFor("the rewound turn to settle", () => (!h.hub.isRunning(id) ? true : undefined))
+        expect(h.db.query("SELECT 1 FROM content_references WHERE session_id = ?").get(id)).toBeNull()
+        expect(existsSync(join(h.sessionDir(fork), "references", row!.name))).toBe(true)
+        h.model.next(
+          callTools([{ name: "file_read", args: { path: `references/${row!.name}`, offset: -5 } }]),
+          say("read"),
+        )
+        h.input(fork, "read the retained command output")
+        await h.turnsEnded(fork, 1)
+        expect(ofType(h.events(fork), "TOOL_CALL_RESULT").at(-1).content).toContain("line-200000")
+      },
+    )
+  }, 30_000)
+
   test("the `shell` permission decides a command by its text, and writes to its process are not asked", async () => {
     await withShell({ permission: { shell: { "*": "ask", "rm *": "deny" } } }, async (h, processes) => {
       const id = h.create()

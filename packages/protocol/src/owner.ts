@@ -29,10 +29,13 @@ export const RetainedRepresentation = Schema.Struct({
   mediaType: Schema.String,
   digest: Schema.String,
   byteLength: Count,
-  filename: Schema.String,
+  /** The attachment name when this representation came from one; null for a rendered provider input. */
+  filename: Schema.NullOr(Schema.String),
   /** One-based source page for a PDF page representation. */
   page: Schema.NullOr(Seq),
   transformation: Schema.NullOr(Schema.String),
+  /** Bounded renderer or conversion metadata for this representation. */
+  metadata: Schema.Unknown,
 })
 
 export type RetainedRepresentation = typeof RetainedRepresentation.Type

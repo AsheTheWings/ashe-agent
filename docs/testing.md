@@ -46,6 +46,34 @@ integration tests prove queued loads wait for an active slot, a deferred load's
 cancellation releases the slot, and an unbounded invocation rejects before
 stdin is read.
 
+## Acceptance scenarios
+
+- Migration scenarios run against real SQLite databases: a clean schema, a
+  representative earlier database, ledger drift and gaps, recoverable
+  preserved facts, explicit unavailable historical boundaries, and a clean
+  no-op rerun. [Storage](storage.md#migrations) owns the invariants.
+- Crash scenarios interrupt committed and provisional model calls, turns,
+  fork finalization, context workflows, restores, and retained content, then
+  restart and prove that effects are not replayed and unfinished output is
+  not promoted. [Sessions](sessions.md#restart) owns recovery behavior.
+- Media scenarios exercise native PDFs, rendered page windows, text fallback,
+  Responses `input_image` and `input_file` shapes, cleared and unsupported
+  media measurement, bounded worker failure, and final reference
+  reclamation. [Content](content.md) owns the routes and limits.
+- Owner-access scenarios authenticate with synthetic access and API
+  credentials, exercise expiry and revocation, verify nullable API-token
+  expiry, and check origin, cache, ownership, missing-representation, and
+  attachment response headers. [Authentication](authentication.md) and
+  [protocol](protocol.md#methods) own the contracts.
+- Minimal-client scenarios use the protocol client directly for session
+  creation, selection submission, fork, rewind, subscription, wait, and
+  retained-content retrieval, independently of the web client's presentation.
+- Exact-artifact qualification runs the built bundle and web image, including
+  peer-session submission, subscription and wait delivery, SQL discovery,
+  conversion isolation, reaping, and main-server survival. The test class
+  uses only the extracted artifact and a fake model service on a run-owned
+  loopback port.
+
 `bun run test:test262` fetches tc39/test262 at the revision
 `packages/codemode/test/test262/manifest.json` pins, into a directory of
 its own run, verifies that commit, and runs code mode's test262
@@ -58,9 +86,10 @@ stays out of the fast gate; CI runs it after the integration tests.
 and then over the web client's browser sources with their own config.
 
 Each test command prints the seed of its randomized tests, which also
-appears in their names. Setting `ASHE_AGENT_TEST_SEED` to it for a test
-command reruns them with the same values; the command gives the seed to
-the tests as a build-time constant, not through their environment.
+appears in their names. Supplying the reported seed through the explicit
+test-input allowlist reruns them with the same values; the command gives
+the seed to the tests as a build-time constant, not through their
+environment.
 
 ## Bundle and release gate
 

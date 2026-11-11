@@ -74,10 +74,15 @@ model call; they do not replace the estimate.
 
 A tool that captures output may report bytes its producer already omitted and
 the full captured text. Output beyond the configured observation preview is
-replaced by a bounded head-and-tail window with line and byte totals. When the
-result is history-owned, the full captured text is written under the session's
+replaced by a bounded beginning of the captured text with line and byte totals.
+When the result is history-owned, the full captured text is written under the session's
 `references/` directory and named by the tool result. The model receives the
 reference path and can page it with `file_read`.
+
+The shell producer has its own head-and-tail collection and model-facing
+truncation. Its retained capture remains available through the same
+reference path even when the model received only the beginning and end of
+the command output.
 
 A multi-part result with a distinct producer capture retains that capture, not
 just the text parts of its model observation. Its text preview comes from the

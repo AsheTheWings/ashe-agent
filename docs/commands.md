@@ -25,3 +25,14 @@ refuses a ledger that drifted from the migrations it carries. See
 
 The owner signs in with GitHub through the [web client](web-client.md);
 [authentication](authentication.md) describes logins and API tokens.
+
+The agent's read-only session discovery workflow requires the official
+`sqlite3` executable. Bounded PDF conversion requires util-linux
+`prlimit`. Startup reports unavailable paths through the affected operation
+and never installs either prerequisite. Bundle qualification exercises both
+when they are available, as [testing](testing.md#bundle-and-release-gate)
+describes.
+
+PDF conversion is an internal child-process entry point launched by the
+server under its configured limits. It is not an operator subcommand and
+does not expose a general-purpose conversion or execution interface.

@@ -47,7 +47,7 @@ export class ProtocolServer extends Context.Service<ProtocolServer, WebSocketSer
                   status: "ok",
                   bytes,
                   mediaType: representation.mediaType,
-                  filename: representation.filename,
+                  filename: representation.filename ?? representation.representationId,
                 }
               },
             }),

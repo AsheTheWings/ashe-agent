@@ -4,6 +4,13 @@ This page explains what each model call of a turn carries, how a
 session's conversation reaches the model, and when the turn loop records
 it.
 
+Canonical semantic history is independent of every request projection.
+Matching title/model ownership can replay compatible native provider
+state; other ownership renders as attributed developer transcripts.
+Clearing, compaction, checkpoint seeds, transcripts, placeholders, and
+media lowering are transformations over retained content. They never
+rewrite the canonical entries or create a second conversation authority.
+
 ## Checkpoint windows
 
 A session's model context is its current checkpoint window: the harness
@@ -92,13 +99,15 @@ transcript keeps compatible representations and makes only an incompatible
 representation an explicit placeholder. [Content](content.md) owns the
 routing, derived representations, and failure behavior.
 
-Each model call stores a request manifest with the ordered contributions that
-formed its input. A measurement names its purpose, execution or analysis, and
-the representation identities of its instructions, messages, attachments, and
-tool definitions. Opaque encrypted provider replay state contributes
-unavailable coverage. Provider input, output, and total usage are persisted
-separately on the model call; product state, not either number, decides
-correctness or readiness.
+Each model call records a request manifest with the ordered contributions that
+formed its input. Only a successfully committed call's manifest is a retained
+successful-request boundary; a failed, cancelled, or interrupted attempt cannot
+replace the last successful boundary. A measurement names its purpose,
+execution or analysis, and the representation identities of its instructions,
+messages, attachments, and tool definitions. Opaque encrypted provider replay
+state contributes unavailable coverage. Provider input, output, and total usage
+are persisted separately on the model call; product state, not either number,
+decides correctness or readiness.
 
 When adjoining developer components or user messages become one provider
 message, that message's measurement names every source representation. The
@@ -110,9 +119,9 @@ opaque provider state. The instruction representation is attached to the
 initial system input. This keeps the measured message aligned with the recorded
 model-facing groups rather than the order in which those groups were assembled.
 
-The server reads no `OPENAI_*`, `LANGCHAIN_*`, `LANGSMITH_*`, or `LC_*`
-process variable: `serve` removes them before the turn loop starts, so the libraries cannot take configuration or tracing
-settings from them.
+The server does not pass dependency-library environment variables into the
+turn loop: `serve` removes them after resolving its own inputs, so the
+libraries cannot take configuration or tracing settings from them.
 
 ## Blocks
 

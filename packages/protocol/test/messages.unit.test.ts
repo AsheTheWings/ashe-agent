@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { Result, Schema } from "effect"
-import { ClientRequest, ServerMessage, unsupportedVersionError, ErrorCode } from "../src/index.ts"
+import { ServerMessage, decodeClientRequest, unsupportedVersionError, ErrorCode } from "../src/index.ts"
 
-const decodeRequest = Schema.decodeUnknownResult(ClientRequest)
+const decodeRequest = decodeClientRequest
 const decodeServer = Schema.decodeUnknownResult(ServerMessage)
 
 describe("client requests", () => {
@@ -16,7 +16,7 @@ describe("client requests", () => {
     expect(Result.isSuccess(result)).toBe(true)
   })
 
-  test("unknown fields are ignored", () => {
+  test("unknown fields are refused", () => {
     const result = decodeRequest({
       jsonrpc: "2.0",
       id: "a",
@@ -24,12 +24,7 @@ describe("client requests", () => {
       params: { sessionId: "s1", extra: true },
       extra: 1,
     })
-    expect(Result.isSuccess(result) && result.success).toEqual({
-      jsonrpc: "2.0",
-      id: "a",
-      method: "session.cancel",
-      params: { sessionId: "s1" },
-    })
+    expect(Result.isFailure(result)).toBe(true)
   })
 
   test("params of another method are refused", () => {

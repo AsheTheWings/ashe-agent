@@ -122,9 +122,10 @@ mode inventory.
   Omitting `sessionId` creates a session with the caller's effective title,
   model, and effort, applies the supplied selection, and submits only the
   supplied text to it. A named target receives the text as steered input,
-  and naming the caller's own session is rejected. The receipt gives the
-  resolved `sessionId`, the waiting `inputId`, and whether the session was
-  created.
+  and naming the caller's own session is rejected. A requested subscription
+  is committed with the pending submission before the target can execute
+  and publish a reply. The receipt gives the resolved `sessionId`, the
+  waiting `inputId`, and whether the session was created.
 - `session_fork` branches the calling session after the model response's
   other tools settle. The first accepted fork call in a response succeeds;
   later fork calls in that response fail without changing the first. An
@@ -171,12 +172,14 @@ content. Explicit `session_message` work starts a fresh chain.
 
 Subscriptions and their pending deliveries are stored with the server.
 Restart restores their progress, and a recipient rewind reconciles
-subscription definitions from the operations in retained turns. A filter
-update removes pending optional deliveries immediately. Unsubscribe removes
-every pending delivery from that receiver/source pair, including abnormal
-notices; both removals release the recipient's attachment references for the
-discarded input, and admitted notifications remain in recipient history. Rewinding a
-source does not remove copies already published to recipients.
+subscription definitions from the operations in retained turns, then
+observes from that reconciliation boundary without importing history from
+the removed or held interval. A filter update removes pending optional
+deliveries immediately. Unsubscribe removes every pending delivery from that
+receiver/source pair, including abnormal notices; both removals release the
+recipient's attachment references for the discarded input, and admitted
+notifications remain in recipient history. Rewinding a source does not remove
+copies already published to recipients.
 
 ## Database discovery
 

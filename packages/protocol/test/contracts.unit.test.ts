@@ -10,6 +10,7 @@ import {
   SessionSummary,
   UploadStatus,
   methods,
+  renderProtocolJsonSchema,
 } from "../src/index.ts"
 
 const decodes = <S extends Schema.Top>(schema: S, value: unknown) =>
@@ -28,6 +29,25 @@ describe("selection contracts", () => {
     expect(decodes(SelectionPatch, { temperature: 0.2 })).toBe(false)
     expect(decodes(SelectionPatch, { modelSettings: { temperature: 0.2 } })).toBe(false)
     expect(decodes(SelectionPatch, { checkpointWindowSize: 200_000 })).toBe(false)
+  })
+
+  test("generated protocol schemas close request and params objects", () => {
+    const schema = JSON.parse(renderProtocolJsonSchema()) as {
+      readonly $defs: Record<string, {
+        readonly additionalProperties?: boolean
+        readonly properties?: Record<string, any>
+      }>
+    }
+    const input = schema.$defs["session.input.params"]!
+    expect(input.additionalProperties).toBe(false)
+    expect(input.properties?.selection.additionalProperties).toBe(false)
+    expect(input.properties?.selection.properties.modelSettings.additionalProperties).toBe(false)
+    expect(input.properties?.selection.properties).not.toHaveProperty("temperature")
+    expect(input.properties?.selection.properties).not.toHaveProperty("checkpointWindowSize")
+    expect(input.properties?.selection.properties.modelSettings.properties).not.toHaveProperty("temperature")
+    expect(input.properties?.selection.properties.modelSettings.properties).not.toHaveProperty("checkpointWindowSize")
+    expect(schema.$defs["session.semantics.params"]?.additionalProperties).toBe(false)
+    expect(schema.$defs["session.semantics.result"]?.additionalProperties).toBe(false)
   })
 
   test("an unconfigured model stays null in summaries and identity", () => {
@@ -73,13 +93,15 @@ describe("owned semantic content", () => {
     const manifest = {
       id: "boundary-1",
       modelCallId: "mc-1",
-      windowId: "window-1",
+      turnId: "turn-1",
+      windowPosition: 1,
       committedAt: 3,
       contributions: [
         {
-          position: 1,
+          position: 0,
           kind: "instruction",
           sourceEntryId: null,
+          sourceEntryIds: [],
           representation: {
             representationId: "rep-1",
             contentId: "content-1",
@@ -88,15 +110,48 @@ describe("owned semantic content", () => {
             transformation: null,
           },
           transformation: null,
+          rendered: {
+            representationId: "rep-1",
+            contentId: "content-1",
+            mediaType: "text/plain",
+            digest: "sha256:1",
+            byteLength: 4,
+            renderer: "ashe-agent/instruction@1",
+          },
         },
         {
-          position: 2,
+          position: 1,
           kind: "tool-definition",
           name: "file_read",
           description: "Read a file",
           parameters: { type: "object" },
+          rendered: {
+            representationId: "rep-2",
+            contentId: "content-2",
+            mediaType: "text/plain",
+            digest: "sha256:2",
+            byteLength: 5,
+            renderer: "ashe-agent/tool-definition@1",
+          },
         },
       ],
+      measurement: {
+        method: "ashe-agent-estimator",
+        methodVersion: 1,
+        purpose: "execution",
+        coverage: "complete",
+        knownSubtotal: 1,
+        contributions: [
+          {
+            contributionPosition: 0,
+            basis: "ashe-agent-text-v1",
+            methodVersion: 1,
+            tokens: 1,
+            representationIds: ["rep-1"],
+          },
+        ],
+        unavailable: [],
+      },
     }
     expect(decodes(ModelInputManifest, manifest)).toBe(true)
   })
@@ -110,14 +165,14 @@ describe("owned semantic content", () => {
       knownSubtotal: 1_000,
       contributions: [
         {
-          contributionPosition: 1,
+          contributionPosition: 0,
           basis: "ashe-agent-text-v1",
           methodVersion: 1,
           tokens: 1_000,
           representationIds: ["text-1"],
         },
         {
-          contributionPosition: 2,
+          contributionPosition: 1,
           basis: "unavailable",
           methodVersion: 1,
           tokens: null,
@@ -125,7 +180,7 @@ describe("owned semantic content", () => {
           unavailableReason: "provider page expansion is unmeasured",
         },
       ],
-      unavailable: [{ contributionPosition: 2, reason: "provider page expansion is unmeasured" }],
+      unavailable: [{ contributionPosition: 1, reason: "provider page expansion is unmeasured" }],
     }
     const [known, opaque] = measurement.contributions
     expect(decodes(Measurement, measurement)).toBe(true)
@@ -144,7 +199,7 @@ describe("owned semantic content", () => {
     expect(
       decodes(Measurement, {
         ...measurement,
-        unavailable: [{ contributionPosition: 1, reason: "provider page expansion is unmeasured" }],
+        unavailable: [{ contributionPosition: 0, reason: "provider page expansion is unmeasured" }],
       }),
     ).toBe(false)
   })

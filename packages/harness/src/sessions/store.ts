@@ -52,6 +52,7 @@ export interface TurnRecord {
   /** The immutable applied-settings revision this turn references. */
   readonly settingsRevision: string
   readonly status: TurnStatus
+  readonly startedAt: number
   /** The number of the turn's first event, where a rewind of it starts removing. */
   readonly firstSeq: number
   /** The context workflow this turn participates in, or null for an ordinary turn. */
@@ -125,6 +126,7 @@ interface TurnRow {
   first_seq: number
   context_workflow_id: string | null
   context_start_item: number | null
+  started_at: number
 }
 
 interface ContextWorkflowRow {
@@ -155,6 +157,7 @@ const toTurn = (row: TurnRow): TurnRecord => ({
   reasoningEffort: row.reasoning_effort,
   settingsRevision: row.settings_revision,
   status: row.status,
+  startedAt: row.started_at,
   firstSeq: row.first_seq,
   contextWorkflowId: row.context_workflow_id,
   contextStartItem: row.context_start_item,
@@ -178,7 +181,7 @@ const toContextWorkflow = (row: ContextWorkflowRow): ContextWorkflowRecord => ({
 })
 
 const turnColumns =
-  "t.run_id, t.position, t.cause, t.user_message_ids, t.status, t.first_seq, t.context_workflow_id, t.context_start_item, " +
+  "t.run_id, t.position, t.cause, t.user_message_ids, t.status, t.started_at, t.first_seq, t.context_workflow_id, t.context_start_item, " +
   "t.settings_revision, s.agent_title, s.model_id, s.reasoning_effort, " +
   "(SELECT coalesce(json_group_array(json_object('kind', substr(i.entry_ref, 1, instr(i.entry_ref, ':') - 1), " +
   "'inputId', i.input_id)), '[]') FROM turn_inputs i WHERE i.session_id = t.session_id AND i.run_id = t.run_id) AS input_membership"

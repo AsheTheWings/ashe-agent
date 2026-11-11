@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AIMessage, AIMessageChunk, mapChatMessagesToStoredMessages } from "@langchain/core/messages"
+import { Schema } from "effect"
+import { SemanticHistory } from "@ashe-agent/protocol"
 import { AttachmentError, AttachmentStore, type UploadLimits } from "../src/content/attachments.ts"
 import { SessionStore } from "../src/sessions/store.ts"
 import { openDatabase } from "../src/store/database.ts"
@@ -373,6 +375,47 @@ describe("retained attachments and uploads", () => {
     }
   })
 
+  test("a rewind reconstructs an attachment from the source session under the rewinding credential", async () => {
+    const h = new AgentHarness()
+    try {
+      const id = h.create()
+      const uploads = new AttachmentStore(h.db, limits)
+      const now = Date.now()
+      const created = uploads.create("token:other", "draft", "rewind.txt", "text/plain", 5, now)
+      uploads.append("token:other", created.uploadId, 0, Buffer.from("hel").toString("base64"), now + 1)
+      uploads.append("token:other", created.uploadId, 3, Buffer.from("lo").toString("base64"), now + 2)
+      uploads.finalize("token:other", created.uploadId, 5, digest, now + 3)
+      const attachment = h.db
+        .query<{ attachment_id: string }, [string]>("SELECT attachment_id FROM uploads WHERE upload_id = ?")
+        .get(created.uploadId)!.attachment_id
+      const uploadedBy = { kind: "token" as const, tokenId: "other", name: "other" }
+      h.model.next(say("attached"))
+      h.hub.input(id, "keep this file", "steer", uploadedBy, {
+        attachments: [{
+          attachmentId: attachment,
+          contentId: digest,
+          representationId: digest,
+          name: "rewind.txt",
+          mediaType: "text/plain",
+          digest,
+        }],
+      })
+      await h.turnsEnded(id, 1)
+      const run = h.hub.store.turns(id)[0]!.runId
+      h.model.next(say("rewound"))
+      await h.hub.rewind(id, run, undefined, h.sender)
+      await waitFor("the rewound turn to settle", () => (!h.hub.isRunning(id) ? true : undefined))
+      expect(h.hub.store.conversation.waiting(id).find((entry) => entry.kind === "user" && (entry.attachments?.length ?? 0) > 0))
+        .toBeUndefined()
+      await h.restart()
+      expect(h.hub.attachments.attachment(attachment)).not.toBeNull()
+      const user = h.hub.store.conversation.items(id, 1).find((entry) => entry.kind === "user")!
+      expect(user.kind === "user" ? user.attachments : undefined).toMatchObject([{ attachmentId: attachment, name: "rewind.txt" }])
+    } finally {
+      await h.cleanup()
+    }
+  })
+
   test("a fork keeps a retained attachment reference and the original survives staging expiry", async () => {
     const h = new AgentHarness()
     try {
@@ -500,6 +543,42 @@ describe("retained attachments and uploads", () => {
 })
 
 describe("model request boundaries on real persistence", () => {
+  test("an owner reads canonical history and successful boundaries through fork, restart, and rewind", async () => {
+    const h = new AgentHarness()
+    try {
+      const id = h.create()
+      h.model.next(callTools([{ name: "echo", args: { text: "boundary" } }]), say("complete"))
+      h.input(id, "read semantics")
+      await h.turnsEnded(id, 1)
+      const run = h.hub.store.turns(id)[0]!.runId
+      const original = h.hub.semantics(id)
+      expect(Schema.decodeUnknownExit(SemanticHistory)(original)._tag).toBe("Success")
+      expect(original.boundaries).toHaveLength(2)
+      expect(original.turns).toHaveLength(1)
+      expect(original.entries.some((entry) =>
+        entry.kind === "agent-tool" &&
+        entry.tool.result?.content.some((part) => part.kind === "text" && part.text === "echoed boundary")
+      )).toBe(true)
+      expect(original.boundaries.every((boundary) => boundary.contributions[0]?.position === 0)).toBe(true)
+
+      const fork = h.hub.fork(id, run).id
+      await h.restart()
+      const copied = h.hub.semantics(fork)
+      expect(Schema.decodeUnknownExit(SemanticHistory)(copied)._tag).toBe("Success")
+      expect(copied.boundaries.map((boundary) => boundary.modelCallId)).toEqual(
+        original.boundaries.map((boundary) => boundary.modelCallId),
+      )
+
+      h.model.next(say("rewound"))
+      await h.hub.rewind(id, run, undefined, h.sender)
+      await waitFor("the rewound turn to settle", () => (!h.hub.isRunning(id) ? true : undefined))
+      expect(h.hub.semantics(id).boundaries).toHaveLength(1)
+      expect(h.hub.semantics(fork).boundaries).toHaveLength(2)
+    } finally {
+      await h.cleanup()
+    }
+  })
+
   test("a failed response after streamed text leaves no retained partial while the committed tool result survives restart", async () => {
     const h = new AgentHarness()
     try {

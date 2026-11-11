@@ -67,6 +67,7 @@ const render = (collected: Collected, maxTokens: number): ToolResult => {
     capturedText: captured,
     captureLossBytes: collected.output.omitted,
     alreadyBounded: true,
+    projectionTruncated: originalTokens !== null,
   }
 }
 

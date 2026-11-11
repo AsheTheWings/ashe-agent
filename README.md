@@ -1,12 +1,12 @@
 # AsheAgent
 
-AsheAgent is a single-owner agent server: one process that runs an
-agent for its owner and keeps its sessions alive for any number of
-clients, such as the web client this repository includes. Sessions are
-durable and shared by every client, with steering, queueing, fork, and
-rewind. The agent calls models through the OpenAI Responses API, switches
-models within a session, and keeps each session's model context in
-checkpoint windows. It works through
+AsheAgent is a single-owner agent server: one harness service that runs
+an agent for its owner, with bounded child processes for PDF conversion,
+and keeps its sessions alive for any number of clients, such as the web
+client this repository includes. Sessions are durable and shared by every
+client, with steering, queueing, fork, and rewind. The agent calls models
+through the OpenAI Responses API, switches models within a session, and
+keeps each session's model context in checkpoint windows. It works through
 built-in tools for files, documents, images, shell commands, and the web,
 and through MCP servers, called directly or from code mode programs,
 under the owner's permission rules.
@@ -43,10 +43,11 @@ migrated bundle database.
 
 `bun run bundle` builds, from a commit with no uncommitted changes,
 `dist/ashe-agent-linux-x64.tar`: the server and its commands as one
-executable, `bin/ashe-agent`, and the web client's static files under
-`web/`. `bun run release-gate` also tests and qualifies it; see
-[testing](docs/testing.md). CI builds the same bundle on every push and
-publishes it to the host's artifact registry.
+executable, `bin/ashe-agent`, the web client's static files under `web/`,
+and the bundled license and third-party notices. `bun run release-gate`
+also tests and qualifies it; see [testing](docs/testing.md). CI builds the
+same bundle on every push and publishes it to the host's artifact
+registry.
 It also builds, qualifies, and publishes the
 [web client image](docs/web-client.md#container-image).
 
@@ -56,31 +57,25 @@ Run the command from the repository with `bun packages/harness/src/main.ts`,
 or as `bin/ashe-agent` from a bundle. A first start in development:
 
 ```sh
-export ASHE_AGENT_PROFILE=development
 bun packages/harness/src/main.ts migrate
 bun packages/harness/src/main.ts serve
 ```
 
+Select the development profile through the process-input layer described
+by [configuration](docs/configuration.md) before starting the server.
+
 Before serving, register a GitHub OAuth app with callback
 `<server origin>/v1/auth/github/callback`. Use a separate app for development
 and production. Write its client secret into an owner-only file, preserving
-its bytes, and configure the app and the owner's numeric GitHub user ID:
+its bytes, and configure the app, the owner's numeric GitHub user ID, and
+the client origin through the config file [configuration](docs/configuration.md)
+describes.
 
-```json
-{
-  "githubClientId": "<OAuth app client ID>",
-  "githubClientSecretFile": "/absolute/path/to/github-client-secret",
-  "githubCallbackUrl": "https://agent.example/v1/auth/github/callback",
-  "githubOwnerId": 123456,
-  "origins": ["https://agent.example"]
-}
-```
-
-For development register the development server's HTTP callback, list the
-development client's origin in `origins`, set `devWebServerUrl` to the
-browser-accessible WebSocket endpoint, and set `devWebAllowedHosts` when
-accessing Vite by a host name. `bun run dev:web` selects development itself
-and uses the same config-file loader; it refuses an occupied port.
+For development, register the development server's HTTP callback, configure
+the development client's origin and browser-accessible WebSocket endpoint,
+and list the Vite host name when accessing it by a name. `bun run dev:web`
+selects development itself and uses the same config-file loader; it refuses
+an occupied port.
 
 `serve` also needs the providers, with each provider's API key file, and
 the default model; see [configuration](docs/configuration.md). Open the

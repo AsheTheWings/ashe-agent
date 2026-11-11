@@ -66,8 +66,8 @@ when another default agent is configured.
 
 ## Title files and user instructions
 
-An agent's title file is `<title>.md` in the titles directory,
-`ASHE_AGENT_TITLES_DIR`. It holds YAML frontmatter with only a
+An agent's title file is `<title>.md` in the configured titles directory.
+It holds YAML frontmatter with only a
 `description` of 1 to 1,024 characters, then a Markdown body that is the
 agent's user instructions:
 
@@ -85,22 +85,28 @@ the reason; a file named for no agent is ignored.
 
 A session's user instructions are its agent's title file body while the
 title file exists, in every session of that agent. Otherwise they are
-the content of the global instructions file,
-`ASHE_AGENT_INSTRUCTIONS_FILE`, and when that file is absent the session
-has none. A refused title file or an unreadable global instructions file
-fails the session's creation, naming the file and the reason. The
-session's checkpoint window opens with its user instructions as they
-stood at creation, and each later delivery brings the model their
+the content of the configured global instructions file, and when that file
+is absent the session has none. A refused title file or an unreadable
+global instructions file fails the session's creation, naming the file and
+the reason. The session's checkpoint window opens with its user instructions
+as they stood at creation, and each later delivery brings the model their
 changes, the title file's creation or deletion included, as
 [model context](model-context.md) describes. A file that cannot be read
 then leaves the known instructions in place.
+
+Instruction reconciliation is a UserTurn-boundary operation. Admission
+applies the selected title and then delivers any changed title or global
+instructions before that UserTurn's user content. An AgentTurn already
+running keeps the title profile and instruction state it started with; a
+later requested title change cannot switch its policy or splice new
+instructions into its current model response.
 
 ## Skills
 
 Skills follow the [Agent Skills specification](https://agentskills.io/specification).
 When a session is created, and at each delivery into a turn, the server looks for
-`<root>/<name>/SKILL.md` under each skill root,
-`ASHE_AGENT_SKILL_ROOTS`, in order. A skill is skipped when its `name` is
+`<root>/<name>/SKILL.md` under each configured skill root, in order. A
+skill is skipped when its `name` is
 not 1 to 64 characters of `a-z`, `0-9`, and single inner `-`, or differs
 from its directory's name, or when its `description` is empty or longer
 than 1,024 characters. When two roots hold a skill of the same name, the
