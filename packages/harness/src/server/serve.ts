@@ -24,7 +24,34 @@ export class ProtocolServer extends Context.Service<ProtocolServer, WebSocketSer
         const hub = yield* Sessions
         const { handlers, onClose } = sessionHandlers(hub)
         return yield* Effect.acquireRelease(
-          Effect.sync(() => startWebSocketServer({ db, ...options, handlers, onClose })),
+          Effect.sync(() =>
+            startWebSocketServer({
+              db,
+              ...options,
+              handlers,
+              onClose,
+              retainedOriginal: (sessionId, contentId, referenceId) => {
+                const content = hub.store.conversation.retainedContent(sessionId, contentId, referenceId)
+                if (content === null) {
+                  return { status: "missing", message: `no retained content ${contentId}` }
+                }
+                const representation = content.representations[0]
+                if (!content.available || representation === undefined) {
+                  return { status: "unavailable", message: `retained content ${contentId} has no representation` }
+                }
+                const bytes = hub.store.conversation.contentBytes(contentId)
+                if (bytes === null) {
+                  return { status: "unavailable", message: `retained content ${contentId} has no bytes` }
+                }
+                return {
+                  status: "ok",
+                  bytes,
+                  mediaType: representation.mediaType,
+                  filename: representation.filename,
+                }
+              },
+            }),
+          ),
           (server) => Effect.promise(() => server.stop()),
         )
       }),

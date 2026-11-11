@@ -72,11 +72,13 @@ sets `instructions` to the fixed line `You're a helpful assistant.`.
 
 A call to a model that lists reasoning efforts sends the `reasoning`
 field with `summary: "auto"` and, when one resolves, the `effort`: the
-session's selection when the turn started, else the agent's override for
-the model, else the model entry's setting, each only if the model lists
-it. A call to a model without reasoning efforts sends no `reasoning`
-field. A call sends a temperature only to a model that accepts one: the
-agent's override, else the model entry's setting.
+turn's selected effort when it started, else the model entry's configured
+effort. Title effort presets enter that selection when the title is
+selected. A call to a model without reasoning efforts sends no
+`reasoning` field. A call sends a temperature only to a model that
+accepts one: the active title's override for that model, else the model
+entry's setting.
+
 [Configuration](configuration.md) explains the model entries.
 
 The server reads no `OPENAI_*`, `LANGCHAIN_*`, `LANGSMITH_*`, or `LC_*`
@@ -380,12 +382,13 @@ other than `context` tool results, with
 `[Result cleared to free context. Run the call again if you need it.]`,
 keeping their calls, until 25%, then 50%, then all of the clearable
 results' tokens before the first clearing are freed. Each emits
-`TOOL_RESULTS_CLEARED`, and the model call is retried. After the first
-clearing, the context turn offers only `context_append`,
+`TOOL_RESULTS_CLEARED`, and the model call is retried. From its first
+model call, a context turn offers only `context_append`,
 `context_get_open_items`, `shell_exec_command`, `shell_write_stdin`,
-`file_read`, and `file_patch`, as far as the session offers them. A call
-to a tool its model call did not offer gets a failed result naming the
-tools it offered.
+`file_read`, and `file_patch`, as far as the session offers them. All
+other tools are withheld, including before a first clearing. A call to a
+tool its model call did not offer gets a failed result naming the tools
+it offered.
 
 Reaching the limit after the third clearing runs a handoff call on the
 `handoff` auxiliary model with the versioned prompt

@@ -41,7 +41,7 @@ import {
 } from "../context/components.ts"
 import { SCRATCH_FORK_MAX_BYTES, SESSION_ID_LENGTH } from "../context/constants.ts"
 import { allowanceMessage, catalogChanges, instructionsChange, renderSeed, seedTokens } from "../context/seed.ts"
-import { CLEARED_CONTEXT_TOOLS, UNCHECKED_CONTEXT_TOOLS } from "../context/tools.ts"
+import { CONTEXT_TURN_TOOLS, UNCHECKED_CONTEXT_TOOLS } from "../context/tools.ts"
 import type { AuxiliaryModels, Permission } from "../inputs/shapes.ts"
 import { checkpointWindowSize, type ConfiguredModel } from "../models/registry.ts"
 import {
@@ -148,7 +148,10 @@ export interface TurnContext {
   readonly idle: (signal: AbortSignal) => Promise<"handoff" | "ended">
 }
 
-export type TurnOutcome = { readonly status: "finished" } | { readonly status: "failed"; readonly message: string; readonly code?: string }
+export type TurnOutcome =
+  | { readonly status: "finished" }
+  | { readonly status: "cancelled" }
+  | { readonly status: "failed"; readonly message: string; readonly code?: string }
 
 /** Runs one turn to its end; interrupting it cancels the turn. */
 export type TurnRunner = (context: TurnContext) => Effect.Effect<TurnOutcome>
@@ -224,6 +227,8 @@ type AskOutcome = { readonly kind: "allowed" } | { readonly kind: "rejected"; re
 /** A permission request waiting for an answer, in memory only. */
 interface Ask {
   readonly runId: string
+  readonly agentTitle: string
+  readonly rules: ReadonlyArray<Rule>
   readonly check: PermissionCheck
   actionId: string | null
   readonly settle: (outcome: AskOutcome) => void
@@ -665,7 +670,12 @@ export class SessionHub {
 
   /** The rules deciding a session's calls: global, then its agent's, then its grants as allow rules. */
   rules(session: SessionRecord): ReadonlyArray<Rule> {
-    return this.rulesOf(session.permission, this.store.grants(session.id))
+    return this.rulesForTurn(session, session.agent ?? UNTITLED_AGENT_TITLE)
+  }
+
+  /** The rules one AgentTurn keeps for its whole run, with grants from its applied title. */
+  private rulesForTurn(session: SessionRecord, agentTitle: string): ReadonlyArray<Rule> {
+    return this.rulesOf(session.permission, this.store.grants(session.id, agentTitle))
   }
 
   private rulesOf(agent: Permission | null, grants: ReturnType<SessionStore["grants"]>): ReadonlyArray<Rule> {
@@ -677,8 +687,16 @@ export class SessionHub {
     ]
   }
 
-  private authorize(sessionId: string, runId: string, toolCallId: string, check: PermissionCheck, signal: AbortSignal) {
-    const decision = decide(this.rules(this.session(sessionId)), check)
+  private authorize(
+    sessionId: string,
+    runId: string,
+    agentTitle: string,
+    rules: ReadonlyArray<Rule>,
+    toolCallId: string,
+    check: PermissionCheck,
+    signal: AbortSignal,
+  ) {
+    const decision = decide(rules, check)
     if (decision.action === "allow") return Promise.resolve()
     if (decision.action === "deny") return Promise.reject(new PermissionDenied(decision.denied))
     signal.throwIfAborted()
@@ -687,6 +705,8 @@ export class SessionHub {
     return new Promise<void>((resolve, reject) => {
       const ask: Ask = {
         runId,
+        agentTitle,
+        rules,
         check,
         actionId: null,
         settle: (outcome) => {
@@ -800,7 +820,7 @@ export class SessionHub {
    * request of the session with the same message.
    */
   answer(sessionId: string, requestId: string, answer: "once" | "always" | "reject", message: string | undefined, sender: Sender) {
-    const session = this.session(sessionId)
+    this.session(sessionId)
     const asks = this.state(sessionId).asks
     const ask = asks.get(requestId)
     if (ask === undefined) {
@@ -830,13 +850,22 @@ export class SessionHub {
       }
       return
     }
-    if (answer === "always") this.store.addGrants(sessionId, ask.check.permission, ask.check.patterns)
+    if (answer === "always") {
+      this.store.addGrants(sessionId, ask.agentTitle, ask.check.permission, ask.check.patterns)
+    }
     resolved(requestId, answer, sender)
     ask.settle({ kind: "allowed" })
     if (answer !== "always") return
-    const rules = this.rules(session)
+    const granted = [
+      ...ask.rules,
+      ...ask.check.patterns.map((pattern) => ({
+        permission: ask.check.permission,
+        pattern,
+        action: "allow" as const,
+      })),
+    ]
     for (const [id, other] of [...asks.entries()]) {
-      if (decide(rules, other.check).action !== "allow") continue
+      if (decide(granted, other.check).action !== "allow") continue
       if (other.actionId !== null) this.actions.cancel(other.actionId, "allowed by another permission grant")
       resolved(id, "always")
       other.settle({ kind: "allowed" })
@@ -990,6 +1019,22 @@ export class SessionHub {
     }
   }
 
+  private selectionFailure(turn: TurnRecord): { readonly message: string; readonly code: string } | undefined {
+    if (turn.agentTitle !== UNTITLED_AGENT_TITLE && this.configuredAgent(turn.agentTitle) === null) {
+      return { message: `the title ${turn.agentTitle} is not configured`, code: "title_unavailable" }
+    }
+    if (turn.model === null) return { message: "the session has no model selected", code: "model_unavailable" }
+    const model = this.options.models.find((candidate) => candidate.id === turn.model)
+    if (model === undefined) return { message: `the model ${turn.model} is not configured`, code: "model_unavailable" }
+    if (turn.reasoningEffort !== null && !model.efforts.includes(turn.reasoningEffort)) {
+      return {
+        message: `the model ${model.id} does not support the reasoning effort ${turn.reasoningEffort}`,
+        code: "reasoning_effort_unavailable",
+      }
+    }
+    return undefined
+  }
+
   private compatibleEffort(effort: string | null, modelId: string | null): string | null {
     if (effort === null || modelId === null) return null
     const model = this.options.models.find((candidate) => candidate.id === modelId)
@@ -1003,18 +1048,21 @@ export class SessionHub {
     if (patch.agentTitle !== undefined) {
       title = patch.agentTitle
       const listing = this.options.setup.agents().agents.find((agent) => agent.key === title)
+      const explicitModel = patch.modelSettings?.modelId
       if (title === UNTITLED_AGENT_TITLE) {
-        modelId = this.options.defaultModel
+        modelId = explicitModel === undefined ? this.options.defaultModel : explicitModel
         effort = null
       } else if (listing !== undefined) {
-        modelId = listing.model ?? this.options.defaultModel
-        effort = listing.reasoningEfforts[modelId] ?? this.compatibleEffort(effort, modelId)
+        modelId = explicitModel === undefined ? (listing.model ?? this.options.defaultModel) : explicitModel
+        effort =
+          (modelId === null ? undefined : listing.reasoningEfforts[modelId]) ??
+          this.compatibleEffort(effort, modelId)
       } else {
-        modelId = null
-        effort = null
+        modelId = explicitModel === undefined ? null : explicitModel
+        effort = this.compatibleEffort(effort, modelId)
       }
     }
-    if (patch.modelSettings?.modelId !== undefined) {
+    if (patch.modelSettings?.modelId !== undefined && patch.agentTitle === undefined) {
       modelId = patch.modelSettings.modelId
       effort = this.compatibleEffort(effort, modelId)
     }
@@ -1063,10 +1111,27 @@ export class SessionHub {
    * definitions over their allowance, or user instructions that cannot be
    * read, fail the creation.
    */
-  create(params: { model?: string; agent?: string; reasoningEffort?: string }): SessionSummary {
-    const agent = this.options.setup.resolve(params.agent ?? null)
-    const model = this.model(agent.model ?? params.model ?? this.options.defaultModel)
-    const reasoningEffort = this.effort(model, params.reasoningEffort)
+  create(params: { model?: string | null; agent?: string; reasoningEffort?: string | null }): SessionSummary {
+    const agent =
+      params.agent === UNTITLED_AGENT_TITLE
+        ? { key: null, model: null, overrides: {}, permission: null }
+        : this.options.setup.resolve(params.agent ?? null)
+    const selected = params.model !== undefined ? params.model : (agent.model ?? this.options.defaultModel)
+    const model = selected === null ? null : this.model(selected)
+    const title =
+      agent.key === null
+        ? undefined
+        : this.options.setup.agents().agents.find((candidate) => candidate.key === agent.key)
+    const effort =
+      params.reasoningEffort !== undefined
+        ? params.reasoningEffort
+        : model === null
+          ? undefined
+          : title?.reasoningEfforts[model.id]
+    if (model === null && effort != null) {
+      throw invalid("a session without a model cannot select a reasoning effort")
+    }
+    const reasoningEffort = model === null || effort === null ? null : this.effort(model, effort)
     const id = this.newSessionId()
     const rules = this.rulesOf(agent.permission, [])
     const harness = harnessInstructions(this.store.sessionsDir)
@@ -1102,7 +1167,15 @@ export class SessionHub {
       this.options.files.pointMemory(id, 1)
       this.store.db.transaction(() => {
         this.store.createSession(
-          { id, agent: agent.key, model: model.id, reasoningEffort, modelOverrides: agent.overrides, permission: agent.permission, createdAt },
+          {
+            id,
+            agent: agent.key,
+            model: model?.id ?? null,
+            reasoningEffort,
+            modelOverrides: agent.overrides,
+            permission: agent.permission,
+            createdAt,
+          },
           null,
         )
         this.fileState.recordGeneration(id, 1, memory, createdAt)
@@ -1152,25 +1225,22 @@ export class SessionHub {
 
   /** The configured agents, each with its title, title file state, and settings, and the default agent. */
   agents() {
-    return this.options.setup.agents()
+    const configured = this.options.setup.agents()
+    return {
+      agents: [
+        {
+          key: UNTITLED_AGENT_TITLE,
+          title: displayTitle(UNTITLED_AGENT_TITLE),
+          description: null,
+          model: this.options.defaultModel,
+          reasoningEfforts: {},
+          titleFile: { state: "absent" as const },
+        },
+        ...configured.agents,
+      ],
+      defaultAgent: configured.defaultAgent,
+    }
   }
-
-  /** Applies a selection inside the harness; owner clients submit selections with input. */
-  setModel(sessionId: string, model: string, reasoningEffort: string | undefined, sender: Sender) {
-    const session = this.session(sessionId)
-    const configured = this.model(model)
-    const effort = this.effort(configured, reasoningEffort)
-    this.commit(sessionId, (append) => {
-      this.store.setModel(sessionId, configured.id, effort)
-      append({
-        type: "SELECTION_CHANGED",
-        selection: effectiveSelection(session.agent ?? UNTITLED_AGENT_TITLE, configured.id, effort),
-        settingsRevisionId: crypto.randomUUID(),
-        sender,
-      })
-    })
-  }
-
 
   /**
    * Takes a user message: it is stored as waiting input, then starts a turn
@@ -1508,15 +1578,16 @@ export class SessionHub {
         turn,
       }
     })
+    const readiness = this.selectionFailure(turn)
+    if (readiness !== undefined) {
+      this.failBeforeRun(sessionId, turn.runId, readiness.message, readiness.code)
+      return
+    }
     try {
       this.context.afterItems(sessionId, turn)
     } catch (error) {
       const message = `the turn could not start its context work: ${error instanceof Error ? error.message : String(error)}`
-      this.commit(sessionId, (append) => {
-        this.store.endTurn(sessionId, turn.runId, "failed", this.now())
-        append({ type: "RUN_ERROR", runId: turn.runId, message, code: "turn_start_failed" })
-      })
-      this.context.turnEnded(sessionId, turn.runId, "failed")
+      this.failBeforeRun(sessionId, turn.runId, message, "turn_start_failed")
       return
     }
     const model = this.options.models.find((candidate) => candidate.id === turn.model)
@@ -1526,7 +1597,7 @@ export class SessionHub {
     })
     const live: Live = { fiber: null as unknown as Fiber.Fiber<TurnOutcome>, turn, cancelled: false, span, startedAt: performance.now() }
     const owner = { runId: turn.runId, model: turn.model, agentTitle: turn.agentTitle }
-    const rules = () => this.rules(this.session(sessionId))
+    const rules = () => this.rulesForTurn(session, turn.agentTitle)
     const context: TurnContext = {
       session,
       turn,
@@ -1537,8 +1608,9 @@ export class SessionHub {
       },
       tools: () => {
         const tools = this.offeredTools(rules(), sessionId)
-        // A cleared context turn keeps only the tools it needs to organize its context.
-        return this.context.clearings(turn.runId) === 0 ? tools : tools.filter((tool) => CLEARED_CONTEXT_TOOLS.includes(tool.spec.name))
+        return this.context.isContextTurn(turn.runId)
+          ? tools.filter((tool) => CONTEXT_TURN_TOOLS.includes(tool.spec.name))
+          : tools
       },
       beginModelCall: (call) => {
         this.commit(sessionId, () => this.conversation.beginModelCall(sessionId, turn.runId, call, this.now()))
@@ -1590,7 +1662,8 @@ export class SessionHub {
           : waiting.some(isIndependent) || waiting.some(isContinuation) || waiting.some(isContextInput)
       },
       isCancelled: () => live.cancelled,
-      authorize: (toolCallId, check, signal) => this.authorize(sessionId, turn.runId, toolCallId, check, signal),
+      authorize: (toolCallId, check, signal) =>
+        this.authorize(sessionId, turn.runId, turn.agentTitle, rules(), toolCallId, check, signal),
       trace: withSpan(span),
       offered: (tool) => !whollyDenied(rules(), withholdingName(tool)),
       toolPolicy: this.toolPolicy,
@@ -1604,6 +1677,26 @@ export class SessionHub {
     live.fiber = fiber
     state.live = live
     fiber.addObserver((exit) => this.endTurn(sessionId, live, exit))
+  }
+
+  /** Finalizes a turn that failed before its runner started, then drains eligible input it left waiting. */
+  private failBeforeRun(sessionId: string, runId: string, message: string, code: string) {
+    this.commit(sessionId, (append) => {
+      this.store.endTurn(sessionId, runId, "failed", this.now())
+      append({ type: "RUN_ERROR", runId, message, code })
+    })
+    try {
+      this.context.turnEnded(sessionId, runId, "failed")
+    } catch (error) {
+      const settlement = `settling the context workflow failed: ${error instanceof Error ? error.message : String(error)}`
+      try {
+        this.commit(sessionId, (append) => append({ type: "SESSION_ERROR", code: "context_workflow_failed", message: settlement }))
+      } catch {
+        // The persisted workflow remains active; the next turn or restart settles it.
+      }
+    }
+    const state = this.state(sessionId)
+    if (!this.stopping && !state.controlled) this.startNext(sessionId)
   }
 
   private endTurn(sessionId: string, live: Live, exit: Exit.Exit<TurnOutcome>) {
@@ -1658,8 +1751,8 @@ export class SessionHub {
       const baseStatus: "finished" | "cancelled" | "failed" =
         live.cancelled
           ? "cancelled"
-          : Exit.isSuccess(exit) && exit.value.status === "finished"
-            ? "finished"
+          : Exit.isSuccess(exit) && exit.value.status !== "failed"
+            ? exit.value.status
             : Exit.isFailure(exit) && live.cancelled
               ? "cancelled"
               : "failed"
@@ -1716,7 +1809,9 @@ export class SessionHub {
       Exit.isSuccess(exit)
         ? exit.value.status === "finished"
           ? ["finished", undefined]
-          : ["failed", exit.value.code !== undefined && isErrorClass(exit.value.code) ? exit.value.code : "turn_failed"]
+          : exit.value.status === "cancelled"
+            ? ["canceled", undefined]
+            : ["failed", exit.value.code !== undefined && isErrorClass(exit.value.code) ? exit.value.code : "turn_failed"]
         : live.cancelled
           ? ["canceled", undefined]
           : this.stopping
@@ -1797,15 +1892,40 @@ export class SessionHub {
    * continuation component waits first again. The restore then completes,
    * and its rerun turn starts after it.
    */
-  async rewind(sessionId: string, runId: string, text: string | undefined, sender: Sender) {
+  async rewind(
+    sessionId: string,
+    runId: string,
+    text: string | undefined,
+    sender: Sender,
+    options: { readonly selection?: SelectionPatch } = {},
+  ) {
     this.session(sessionId)
     const state = this.state(sessionId)
     if (state.controlled) throw conflict("another history operation is changing the session")
     const turn = this.point(sessionId, runId)
     const users = new Map(
-      this.conversation.turnItems(sessionId, runId).flatMap((item) => (item.kind === "user" ? [[item.inputId, item.text] as const] : [])),
+      this.conversation
+        .turnItems(sessionId, runId)
+        .flatMap((item) =>
+          item.kind === "user"
+            ? [[item.inputId, { text: item.text, attachments: item.attachments ?? [] }] as const]
+            : [],
+        ),
     )
-    const texts = text === undefined ? turn.userMessageIds.map((id) => users.get(id) ?? "") : [text]
+    const messages =
+      text === undefined
+        ? turn.userMessageIds.map((id) => users.get(id) ?? { text: "", attachments: [] })
+        : [
+            {
+              text,
+              attachments: turn.userMessageIds.flatMap((id) => users.get(id)?.attachments ?? []),
+            },
+          ]
+    const reconstructed = messages.map((message, index) => ({
+      inputId: crypto.randomUUID(),
+      ...message,
+      ...(index === 0 && options.selection !== undefined ? { selection: options.selection } : {}),
+    }))
     // A rerun continuation turn starts with its continuation component again, so its checkpoint window still opens with it.
     const continuation = this.conversation
       .turnItems(sessionId, runId)
@@ -1824,16 +1944,33 @@ export class SessionHub {
       }
       this.commit(sessionId, (append) => {
         this.fileState.recordPendingRestore(sessionId, restore, this.now())
+        for (const message of reconstructed) {
+          if (message.attachments.length > 0) {
+            this.attachments.claim(senderOwner(sender), sessionId, message.inputId, message.attachments, this.now())
+          }
+        }
         this.store.removeFrom(sessionId, turn)
         const cleared = this.conversation.clearWaiting(sessionId)
         append({ type: "SESSION_REWOUND", runId: turn.runId, firstRemovedSeq: turn.firstSeq, clearedInputIds: [...cleared] })
         if (continuation?.kind === "component") this.queue(sessionId, continuation.component, "continuation")
         this.queue(sessionId, rewindComponent())
         this.queueReconciledNotifications(sessionId)
-        for (const message of texts) {
-          const inputId = crypto.randomUUID()
-          this.conversation.addWaiting(sessionId, { kind: "user", inputId, text: message, mode: "steer", sender }, this.now())
-          append({ type: "INPUT_WAITING", inputId, text: message, mode: "steer", sender })
+        for (const message of reconstructed) {
+          const selection = message.selection
+          this.conversation.addWaiting(
+            sessionId,
+            {
+              kind: "user",
+              inputId: message.inputId,
+              text: message.text,
+              mode: "steer",
+              sender,
+              ...(selection === undefined ? {} : { selection }),
+              ...(message.attachments.length === 0 ? {} : { attachments: message.attachments }),
+            },
+            this.now(),
+          )
+          append({ type: "INPUT_WAITING", inputId: message.inputId, text: message.text, mode: "steer", sender })
         }
       })
       this.context.historyChanged(sessionId)

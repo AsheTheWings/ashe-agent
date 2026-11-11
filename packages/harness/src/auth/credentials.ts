@@ -12,7 +12,9 @@ export interface Tokens {
 
 export type RefreshResult = { readonly ok: true; readonly tokens: Tokens } | { readonly ok: false }
 
-export type AuthenticateResult = { readonly ok: true; readonly principal: Sender } | { readonly ok: false }
+export type AuthenticateResult =
+  | { readonly ok: true; readonly principal: Sender; readonly credentialExpiresAt: number | null }
+  | { readonly ok: false }
 
 export interface ApiTokenInfo {
   readonly id: string
@@ -96,12 +98,14 @@ export const authenticate = (db: Database, token: string, ownerId: number, now: 
   const kind = tokenKind(token)
   if (kind === "access") {
     const row = db
-      .query<{ login_id: string }, [string, number, number]>(
-        `SELECT a.login_id FROM access_tokens AS a JOIN logins AS l ON l.id = a.login_id
+      .query<{ login_id: string; expires_at: number }, [string, number, number]>(
+        `SELECT a.login_id, a.expires_at FROM access_tokens AS a JOIN logins AS l ON l.id = a.login_id
           WHERE a.token_hash = ? AND a.expires_at > ? AND l.revoked_at IS NULL AND l.github_user_id = ?`,
       )
       .get(tokenHash(token), now, ownerId)
-    return row === null ? { ok: false } : { ok: true, principal: { kind: "login", loginId: row.login_id } }
+    return row === null
+      ? { ok: false }
+      : { ok: true, principal: { kind: "login", loginId: row.login_id }, credentialExpiresAt: row.expires_at }
   }
   if (kind === "api") {
     const row = db
@@ -111,7 +115,7 @@ export const authenticate = (db: Database, token: string, ownerId: number, now: 
       .get(tokenHash(token))
     if (row === null) return { ok: false }
     db.query("UPDATE api_tokens SET last_used_at = ? WHERE id = ?").run(now, row.id)
-    return { ok: true, principal: { kind: "token", tokenId: row.id, name: row.name } }
+    return { ok: true, principal: { kind: "token", tokenId: row.id, name: row.name }, credentialExpiresAt: null }
   }
   return { ok: false }
 }

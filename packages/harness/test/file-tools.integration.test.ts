@@ -117,9 +117,8 @@ describe("file_read images", () => {
         { type: "input_image", image_url: `data:image/png;base64,${readFileSync(join(fixtures, "red.png")).toString("base64")}`, detail: "auto" },
       ])
 
-      h.hub.setModel(viewer, alpha, undefined, h.sender)
       h.model.next(say("ok"))
-      h.input(viewer, "describe")
+      h.hub.input(viewer, "describe", "steer", h.sender, { selection: { modelSettings: { modelId: alpha } } })
       await h.turnsEnded(viewer, 2)
       const record = h.model.last().messages.map(messageText).join("\n")
       expect(record).toContain("red.png is an image (image/png, 73 bytes).\n[image: red.png]")

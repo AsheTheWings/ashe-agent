@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { UNTITLED_AGENT_TITLE } from "@ashe-agent/protocol"
 import { TITLE_MAX_LENGTH } from "../context/constants.ts"
 
 /** An absolute filesystem path. */
@@ -191,8 +192,8 @@ export const isTitle = (key: string) => key.length <= TITLE_MAX_LENGTH && TITLE_
 
 export const Agents = keyedRecord(
   AgentEntry,
-  isTitle,
-  `must be a title: 1 to ${TITLE_MAX_LENGTH} characters of a-z and 0-9 words joined by single dashes`,
+  (key) => isTitle(key) && key !== UNTITLED_AGENT_TITLE,
+  `must be a title: 1 to ${TITLE_MAX_LENGTH} characters of a-z and 0-9 words joined by single dashes, and must not be ${JSON.stringify(UNTITLED_AGENT_TITLE)}`,
 )
 
 export type Agents = typeof Agents.Type

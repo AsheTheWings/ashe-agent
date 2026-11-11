@@ -3,10 +3,11 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Deferred, Effect, Exit, Layer, ManagedRuntime, Redacted } from "effect"
 import { createApiToken } from "../../src/auth/credentials.ts"
-import type { Permission } from "../../src/inputs/shapes.ts"
+import type { AuxiliaryModels, Permission } from "../../src/inputs/shapes.ts"
 import { ProtocolServer } from "../../src/server/serve.ts"
 import type { ModelPort } from "../../src/agent/model.ts"
-import { Sessions, type TurnRunner } from "../../src/sessions/hub.ts"
+import type { ConfiguredModel } from "../../src/models/registry.ts"
+import { Sessions, type SessionSetup, type TurnRunner } from "../../src/sessions/hub.ts"
 import { noAgents } from "../../src/sessions/setup.ts"
 import { openDatabase, Store } from "../../src/store/database.ts"
 import { migrationFiles } from "../../src/store/migration-files.ts"
@@ -26,6 +27,16 @@ export const models = [
   configuredModel("test/first", { contextLimit: 400_000, efforts: ["low", "high"], settings: { reasoningEffort: "low" } }),
   configuredModel("test/second", { contextLimit: 300_000, imageInput: true }),
 ]
+
+/** Composition choices for a server that runs something besides the scripted fake runner. */
+export type TestServerOptions = {
+  readonly dir?: string
+  readonly models?: ReadonlyArray<ConfiguredModel>
+  readonly setup?: SessionSetup
+  readonly runner?: TurnRunner
+  readonly modelPort?: ModelPort
+  readonly auxiliaryModels?: AuxiliaryModels
+}
 
 /**
  * A scripted turn runner. Each turn echoes its input as one assistant
@@ -61,6 +72,9 @@ export class ScriptedRunner {
     const self = this
     const input = () => context.window().items.find((item) => item.kind === "user" && item.runId === context.turn.runId)
     return Effect.gen(function* () {
+      if (context.turn.model === null) {
+        return { status: "failed" as const, message: "the session has no model selected", code: "model_unavailable" }
+      }
       const first = input()
       const text = first?.kind === "user" ? first.text : ""
       self.started.push(text)
@@ -106,17 +120,26 @@ export class ScriptedRunner {
 
 /** A server running in this process on a run-owned database file, restartable on the same file. */
 export class TestServer {
-  readonly dir = mkdtempSync(join(tmpdir(), "ashe-agent-server-"))
-  readonly databasePath = join(this.dir, "ashe-agent.db")
-  readonly sessionsDir = join(this.dir, "sessions")
-  readonly memoryDir = join(this.dir, "memory")
-  readonly scratchRoot = join(this.dir, "scratch")
+  readonly dir: string
+  readonly origins = ["http://allowed.test"]
+  readonly databasePath: string
+  readonly sessionsDir: string
+  readonly memoryDir: string
+  readonly scratchRoot: string
   readonly script = new ScriptedRunner()
   private runtime: ManagedRuntime.ManagedRuntime<ProtocolServer | Sessions | Store, never> | null = null
   url = ""
 
   /** `permission` gives the global rules; by default every `shell` call asks. */
-  constructor(readonly permission: Permission = { shell: "ask" }) {
+  constructor(
+    readonly permission: Permission = { shell: "ask" },
+    readonly options: TestServerOptions = {},
+  ) {
+    this.dir = options.dir ?? mkdtempSync(join(tmpdir(), "ashe-agent-server-"))
+    this.databasePath = join(this.dir, "ashe-agent.db")
+    this.sessionsDir = join(this.dir, "sessions")
+    this.memoryDir = join(this.dir, "memory")
+    this.scratchRoot = join(this.dir, "scratch")
     const db = openDatabase(this.databasePath)
     applyMigrations(db, discoverMigrations(migrationFiles))
     db.close()
@@ -135,14 +158,15 @@ export class TestServer {
   }
 
   async start() {
-    const layer = ProtocolServer.layer({ hostname: "127.0.0.1", port: 0, origins: [], github: { clientId: "test", clientSecret: Redacted.make("synthetic"), callbackUrl: "http://127.0.0.1/callback", ownerId: 42, githubUrl: "http://127.0.0.1:9", githubApiUrl: "http://127.0.0.1:9" } }).pipe(
+    const layer = ProtocolServer.layer({ hostname: "127.0.0.1", port: 0, origins: this.origins, github: { clientId: "test", clientSecret: Redacted.make("synthetic"), callbackUrl: "http://127.0.0.1/callback", ownerId: 42, githubUrl: "http://127.0.0.1:9", githubApiUrl: "http://127.0.0.1:9" } }).pipe(
       Layer.provideMerge(
         Sessions.layer({
-          models,
-          defaultModel: models[0]!.id,
-          runner: this.script.runner,
-          port: noAuxiliaryModel,
-          setup: noAgents,
+          models: this.options.models ?? models,
+          defaultModel: (this.options.models ?? models)[0]!.id,
+          runner: this.options.runner ?? this.script.runner,
+          port: this.options.modelPort ?? noAuxiliaryModel,
+          setup: this.options.setup ?? noAgents,
+          ...(this.options.auxiliaryModels === undefined ? {} : { auxiliaryModels: this.options.auxiliaryModels }),
           permission: this.permission,
           home: this.dir,
           sessionsDir: this.sessionsDir,

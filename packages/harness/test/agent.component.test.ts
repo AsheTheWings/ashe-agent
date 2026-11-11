@@ -253,14 +253,14 @@ describe("the seed and reconciliation", () => {
 })
 
 describe("the agent loop", () => {
-  test("a session takes its agent's model, else the chosen one, else the first configured", async () => {
+  test("a session takes its agent's model unless the request chooses one, else the first configured", async () => {
     const setup: SessionSetup = {
       ...noAgents,
       resolve: (agent) => ({ ...implicitAgent, key: agent, model: agent === "pinned" ? beta : agent === "broken" ? "no/such" : null }),
     }
     await withHarness(
       async (h) => {
-        expect(h.hub.create({ agent: "pinned", model: alpha }).selection.modelSettings.modelId).toBe(beta)
+        expect(h.hub.create({ agent: "pinned", model: alpha }).selection.modelSettings.modelId).toBe(alpha)
         expect(h.hub.create({ agent: "free", model: beta }).selection.modelSettings.modelId).toBe(beta)
         expect(h.hub.create({ agent: "free" }).selection.modelSettings.modelId).toBe(alpha)
         expect(() => h.hub.create({ agent: "broken" })).toThrow("no configured model no/such")
@@ -688,7 +688,7 @@ describe("input during turns", () => {
       h.input(id, "reject")
       await h.turnsEnded(id, 3)
       expect(h.model.calls).toHaveLength(before + 1)
-      expect(ofType(h.events(id), "RUN_FINISHED").at(-1).outcome).toEqual({ type: "success" })
+      expect(ofType(h.events(id), "RUN_FINISHED").at(-1).outcome).toEqual({ type: "cancelled" })
       expect(ofType(h.events(id), "TOOL_CALL_RESULT").slice(-3).map((result) => result.outcome)).toEqual(["success", "declined", "canceled"])
       h.model.next(say("after reject"))
       h.input(id, "after reject")
@@ -819,6 +819,34 @@ describe("fork and rewind", () => {
     })
   })
 
+  test("rewind keeps the current selection unless its reconstructed input submits a new one", async () => {
+    await withHarness(async (h) => {
+      const id = h.create({ model: alpha })
+      h.model.next(say("first"), say("second"), say("rewound"), say("rewound again"))
+      h.input(id, "first")
+      await h.turnsEnded(id, 1)
+      h.hub.input(id, "second", "steer", h.sender, { selection: { modelSettings: { modelId: beta } } })
+      await h.turnsEnded(id, 2)
+      const [first, second] = h.hub.store.turns(id)
+      expect(second).toMatchObject({ model: beta })
+
+      await h.hub.rewind(id, first!.runId, undefined, h.sender)
+      await h.turnsEnded(id, 1)
+      expect(h.hub.summary(id).selection.modelSettings.modelId).toBe(beta)
+      expect(h.hub.store.turns(id).at(-1)).toMatchObject({ model: beta })
+      expect(h.model.last().model).toBe(beta)
+
+      const rerun = h.hub.store.turns(id).at(-1)!
+      await h.hub.rewind(id, rerun.runId, "rewound with alpha", h.sender, {
+        selection: { modelSettings: { modelId: alpha } },
+      })
+      await h.turnsEnded(id, 1)
+      expect(h.hub.summary(id).selection.modelSettings.modelId).toBe(alpha)
+      expect(h.hub.store.turns(id).at(-1)).toMatchObject({ model: alpha })
+      expect(h.model.last().model).toBe(alpha)
+    })
+  })
+
   test("reconciled notifications follow the rewind or fork that queued them, and a rewind queues no removed component again", async () => {
     await withHarness(async (h) => {
       const id = await threeTurns(h)
@@ -900,9 +928,8 @@ describe("model switching", () => {
       h.input(id, "t1")
       await h.turnsEnded(id, 1)
 
-      h.hub.setModel(id, beta, undefined, h.sender)
       h.model.next(say("b1"))
-      h.input(id, "t2")
+      h.hub.input(id, "t2", "steer", h.sender, { selection: { modelSettings: { modelId: beta } } })
       await h.turnsEnded(id, 2)
       const byBeta = h.model.last()
       expect(byBeta.model).toBe(beta)
@@ -918,9 +945,8 @@ describe("model switching", () => {
       expect(record).not.toContain("alpha thinks")
       expect(responsesInput(byBeta).some((item) => item.type === "reasoning" || item.type === "function_call")).toBe(false)
 
-      h.hub.setModel(id, alpha, undefined, h.sender)
       h.model.next(say("a2"))
-      h.input(id, "t3")
+      h.hub.input(id, "t3", "steer", h.sender, { selection: { modelSettings: { modelId: alpha } } })
       await h.turnsEnded(id, 3)
       const back = h.model.last()
       const items = responsesInput(back)
@@ -942,7 +968,10 @@ describe("model switching", () => {
       const before = h.model.calls.length
       h.input(id, "t4")
       await h.calls(before + 1)
-      h.hub.setModel(id, beta, undefined, h.sender)
+      h.hub.store.setSettings(id, {
+        agentTitle: "untitled",
+        modelSettings: { modelId: beta, reasoningEffort: null },
+      })
       open.open()
       await h.turnsEnded(id, 4)
       expect(h.model.calls.slice(-2).map(({ call }) => call.model)).toEqual([alpha, alpha])
@@ -967,7 +996,10 @@ describe("model switching", () => {
         h.model.next(hold(open.promise, callTools([{ name: "picture", args: {} }])), say("seen"))
         h.input(id, "look")
         await h.calls(1)
-        h.hub.setModel(id, alpha, undefined, h.sender)
+        h.hub.store.setSettings(id, {
+          agentTitle: "untitled",
+          modelSettings: { modelId: alpha, reasoningEffort: null },
+        })
         open.open()
         await h.turnsEnded(id, 1)
         const output = responsesInput(h.model.last()).find((item) => item.type === "function_call_output")!

@@ -6,6 +6,8 @@ import {
   ErrorCode,
   PROTOCOL_PATH,
   PROTOCOL_VERSIONS,
+  OWNER_IDENTITY_PATH,
+  RETAINED_CONTENT_PATH,
   SIGN_IN_CALLBACK_PATH,
   SIGN_IN_START_PATH,
   authMethods,
@@ -18,7 +20,7 @@ import {
   type ResultOf,
   type Sender,
 } from "@ashe-agent/protocol"
-import { authenticate, createLogin, principalActive, refresh } from "../auth/credentials.ts"
+import { authenticate, createLogin, principalActive, refresh, type AuthenticateResult } from "../auth/credentials.ts"
 import { GithubSignIn, type GithubSignInConfig } from "../auth/github.ts"
 import { emitLog, endSpan, startSpan, type ErrorClass } from "../telemetry/signals.ts"
 
@@ -95,11 +97,27 @@ export interface WebSocketServerOptions {
   /** The GitHub OAuth app the owner signs in through, and the owner's GitHub user ID. */
   readonly github: GithubSignInConfig
   readonly handlers: Handlers
+  /** Reads one authenticated retained original for the content download endpoint. */
+  readonly retainedOriginal?: (
+    sessionId: string,
+    contentId: string,
+    referenceId: string,
+  ) => RetainedOriginalResult
   readonly now?: () => number
   readonly onClose?: (connection: Connection) => void
   /** Receives a handler's unexpected failure, which the client sees only as an internal error. */
   readonly onInternalError?: (method: string, failure: unknown) => void
 }
+
+export type RetainedOriginalResult =
+  | {
+      readonly status: "ok"
+      readonly bytes: Uint8Array
+      readonly mediaType: string
+      readonly filename: string
+    }
+  | { readonly status: "missing"; readonly message: string }
+  | { readonly status: "unavailable"; readonly message: string }
 
 export interface WebSocketServer {
   /** The URL clients connect to. */
@@ -128,6 +146,29 @@ export const startWebSocketServer = (options: WebSocketServerOptions): WebSocket
   const signIn = new GithubSignIn(options.github, options.origins, now)
   const ownerId = options.github.ownerId
   const sockets = new Set<ServerWebSocket<Connection>>()
+  const noStore = {
+    "Cache-Control": "no-store",
+    Pragma: "no-cache",
+    Vary: "Origin, Authorization",
+  } as const
+  const originHeaders = (origin: string | null): Record<string, string> | null =>
+    origin === null
+      ? {}
+      : options.origins.includes(origin)
+        ? { "Access-Control-Allow-Origin": origin, Vary: "Origin, Authorization" }
+        : null
+  const authorized = (request: Request): AuthenticateResult => {
+    const authorization = request.headers.get("authorization")
+    if (authorization === null || !authorization.startsWith("Bearer ")) return { ok: false }
+    const outcome = authenticate(options.db, authorization.slice("Bearer ".length), ownerId, now())
+    return outcome.ok && principalActive(options.db, outcome.principal, ownerId) ? outcome : { ok: false }
+  }
+  const withNoStore = (headers: Readonly<Record<string, string>> = {}) => ({ ...noStore, ...headers })
+  const json = (body: unknown, status: number, headers: Readonly<Record<string, string>> = {}) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: withNoStore({ "Content-Type": "application/json; charset=utf-8", ...headers }),
+    })
 
   const send = (socket: ServerWebSocket<Connection>, message: unknown) => {
     if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message))
@@ -255,6 +296,79 @@ export const startWebSocketServer = (options: WebSocketServerOptions): WebSocket
           })
         }
         return url.pathname === SIGN_IN_START_PATH ? signIn.start(url) : signIn.callback(url)
+      }
+      if (url.pathname === OWNER_IDENTITY_PATH || url.pathname.startsWith(`${RETAINED_CONTENT_PATH}/`)) {
+        const cors = originHeaders(request.headers.get("origin"))
+        if (cors === null) return new Response("origin not allowed", { status: 403, headers: withNoStore() })
+        if (request.method === "OPTIONS") {
+          return new Response(null, {
+            status: 204,
+            headers: withNoStore({
+              ...cors,
+              "Access-Control-Allow-Methods": "GET",
+              "Access-Control-Allow-Headers": "Authorization",
+              "Access-Control-Max-Age": "0",
+            }),
+          })
+        }
+        if (request.method !== "GET") {
+          return json(
+            { code: "method_not_allowed", message: "only GET is supported" },
+            405,
+            { ...cors, Allow: "GET" },
+          )
+        }
+        const auth = authorized(request)
+        if (!auth.ok) {
+          return json(
+            { code: "unauthenticated", message: "a valid bearer credential is required" },
+            401,
+            { ...cors, "WWW-Authenticate": "Bearer" },
+          )
+        }
+        if (url.pathname === OWNER_IDENTITY_PATH) {
+          return json(
+            { principal: auth.principal, credentialExpiresAt: auth.credentialExpiresAt },
+            200,
+            cors,
+          )
+        }
+        const parts = url.pathname
+          .slice(RETAINED_CONTENT_PATH.length + 1)
+          .split("/")
+          .map((part) => {
+            try {
+              return decodeURIComponent(part)
+            } catch {
+              return ""
+            }
+          })
+        if (parts.length !== 3 || parts.some((part) => part === "")) {
+          return json({ code: "not_found", message: "no retained content at this address" }, 404, cors)
+        }
+        if (options.retainedOriginal === undefined) {
+          return json({ code: "not_found", message: "retained content is unavailable" }, 404, cors)
+        }
+        const original = options.retainedOriginal(parts[0]!, parts[1]!, parts[2]!)
+        if (original.status === "missing") {
+          return json({ code: "not_found", message: original.message }, 404, cors)
+        }
+        if (original.status === "unavailable") {
+          return json({ code: "representation_unavailable", message: original.message }, 409, cors)
+        }
+        const filename = original.filename.replace(/[\r\n"\\]/g, "_").replace(/[^\x20-\x7e]/g, "_")
+        const mediaType =
+          original.mediaType.replace(/[^\x20-\x7e]/g, "").trim() || "application/octet-stream"
+        return new Response(original.bytes, {
+          status: 200,
+          headers: withNoStore({
+            ...cors,
+            "Content-Type": mediaType,
+            "Content-Disposition": `attachment; filename="${filename || "download"}"`,
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+          }),
+        })
       }
       if (url.pathname !== PROTOCOL_PATH) return new Response("not found", { status: 404 })
       const origin = request.headers.get("origin")

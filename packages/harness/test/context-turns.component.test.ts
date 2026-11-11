@@ -7,12 +7,14 @@ import { ModelCallError } from "../src/agent/model.ts"
 import type { Component } from "../src/context/components.ts"
 import { waitFor } from "./support/cli.ts"
 import { AgentHarness, callTools, configuredModel, failWith, gate, hold, messageText, say, type Reply } from "./support/agent.ts"
+import { implicitAgent } from "../src/agents/agents.ts"
 import { InstructionsUnreadable } from "../src/agents/setup.ts"
 import { timelinesOverhead } from "../src/context/checkpoint.ts"
 import { estimateTokens } from "../src/context/constants.ts"
 import { entryRenderer, openItems } from "../src/context/entries.ts"
 import { noAgents } from "../src/sessions/setup.ts"
-import { contextHarness, filler, publishMemory, windowModel, type RoutedModel } from "./support/context.ts"
+import type { SessionSetup } from "../src/sessions/hub.ts"
+import { blobTool, contextHarness, filler, publishMemory, windowModel, type RoutedModel } from "./support/context.ts"
 
 /** A checkpoint window of 120,000 tokens: a context turn starts past 80,000. */
 const mid = windowModel("test/mid", 120_000)
@@ -87,6 +89,21 @@ const withContext = async (body: (h: AgentHarness, aux: RoutedModel) => Promise<
 }
 
 describe("context turns", () => {
+  test("a final model-readiness failure runs no boundary auxiliary work", async () => {
+    const { h, aux } = contextHarness({ auxiliaryModels: { compaction: mid.id } })
+    try {
+      const id = h.create({ model: null })
+      h.input(id, filler(61_000))
+      await h.turnsEnded(id, 1)
+      expect(ofType(h, id, "RUN_ERROR")).toMatchObject([{ code: "model_unavailable" }])
+      expect(h.model.calls).toEqual([])
+      expect(aux.calls("compaction")).toEqual([])
+      expect(h.hub.store.turns(id)).toMatchObject([{ model: null, status: "failed" }])
+    } finally {
+      await h.cleanup()
+    }
+  })
+
   test("a post-admission failure in a context turn ends its workflow", async () => {
     await withContext(async (h, aux) => {
       const id = h.create({ model: mid.id })
@@ -533,6 +550,118 @@ describe("validation", () => {
 describe("the context limit", () => {
   const overflow = () => failWith(new ModelCallError("context_length_exceeded", true))
   const toolNames = (call: { tools: ReadonlyArray<{ name: string }> }) => call.tools.map((tool) => tool.name)
+
+  test("a title's model override supplies the checkpoint window at the next UserTurn", async () => {
+    let checkpointWindowSize: number | undefined
+    const setup: SessionSetup = {
+      resolve: (agent) =>
+        agent === "small"
+          ? {
+              ...implicitAgent,
+              key: "small",
+              model: mid.id,
+              overrides:
+                checkpointWindowSize === undefined ? {} : { [mid.id]: { checkpointWindowSize } },
+            }
+          : implicitAgent,
+      userInstructions: () => null,
+      catalogs: () => ({ skills: null, codeMode: null }),
+      agents: () => ({
+        agents: [
+          {
+            key: "small",
+            title: "Small",
+            description: null,
+            model: mid.id,
+            reasoningEfforts: {},
+            titleFile: { state: "absent" },
+          },
+        ],
+        defaultAgent: null,
+      }),
+    }
+    const { h } = contextHarness({ models: [mid, large], setup })
+    try {
+      const id = h.create({ agent: "small" })
+      h.model.next(blob(30_000), say("large window"))
+      h.input(id, "stay below the model window")
+      await h.turnsEnded(id, 1)
+      expect(ofType(h, id, "CONTEXT_TURN_STARTED")).toEqual([])
+
+      checkpointWindowSize = 60_000
+      await h.restart()
+      h.model.next(blob(30_000), say("not reached"))
+      h.input(id, "use the configured title window")
+      await eventually(h, id, "CONTEXT_TURN_STARTED")
+      expect(ofType(h, id, "CONTEXT_TURN_STARTED")[0]).toMatchObject({ trigger: "threshold" })
+    } finally {
+      await h.cleanup()
+    }
+  })
+
+  test("a context turn offers and invokes only its six tools before any clearing", async () => {
+    const invoked: Array<string> = []
+    const dummy = (name: string) => ({
+      namespace: null,
+      name,
+      permission: null,
+      spec: { name, description: `Dummy ${name}.`, parameters: { type: "object" } },
+      run: async () => {
+        invoked.push(name)
+        return { outcome: "success" as const, content: name }
+      },
+    })
+    const tools = [
+      blobTool,
+      dummy("shell_exec_command"),
+      dummy("shell_write_stdin"),
+      dummy("file_read"),
+      dummy("file_patch"),
+      dummy("execute"),
+      dummy("session_message"),
+      dummy("echo"),
+    ]
+    await withContext(
+      async (h) => {
+        const id = h.create({ model: mid.id })
+        await fill(h, id)
+        const before = h.model.calls.length
+        const resultsBefore = ofType(h, id, "TOOL_CALL_RESULT").length
+        h.model.next(
+          blob(5_000),
+          callTools([
+            { name: "session_message", args: {} },
+            { name: "execute", args: {} },
+            { name: "context_ask_question", args: {} },
+            { name: "echo", args: { text: "not offered" } },
+          ]),
+          say("continued"),
+        )
+        h.input(id, "organize this context")
+        await waitFor(
+          "four withheld results",
+          () => (ofType(h, id, "TOOL_CALL_RESULT").length >= resultsBefore + 4 ? true : undefined),
+        )
+        const contextCall = h.model.calls[before + 1]!.call
+        expect(contextCall.tools.map((tool) => tool.name).sort()).toEqual([
+          "context_append",
+          "context_get_open_items",
+          "file_patch",
+          "file_read",
+          "shell_exec_command",
+          "shell_write_stdin",
+        ])
+        expect(ofType(h, id, "TOOL_RESULTS_CLEARED")).toEqual([])
+        expect(invoked).toEqual([])
+        expect(
+          ofType(h, id, "TOOL_CALL_RESULT")
+            .slice(-4)
+            .every((event) => event.outcome === "failed" && event.content.includes("not offered")),
+        ).toBe(true)
+      },
+      { tools },
+    )
+  })
 
   test("a turn at the estimated limit is cleared three times on its cleared tool set, refuses a withheld tool, and hands off", async () => {
     await withContext(async (h, aux) => {
@@ -1016,13 +1145,17 @@ describe("questions", () => {
       ])
       expect(callText(h.model.last())).toContain("[ANSWER #1]\nQuestion: What is it called?\nUserNote: Call it Ashe.")
 
-      // A threshold context turn offers the tool, and refuses its call.
+      // A threshold context turn withholds the tool from its first model call.
       await fill(h, id)
       h.model.next(blob(5_000), ask("refused"), say("in order"), say("continued"))
       h.input(id, "again")
       await h.turnsEnded(id, 5)
       expect(result(h, id, "refused")).toMatchObject({ outcome: "failed" })
-      expect(result(h, id, "refused").content).toBe("`context_ask_question` is not available in a context turn. Finish the context turn first.")
+      expect(result(h, id, "refused").content).toContain("`context_ask_question` is not offered in this request")
+      const contextCall = h.model.calls.find(({ call }) =>
+        call.tools.some((tool) => tool.name === "context_append") && !call.tools.some((tool) => tool.name === "echo"),
+      )
+      expect(contextCall?.call.tools.map((tool) => tool.name).sort()).toEqual(["context_append", "context_get_open_items"])
       expect(ofType(h, id, "QUESTIONS_ASKED")).toHaveLength(1)
     })
   })

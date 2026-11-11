@@ -368,6 +368,14 @@ describe("agents over a real WebSocket", () => {
         const { client } = await login(url)
         expect((await client.request("agents.list")).result).toEqual({
           agents: [
+            {
+              key: "untitled",
+              title: "Untitled",
+              description: null,
+              model: "test/model",
+              reasoningEfforts: {},
+              titleFile: { state: "absent" },
+            },
             { key: "helper", title: "Helper", description: "Helps", model: "test/model", reasoningEfforts: {}, titleFile: { state: "present" } },
             {
               key: "broken",
@@ -383,6 +391,13 @@ describe("agents over a real WebSocket", () => {
         const created = await client.request("session.create", {})
         expect(created.result.session).toMatchObject({
           identity: { agentTitle: "helper", modelId: "test/model" },
+        })
+        const untitled = await client.request("session.create", {
+          selection: { agentTitle: "untitled" },
+        })
+        expect(untitled.result.session).toMatchObject({
+          identity: { agentTitle: "untitled", modelId: "test/model" },
+          selection: { agentTitle: "untitled", modelSettings: { modelId: "test/model", reasoningEffort: null } },
         })
         client.close()
       },

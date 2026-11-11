@@ -403,6 +403,12 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
   if (turn.model === null) throw new TurnFailure("the session has no model selected", "model_unavailable")
   const model = options.models.find((candidate) => candidate.id === turn.model)
   if (model === undefined) throw new TurnFailure(`the model ${turn.model} is not configured`, "model_unavailable")
+  if (turn.reasoningEffort !== null && !model.efforts.includes(turn.reasoningEffort)) {
+    throw new TurnFailure(
+      `the model ${model.id} does not support the reasoning effort ${turn.reasoningEffort}`,
+      "reasoning_effort_unavailable",
+    )
+  }
   const settings = callSettings(model, session.modelOverrides[model.id], turn.reasoningEffort)
   const port = tracedPort(options.port, context)
   let modelCallOrdinal = 1
@@ -606,7 +612,7 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
       if (result.outcome === "declined" && result.endTurn) stopped = true
       events.result(invocationId, call.name, result.content, result.outcome)
     }
-    if (stopped) return { status: "finished" }
+    if (stopped) return { status: "cancelled" }
     // A step boundary after the tool results: eligible input ends this AgentTurn.
     if (context.deliver()) return { status: "finished" }
   }

@@ -1,3 +1,4 @@
+import { UNTITLED_AGENT_TITLE } from "@ashe-agent/protocol"
 import type { Agents, ModelOverrides, Permission } from "../inputs/shapes.ts"
 import { displayTitle, readTitleFile, type FileMetadata, type TitleFile } from "./titles.ts"
 
@@ -43,7 +44,7 @@ export class AgentRegistry {
 
   /** Whether `key` is a configured agent. */
   has(key: string) {
-    return Object.hasOwn(this.agents, key)
+    return key !== UNTITLED_AGENT_TITLE && Object.hasOwn(this.agents, key)
   }
 
   /**
@@ -65,7 +66,7 @@ export class AgentRegistry {
 
   /** Every agent with its display title, its title file's description and state, its starting model, and its effort overrides. */
   list(): ReadonlyArray<AgentListing> {
-    return Object.entries(this.agents).map(([key, entry]) => {
+    return Object.entries(this.agents).filter(([key]) => key !== UNTITLED_AGENT_TITLE).map(([key, entry]) => {
       const file = this.titleFile(key)
       const reasoningEfforts: Record<string, string> = {}
       for (const [model, overrides] of Object.entries(entry.models ?? {})) {

@@ -125,6 +125,73 @@ describe("agents", () => {
     )
   })
 
+  test("title selection applies model and effort defaults, explicit values win, and reselecting reapplies the preset", async () => {
+    const fast = configuredModel("test/fast", {
+      temperatureCapable: true,
+      efforts: ["low", "high"],
+      settings: { temperature: 0.1, reasoningEffort: "low" },
+    })
+    const deep = configuredModel("test/deep", {
+      temperatureCapable: true,
+      efforts: ["low", "medium"],
+      settings: { temperature: 0.6 },
+    })
+    await withConfig(
+      {},
+      async (h) => {
+        const id = h.create({ agent: "planner" })
+        expect(h.hub.summary(id)).toMatchObject({
+          selection: { agentTitle: "planner", modelSettings: { modelId: fast.id, reasoningEffort: "high" } },
+        })
+        h.model.next(say("one"))
+        h.input(id, "one")
+        await h.turnsEnded(id, 1)
+        expect(h.model.last()).toMatchObject({ model: fast.id, temperature: 0.25, reasoning: { effort: "high" } })
+
+        h.model.next(say("two"))
+        h.hub.input(id, "two", "steer", h.sender, {
+          selection: { agentTitle: "planner", modelSettings: { modelId: deep.id } },
+        })
+        await h.turnsEnded(id, 2)
+        expect(h.model.last()).toMatchObject({ model: deep.id, temperature: 0.6, reasoning: { effort: "low" } })
+
+        h.model.next(say("three"))
+        h.hub.input(id, "three", "steer", h.sender, {
+          selection: { modelSettings: { reasoningEffort: null } },
+        })
+        await h.turnsEnded(id, 3)
+        expect(h.model.last().reasoning).toEqual({ summary: "auto" })
+
+        h.model.next(say("four"))
+        h.hub.input(id, "four", "steer", h.sender, {
+          selection: { agentTitle: "planner" },
+        })
+        await h.turnsEnded(id, 4)
+        expect(h.model.last()).toMatchObject({ model: fast.id, reasoning: { effort: "high" } })
+
+        h.model.next(say("five"))
+        h.hub.input(id, "five", "steer", h.sender, {
+          selection: { modelSettings: { modelId: deep.id } },
+        })
+        await h.turnsEnded(id, 5)
+        expect(h.model.last().reasoning).toEqual({ summary: "auto" })
+      },
+      undefined,
+      {
+        agents: {
+          planner: {
+            model: fast.id,
+            models: {
+              [fast.id]: { temperature: 0.25, reasoningEffort: "high" },
+              [deep.id]: { temperature: 0.6, reasoningEffort: "low" },
+            },
+          },
+        },
+        models: [fast, deep],
+      },
+    )
+  })
+
   test("sessions without an agent run as the default agent, else as the implicit agent with the global instructions", async () => {
     await withConfig(
       { "AGENTS.md": "GLOBAL", "titles/writer.md": title("Writes", "WRITER BODY") },

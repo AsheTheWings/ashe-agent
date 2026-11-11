@@ -15,7 +15,7 @@ are optional:
 
 | Field | Meaning |
 | --- | --- |
-| `model` | The `<provider>/<model>` id the agent's sessions start with, in place of the one a request names. |
+| `model` | The `<provider>/<model>` id the agent's sessions start with when a request names no model. |
 | `models` | Overrides of each model's `checkpointWindowSize`, `temperature`, and `reasoningEffort`, keyed by model id. |
 | `permission` | Rules in the [permissions](permissions.md) shape, layered after the global rules. |
 
@@ -35,19 +35,34 @@ are optional:
 A title is 1 to 64 characters of `a-z` and `0-9` words joined by single
 dashes, the rule skill names follow. Clients show an agent by its display
 title, the title's words capitalized and joined by spaces, such as
-`Code Reviewer` for `code-reviewer`.
+`Code Reviewer` for `code-reviewer`. The key `untitled` is reserved for
+the synthetic implicit agent and is refused as a configured agent key or
+default agent.
 
 A session created without an agent runs as `defaultAgent`, which must be
 an agent's title. Without a default agent, it runs as the implicit agent,
 which has no title, no model or overrides of its own, and only the
-global rules. Creating a session records its agent's title, model
-overrides, and permission rules; a fork keeps what its source recorded,
-and changing an agent's entry takes a server restart and reaches only
-sessions created after it.
+global rules. A request that names a model takes precedence over the
+agent's starting model. Selecting a title resolves that title's model
+default, then an explicit model, then applies the title's effort preset
+for the resulting model, and finally an explicit effort. Selecting a
+title again reapplies its preset.
 
-`agents.list` returns each agent with its display title, its title
-file's state and description, its model, and its reasoning effort
-overrides, and the default agent.
+The immutable session selection keeps the applied title, model, and
+effort. A fork starts with its source's applied selection. Temperature,
+checkpoint sizing, and permission policy remain configuration facts:
+each later UserTurn resolves them from the startup-loaded title entry,
+so changing configuration takes a restart and affects the next
+UserTurn. A removed title keeps the session and its selection, admits
+input, and fails that turn explicitly instead of falling back to another
+title.
+
+`agents.list` always includes the synthetic `untitled` title, using the
+configured default model and no named-title policy, followed by each
+configured agent with its display title, title-file state and description,
+model, and reasoning-effort overrides. It also returns the default agent.
+An explicit `untitled` selection creates an implicit-agent session even
+when another default agent is configured.
 
 ## Title files and user instructions
 

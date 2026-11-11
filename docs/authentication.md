@@ -65,6 +65,14 @@ or silence closes it with WebSocket code 1008. An unlisted browser origin
 is refused before upgrading. Every authenticated request checks that its
 principal remains active.
 
+`GET /v1/auth/identity` accepts either credential through
+`Authorization: Bearer`. It returns the authenticated `principal` and
+`credentialExpiresAt`: the access-token expiry, or null for a
+non-expiring API token. The endpoint accepts no token in its URL, returns
+`Cache-Control: no-store`, and applies the configured browser-origin
+policy. Revoked credentials, expired access tokens, and logins issued for
+a different configured owner receive 401.
+
 The database stores AsheAgent tokens only as SHA-256 hashes, with each
 login's GitHub user ID. [Setup](../README.md#use) explains the OAuth app;
 the [input catalog](../schemas/config.schema.json) defines its inputs.
