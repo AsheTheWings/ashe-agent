@@ -29,6 +29,23 @@ expiration, upstream failures, and callback telemetry without real
 credentials. Development web integration checks use real Vite on dynamic
 loopback ports and synthetic configuration.
 
+Process-spawning conversion and worker tests use the integration class. The
+content component tests cover multi-part observation bounds, compatible
+historical media, actual rendered measurement provenance, retention fallback,
+and final file reclamation. Integration coverage proves native retained PDF
+reads without conversion, historical result images and PDF windows, page
+continuation and provenance, projected native/raster/text media estimates,
+provider `input_image` and `input_file` shapes, current and historical result
+media measurement, and final fork reclamation. Semantic integration tests
+cover request-boundary selection through successful, failed, canceled,
+restarted, forked, and rewound history.
+Context-turn component tests match committed calls with the manifests produced
+through clearing and inclusion changes, while context integration repeats that
+selection through real-persistence clearings, forks, and rewinds. Worker
+integration tests prove queued loads wait for an active slot, a deferred load's
+cancellation releases the slot, and an unbounded invocation rejects before
+stdin is read.
+
 `bun run test:test262` fetches tc39/test262 at the revision
 `packages/codemode/test/test262/manifest.json` pins, into a directory of
 its own run, verifies that commit, and runs code mode's test262
@@ -50,7 +67,10 @@ the tests as a build-time constant, not through their environment.
 `bun run bundle` builds, from a worktree without changes, the server as
 one `bun build --compile` executable for linux-x64 and the web client's
 production build (see [web client](web-client.md)), both stamped with the
-commit, and packages them as `bin/ashe-agent` and `web/` into
+commit, and packages them as `bin/ashe-agent`, `web/`, and the content
+worker's `NOTICE-content`, `PDFIUM_LICENSE`, `PDFIUM_THIRD_PARTY_NOTICES`,
+`LICENSE-pngjs`, `LICENSE-pdfium-wrapper`, `NOTICE-shell`, `LICENSE-shell`,
+and `LICENSE-codemode` into
 `dist/ashe-agent-linux-x64.tar`. `bun run test:qualification` qualifies
 that file, or the bundle it is given: it checks that `web/` holds
 `index.html` and a `revision.txt` equal to the revision the binary's
@@ -58,9 +78,19 @@ that file, or the bundle it is given: it checks that `web/` holds
 migrates, creates an API token, authenticates over WebSocket, and exercises a
 steering-created turn boundary, one exclusively assigned permission action, a
 shell timeout followed by model continuation, and a `file_read` of a docx. It
-also runs the documented `sqlite3 -readonly` database queries against the
-binary's migrated state, which needs the official `sqlite3` executable on
-`PATH`.
+runs the bundled conversion worker on a real PDF, checks its PNG output and
+geometry, proves that a direct unbounded launch and a constraining data limit
+fail closed, and continues the server after a malformed attachment. It also
+proves the exact artifact reports wall-deadline, output-cap, and full-queue
+failures, reaps its conversion children, and keeps serving. A separate
+qualification turn uses the built-in session tools through a fake model to
+submit and subscribe to peer work and wake a wait. The bundled notice is
+checked for the PDFium WebAssembly digest, and every PDFium inventory entry
+must map to a bundled license section or its stated exclusion. It also runs
+the documented
+`sqlite3 -readonly` database queries against the binary's migrated state,
+which needs the official `sqlite3` executable on `PATH`. The worker
+qualification needs util-linux `prlimit`.
 
 `bun run release-gate` is the release gate: the fast gate, then the
 bundle built and qualified, then the web image built with

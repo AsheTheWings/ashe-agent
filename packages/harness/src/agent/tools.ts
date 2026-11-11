@@ -55,6 +55,22 @@ export interface ToolRun {
   readonly cwd: string
   /** Whether the turn's model takes images in tool results. */
   readonly imageInput: boolean
+  /** Whether the turn's model takes native PDF files in tool results. */
+  readonly pdfInput?: boolean
+  /** Metadata of a retained attachment referenced by this session, without reading its bytes. */
+  readonly retainedAttachmentInfo?: (attachmentId: string) => {
+    readonly name: string
+    readonly mediaType: string
+    readonly format: string
+  } | null
+  /** The retained original of an attachment referenced by this session. */
+  readonly readRetainedAttachment?: (attachmentId: string) => {
+    readonly name: string
+    readonly mediaType: string
+    readonly format: string
+    readonly prefix: Uint8Array
+    readonly load: () => Uint8Array
+  } | null
   /** Aborted when the turn is canceled or the server stops. */
   readonly signal: AbortSignal
   /** The invocation's absolute deadline on the tool clock; `Infinity` when no limit applies. */
@@ -96,8 +112,32 @@ export interface ToolRun {
  * reject: the turn makes no further model call.
  */
 export type ToolResult =
-  | { readonly outcome: "success" | "failed"; readonly content: ToolContent; readonly timedOut?: boolean }
-  | { readonly outcome: "declined"; readonly content: ToolContent; readonly endTurn: boolean; readonly timedOut?: boolean }
+  | {
+      readonly outcome: "success" | "failed"
+      readonly content: ToolContent
+      readonly timedOut?: boolean
+      /** Text captured before model-facing windowing, when it differs from `content`. */
+      readonly capturedText?: string
+      /** Bytes already omitted by producer collection. */
+      readonly captureLossBytes?: number
+      /** The tool already applied its own model-facing window, including its execution metadata. */
+      readonly alreadyBounded?: boolean
+      /** Full output selected for history-owned retention. */
+      readonly retention?: { readonly text: string; readonly name: string; readonly mediaType: string; readonly captureLossBytes: number }
+      /** The bounded observation to keep if recording the retained file fails. */
+      readonly retentionFallback?: ToolContent
+    }
+  | {
+      readonly outcome: "declined"
+      readonly content: ToolContent
+      readonly endTurn: boolean
+      readonly timedOut?: boolean
+      readonly capturedText?: string
+      readonly captureLossBytes?: number
+      readonly alreadyBounded?: boolean
+      readonly retention?: { readonly text: string; readonly name: string; readonly mediaType: string; readonly captureLossBytes: number }
+      readonly retentionFallback?: ToolContent
+    }
 
 /**
  * A tool the model can call. `run` receives the model's arguments, parsed

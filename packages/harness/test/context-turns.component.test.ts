@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import type { SessionEvent } from "@ashe-agent/protocol"
+import { estimateText, type SessionEvent } from "@ashe-agent/protocol"
 import { AIMessageChunk } from "@langchain/core/messages"
 import { ModelCallError } from "../src/agent/model.ts"
 import type { Component } from "../src/context/components.ts"
@@ -10,7 +10,6 @@ import { AgentHarness, callTools, configuredModel, failWith, gate, hold, message
 import { implicitAgent } from "../src/agents/agents.ts"
 import { InstructionsUnreadable } from "../src/agents/setup.ts"
 import { timelinesOverhead } from "../src/context/checkpoint.ts"
-import { estimateTokens } from "../src/context/constants.ts"
 import { entryRenderer, openItems } from "../src/context/entries.ts"
 import { noAgents } from "../src/sessions/setup.ts"
 import type { SessionSetup } from "../src/sessions/hub.ts"
@@ -705,6 +704,13 @@ describe("the context limit", () => {
       expect(continuation).toContain(`The previous checkpoint window filled up before its context turn finished; \`[HANDOFF #${handoffs[0].entry.number}]\` summarizes it.`)
       expect(continuation).toContain("Task:\n- the handed-off task")
       expect(ofType(h, id, "RUN_STARTED").map((event) => event.cause)).toEqual(["user", "notification", "continuation"])
+      const committed = ofType(h, id, "MODEL_CALL_COMMITTED").map((event) => event.inputBoundaryId)
+      const manifests = h.db
+        .query<{ manifest_id: string }, [string]>("SELECT manifest_id FROM request_manifests WHERE session_id = ?")
+        .all(id)
+        .map((row) => row.manifest_id)
+      expect(committed.every((boundary) => manifests.includes(boundary))).toBe(true)
+      expect(manifests.length).toBeGreaterThan(committed.length)
     })
   })
 
@@ -1253,9 +1259,9 @@ describe("open items", () => {
       const second = runIds(h, id)[2]!
       const entries = h.hub.store.timeline.entries(id)
       const render = entryRenderer(entries)
-      const part = (entry: (typeof entries)[number]) => estimateTokens(`${render(entry)}\n\n`)
+      const part = (entry: (typeof entries)[number]) => estimateText(`${render(entry)}\n\n`)
       const kept = entries.slice(3).reduce((sum, entry) => sum + part(entry), 0)
-      const done = estimateTokens(`${DONE}\n\n`)
+      const done = estimateText(`${DONE}\n\n`)
       const tokens = 60_000 - timelinesOverhead(id, [{ path: "memory/early.md", description: "Early work" }], 1) - kept - done
       const header = `[HANDOFF #${entries.length + 1}]\n`.length
       h.db.transaction(() => {

@@ -178,9 +178,33 @@ const bundle = async () => {
   process.stdout.write("\n== bundle ==\n")
   const staging = join(dist, "bundle")
   cpSync(join(root, "packages/web/dist"), join(staging, "web"), { recursive: true })
+  cpSync(join(root, "packages/harness/src/content/NOTICE"), join(staging, "NOTICE-content"))
+  cpSync(join(root, "packages/harness/src/content/PDFIUM_LICENSE"), join(staging, "PDFIUM_LICENSE"))
+  cpSync(join(root, "packages/harness/src/content/PDFIUM_THIRD_PARTY_NOTICES"), join(staging, "PDFIUM_THIRD_PARTY_NOTICES"))
+  cpSync(join(root, "packages/harness/src/content/LICENSE-pngjs"), join(staging, "LICENSE-pngjs"))
+  cpSync(join(root, "packages/harness/src/content/LICENSE-pdfium-wrapper"), join(staging, "LICENSE-pdfium-wrapper"))
+  cpSync(join(root, "packages/harness/src/tools/shell/NOTICE"), join(staging, "NOTICE-shell"))
+  cpSync(join(root, "packages/harness/src/tools/shell/LICENSE"), join(staging, "LICENSE-shell"))
+  cpSync(join(root, "packages/codemode/LICENSE"), join(staging, "LICENSE-codemode"))
   const committed = git("log", "-1", "--format=%ct")
   const tar = ["tar", "--sort=name", "--owner=0", "--group=0", "--numeric-owner", `--mtime=@${committed}`]
-  return await run([...tar, "-C", staging, "-cf", join(dist, bundleName), "bin", "web"])
+  return await run([
+    ...tar,
+    "-C",
+    staging,
+    "-cf",
+    join(dist, bundleName),
+    "bin",
+    "web",
+    "NOTICE-content",
+    "PDFIUM_LICENSE",
+    "PDFIUM_THIRD_PARTY_NOTICES",
+    "LICENSE-pngjs",
+    "LICENSE-pdfium-wrapper",
+    "NOTICE-shell",
+    "LICENSE-shell",
+    "LICENSE-codemode",
+  ])
 }
 
 /** Qualifies the bundle at the given path, by default the one `bundle` wrote. */

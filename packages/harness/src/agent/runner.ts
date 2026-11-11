@@ -12,11 +12,17 @@ import { IntegrityFailure, TurnFailure } from "./failure.ts"
 import { ModelCallError, type ModelPort } from "./model.ts"
 import { unfinishedResult } from "./notes.ts"
 import { failedResult, invokeTool, type Tool, type ToolResult } from "./tools.ts"
-import { estimateCall, renderWindow, toolContentText, type ToolContent, type ToolOutcome } from "./window.ts"
+import type { ProjectedAttachment } from "../content/media.ts"
+import { observeToolResult, type ContentPolicy } from "../content/retention.ts"
+import { contentDigest, measureCall, renderedMessageEvidence } from "./measurement.ts"
+import { renderWindow, toolContentText, type ToolContent, type ToolContentPart, type ToolOutcome } from "./window.ts"
 
 export interface AgentOptions {
   readonly port: ModelPort
   readonly models: ReadonlyArray<ConfiguredModel>
+  readonly imageTokens?: number
+  readonly pdfTokens?: number
+  readonly contentPolicy?: ContentPolicy
 }
 
 interface Call {
@@ -230,7 +236,14 @@ class TurnEvents {
   }
 
   /** Records the call's result: an item with its event for a committed call, else the event alone. */
-  result(invocationId: string, name: string, content: ToolContent, outcome: ToolOutcome) {
+  result(
+    invocationId: string,
+    name: string,
+    content: ToolContent,
+    outcome: ToolOutcome,
+    retention?: ToolResult["retention"],
+    retentionFallback?: ToolResult["retentionFallback"],
+  ) {
     const call = this.ownedCalls.get(invocationId)
     if (call === undefined || this.closed) return
     call.answered = true
@@ -245,7 +258,13 @@ class TurnEvents {
       outcome,
       invocationId,
     }
-    this.context.commitResult({ callId: id, name, content, outcome }, event, call.modelCallId, invocationId)
+    this.context.commitResult(
+      { callId: id, name, content, outcome, ...(retentionFallback === undefined ? {} : { retentionFallback }) },
+      event,
+      call.modelCallId,
+      invocationId,
+      retention,
+    )
   }
 
   /** Ends open streams and gives each of the turn's calls without a result a failed result of `outcome`. */
@@ -341,7 +360,7 @@ const finalMessage = (chunks: ReadonlyArray<AIMessageChunk>): { message: AIMessa
 }
 
 const retainRendered = (context: TurnContext, text: string, renderer: string) => {
-  const digest = new Bun.CryptoHasher("sha256").update(text).digest("hex")
+  const digest = contentDigest(text)
   context.storeContent(digest, text)
   return {
     representationId: digest,
@@ -421,6 +440,8 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
   const settings = callSettings(model, session.modelOverrides[model.id], turn.reasoningEffort)
   const port = tracedPort(options.port, context)
   let modelCallOrdinal = context.nextModelCallOrdinal
+  const projectedAttachments = new Map<string, ProjectedAttachment>()
+  const projectedResults = new Map<string, ToolContent>()
 
   for (;;) {
     signal.throwIfAborted()
@@ -432,12 +453,95 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
     if (issue !== null) throw new TurnFailure(`the model call was not sent: ${allowanceMessage(issue)}`, "tool_definitions_over_allowance")
 
     const window = context.window()
+    for (const item of window.items) {
+      if (item.kind !== "user" || (item.attachments?.length ?? 0) === 0 || projectedAttachments.has(item.entryId)) continue
+      try {
+        projectedAttachments.set(item.entryId, await context.projectAttachment(
+          item,
+          { text: true, image: model.imageInput, pdf: model.pdfInput },
+          item.runId === turn.runId,
+          signal,
+        ))
+      } catch (error) {
+        throw new TurnFailure(
+          `The current input's attachment could not be represented for ${turn.model}: ${error instanceof Error ? error.message : String(error)}`,
+          "attachment_unsupported",
+        )
+      }
+    }
+    for (const item of window.items) {
+      if (item.kind !== "result" || item.cleared || typeof item.content === "string" || projectedResults.has(item.entryId)) continue
+      if (item.runId !== null && item.model === turn.model && item.agentTitle === turn.agentTitle) continue
+      if (!item.content.some((part) => part.type === "pdf" || part.type === "image")) continue
+      const parts: Array<ToolContentPart> = []
+      for (const part of item.content) {
+        if (part.type === "text") {
+          parts.push(part)
+          continue
+        }
+        if (part.type === "image") {
+          parts.push(
+            model.imageInput
+              ? part
+              : {
+                  type: "text",
+                  text: `[Image ${part.path} is retained but unavailable to ${turn.model}.]`,
+                  ...(part.representation === undefined ? {} : { representation: part.representation }),
+                  ...(part.metadata === undefined ? {} : { metadata: part.metadata }),
+                },
+          )
+          continue
+        }
+        const attachmentId = part.metadata?.attachmentId
+        const projected = await context.projectToolPdf(
+          {
+            filename: part.filename,
+            data: part.data,
+            path: part.path,
+            ...(typeof attachmentId === "string" ? { attachmentId } : {}),
+            ...(part.representation === undefined ? {} : { representation: part.representation }),
+          },
+          { text: true, image: model.imageInput, pdf: model.pdfInput },
+          signal,
+        )
+        for (const projectedPart of projected) {
+          if (projectedPart.type === "text") parts.push(projectedPart)
+          else if (projectedPart.type === "image") {
+            parts.push({
+              ...projectedPart,
+              path: `${part.filename}#page=${String(projectedPart.metadata?.page ?? 1)}`,
+            })
+          } else parts.push({ ...projectedPart, path: part.filename })
+        }
+      }
+      projectedResults.set(item.entryId, parts)
+    }
     const renderedGroups: Array<{ readonly sourceEntryIds: ReadonlyArray<string>; readonly rendered: string }> = []
+    const renderedMessages: Array<{ readonly sourceEntryIds: ReadonlyArray<string>; readonly rendered: string }> = []
     const messages = renderWindow(window.harness, window.items, turn.model, model.imageInput, turn.agentTitle, (sourceEntryIds, rendered) =>
       renderedGroups.push({ sourceEntryIds: [...sourceEntryIds], rendered }),
+      projectedAttachments,
+      model.pdfInput,
+      projectedResults,
+      (sourceEntryIds, rendered) => renderedMessages.push({ sourceEntryIds: [...sourceEntryIds], rendered }),
     )
     // The context limit, checked before each model call: an estimate reaching the checkpoint window size.
-    const estimate = estimateCall(REQUEST_INSTRUCTIONS, messages, specs)
+    const measurement = measureCall(REQUEST_INSTRUCTIONS, messages, specs, {
+      ...(options.imageTokens === undefined ? {} : { imageTokens: options.imageTokens }),
+      ...(options.pdfTokens === undefined ? {} : { pdfTokens: options.pdfTokens }),
+    }, {
+      instruction: contentDigest(REQUEST_INSTRUCTIONS),
+      messages: renderedMessageEvidence({
+        harness: window.harness,
+        messages,
+        rendered: renderedMessages,
+        items: window.items,
+        attachments: projectedAttachments,
+        results: projectedResults,
+      }),
+      tools: specs.map((spec) => contentDigest(JSON.stringify(spec))),
+    })
+    const estimate = measurement.knownSubtotal
     if (estimate >= context.checkpointWindowSize) {
       if ((await context.limitReached(signal)) !== "retry") return { status: "finished" }
       continue
@@ -449,7 +553,7 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
     const chunks: Array<AIMessageChunk> = []
     const modelCallId = crypto.randomUUID()
     const inputBoundaryId = crypto.randomUUID()
-    const instructionDigest = new Bun.CryptoHasher("sha256").update(REQUEST_INSTRUCTIONS).digest("hex")
+    const instructionDigest = contentDigest(REQUEST_INSTRUCTIONS)
     const providerRendered = retainRendered(
       context,
       JSON.stringify({ instructions: REQUEST_INSTRUCTIONS, messages, tools: specs }),
@@ -463,6 +567,7 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
       request: {
         version: 1,
         instructions: REQUEST_INSTRUCTIONS,
+        measurement,
         providerInput: {
           renderer: "ashe-agent/window@1",
           digest: providerRendered.digest,
@@ -485,6 +590,20 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
             },
             transformation: "system-block",
             rendered: retainRendered(context, REQUEST_INSTRUCTIONS, "ashe-agent/instruction@1"),
+          },
+          {
+            position: 500,
+            kind: "message" as const,
+            sourceEntryId: null,
+            representation: {
+              representationId: contentDigest(window.harness),
+              contentId: contentDigest(window.harness),
+              mediaType: "text/plain",
+              digest: contentDigest(window.harness),
+              transformation: "harness-system",
+            },
+            transformation: "harness-system",
+            rendered: retainRendered(context, window.harness, "ashe-agent/system@1"),
           },
           ...renderedGroups.flatMap((group, index) => {
             const groupItems = group.sourceEntryIds.flatMap((entryId) => {
@@ -520,12 +639,10 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
               transformation,
               rendered: retainRendered(context, group.rendered, "ashe-agent/window@1"),
             }
+            let attachmentOffset = 0
             const attachments = groupItems.flatMap((item) =>
               item.kind === "user"
-                ? (item.attachments ?? []).map((attachment, offset) => ({
-                    position: (index + 1) * 1_000 + offset + 1,
-                    kind: "message" as const,
-                    sourceEntryId: item.entryId,
+                ? (projectedAttachments.get(item.entryId)?.contributions ?? (item.attachments ?? []).map((attachment) => ({
                     representation: {
                       representationId: attachment.representationId,
                       contentId: attachment.contentId,
@@ -534,17 +651,54 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
                       transformation: "attachment-original",
                     },
                     transformation: "attachment-original",
+                  }))).map((attachment) => ({
+                    position: (index + 1) * 1_000 + ++attachmentOffset,
+                    kind: "message" as const,
+                    sourceEntryId: item.entryId,
+                    representation: attachment.representation,
+                    transformation: attachment.transformation,
                     rendered: {
-                      representationId: attachment.representationId,
-                      contentId: attachment.contentId,
-                      mediaType: attachment.mediaType,
-                      digest: attachment.digest,
+                      representationId: attachment.representation.representationId,
+                      contentId: attachment.representation.contentId,
+                      mediaType: attachment.representation.mediaType,
+                      digest: attachment.representation.digest,
                       renderer: "ashe-agent/original@1",
                     },
                   }))
                 : [],
             )
-            return [itemContribution, ...attachments]
+            const results = groupItems.flatMap((item) => {
+              if (item.kind !== "result") return []
+              const content = projectedResults.get(item.entryId)
+              if (typeof content === "string" || content === undefined) return []
+              let partOffset = 0
+              return content.flatMap((part) => {
+                const representation = part.representation
+                if (representation === undefined) return []
+                context.storeContent(
+                  representation.contentId,
+                  part.type === "text" ? part.text : Buffer.from(part.data, "base64"),
+                  representation.mediaType,
+                )
+                return [{
+                  position: (index + 1) * 1_000 + ++partOffset,
+                  kind: "message" as const,
+                  sourceEntryId: item.entryId,
+                  representation,
+                  transformation: representation.transformation ?? "model-projection",
+                  rendered: part.type === "text"
+                    ? retainRendered(context, part.text, "ashe-agent/projection@1")
+                    : {
+                        representationId: representation.representationId,
+                        contentId: representation.contentId,
+                        mediaType: representation.mediaType,
+                        digest: representation.digest,
+                        renderer: "ashe-agent/projection@1",
+                      },
+                }]
+              })
+            })
+            return [itemContribution, ...attachments, ...results]
           }),
           ...specs.map((spec, index) => ({
             position: 1_000_000 + index,
@@ -554,6 +708,25 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
             parameters: spec.parameters,
             rendered: retainRendered(context, JSON.stringify(spec), "ashe-agent/tool-definition@1"),
           })),
+          ...renderedMessages.map((message, index) => {
+            const rendered = JSON.stringify(messages[index])
+            const representationId = contentDigest(rendered)
+            return {
+              position: 2_000_000 + index,
+              kind: "message" as const,
+              sourceEntryId: null,
+              sourceEntryIds: message.sourceEntryIds,
+              representation: {
+                representationId,
+                contentId: representationId,
+                mediaType: "application/json",
+                digest: representationId,
+                transformation: "provider-message",
+              },
+              transformation: "provider-message",
+              rendered: retainRendered(context, rendered, "ashe-agent/provider-message@1"),
+            }
+          }),
         ],
       },
       offeredTools: specs,
@@ -633,11 +806,13 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
         events,
         signal,
         model.imageInput,
+        model.pdfInput,
         specs,
+        options.contentPolicy,
       )
       signal.throwIfAborted()
       if (result.outcome === "declined" && result.endTurn) stopped = true
-      events.result(invocationId, call.name, result.content, result.outcome)
+      events.result(invocationId, call.name, result.content, result.outcome, result.retention, result.retentionFallback)
     }
     if (deferredFork !== null) {
       if (stopped || signal.aborted) {
@@ -655,11 +830,20 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
           events,
           signal,
           model.imageInput,
+          model.pdfInput,
           specs,
+          options.contentPolicy,
         )
         // The fork host commits its source receipt with the branch transaction.
         if (!(forkTool?.defer === "fork" && result.outcome === "success")) {
-          events.result(deferredFork.invocationId, deferredFork.call.name, result.content, result.outcome)
+          events.result(
+            deferredFork.invocationId,
+            deferredFork.call.name,
+            result.content,
+            result.outcome,
+            result.retention,
+            result.retentionFallback,
+          )
         }
       }
     }
@@ -680,7 +864,9 @@ const runTool = async (
   events: TurnEvents,
   signal: AbortSignal,
   imageInput: boolean,
+  pdfInput: boolean,
   offered: ReadonlyArray<{ readonly name: string }>,
+  contentPolicy: ContentPolicy | undefined,
 ): Promise<ToolResult> => {
   // A name no offered tool has is the model's text, so it is not recorded.
   const toolName = tool === undefined ? "unknown" : name
@@ -719,6 +905,9 @@ const runTool = async (
           toolCallId: callId,
           cwd: context.session.sessionDir,
           imageInput,
+          pdfInput,
+          retainedAttachmentInfo: context.retainedAttachmentInfo,
+          readRetainedAttachment: context.readRetainedAttachment,
           signal,
           deadline: Number.POSITIVE_INFINITY,
           clock: context.toolPolicy.clock,
@@ -735,6 +924,11 @@ const runTool = async (
           }),
           offered: context.offered,
         }, context.toolPolicy),
+      )
+      result = observeToolResult(
+        result,
+        contentPolicy ?? { collectionBytes: 1024 * 1024, previewLines: 2_000, previewBytes: 50 * 1024 },
+        invocationId ?? callId,
       )
     } catch (error) {
       if (signal.aborted || error instanceof IntegrityFailure) {

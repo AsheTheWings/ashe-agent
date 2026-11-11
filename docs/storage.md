@@ -60,6 +60,12 @@ Owner clients resolve a retained original through `content.get` by session,
 content, and attachment, entry, or manifest reference; a reference from
 another session is not found.
 
+`content_references` binds a history-owned tool result to the full captured
+bytes in the session's `references/` directory. `attachment_representations`
+holds immutable derived PDF text and page images by the original attachment's
+identity, shared by every projection that needs them. [Content](content.md)
+owns when each is written and reused.
+
 A rewind deletes the removed turns' rows, and the foreign keys delete
 every row they own with them, so the conversation is again what the kept
 turns and creation made: a removed context turn's checkpoint window,
@@ -96,6 +102,9 @@ A session's directory, `<state-dir>/sessions/<session-id>/`, holds:
   `<scratch-root>/<session-id>/`, for disposable files. A missing target
   is recreated empty at the next turn start or step boundary, which tells
   the model with a scratch lost component.
+- `references/`: full captured tool output retained by history. Bytes are
+  named by their reference id and removed only when no kept entry owns
+  them; a fork copies the source's referenced bytes.
 - `memory-draft/`: during a context turn, a writable copy of the current
   memory generation, which replaces it when validation passes. A context
   turn that ends early settles it, and a server start settles the draft

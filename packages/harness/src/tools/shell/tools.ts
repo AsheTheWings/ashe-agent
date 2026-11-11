@@ -54,13 +54,20 @@ const WriteArgs = Schema.Struct({
 
 /** A result as Codex lays it out: wall time, exit code or running process, original token count when cut, then output. */
 const render = (collected: Collected, maxTokens: number): ToolResult => {
-  const { text, originalTokens } = truncateToTokens(collected.output.text(), Math.max(0, Math.floor(maxTokens)))
+  const captured = collected.output.text()
+  const { text, originalTokens } = truncateToTokens(captured, Math.max(0, Math.floor(maxTokens)))
   const lines = [`Wall time: ${(collected.wallMs / 1000).toFixed(4)} seconds`]
   if (collected.exitCode !== null) lines.push(`Process exited with code ${collected.exitCode}`)
   if (collected.processId !== null) lines.push(`Process running with process_id ${collected.processId}`)
   if (originalTokens !== null) lines.push(`Original token count: ${originalTokens}`)
   lines.push("Output:", text)
-  return { outcome: "success", content: lines.join("\n") }
+  return {
+    outcome: "success",
+    content: lines.join("\n"),
+    capturedText: captured,
+    captureLossBytes: collected.output.omitted,
+    alreadyBounded: true,
+  }
 }
 
 const stillRunning = (processId: number) =>

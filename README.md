@@ -106,6 +106,8 @@ client's origin, and choose **Continue with GitHub**.
   user instructions, and skills, and where the server reads them.
 - [Tools](docs/tools.md): the built-in tools, their permissions, and what
   they read and write.
+- [Content](docs/content.md): attachment projection, content measurement,
+  retained tool output, and bounded PDF conversion.
 - [Code mode](docs/code-mode.md): the `execute` tool, its catalog, and the
   permissions and limits of programs.
 - [Model context](docs/model-context.md): what each model call carries,

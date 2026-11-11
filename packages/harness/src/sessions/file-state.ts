@@ -165,6 +165,8 @@ export class FileState {
         UNION SELECT offered_tools_ref FROM model_calls WHERE offered_tools_ref IS NOT NULL
         UNION SELECT provider_replay_ref FROM model_calls WHERE provider_replay_ref IS NOT NULL
         UNION SELECT content_sha256 FROM attachments
+        UNION SELECT content_sha256 FROM attachment_representations
+        UNION SELECT content_sha256 FROM content_references
       )`,
     )
   }

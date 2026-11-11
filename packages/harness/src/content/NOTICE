@@ -1,0 +1,58 @@
+The inline PDF conversion worker includes the following third-party software.
+
+@hyzyla/pdfium 3.0.0
+Copyright (c) 2012-2023 Scott Chacon and others
+License: MIT (https://github.com/hyzyla/pdfium/blob/v3.0.0/LICENSE.md)
+
+The package bundles PDFium compiled to WebAssembly from pdfium-lib. The bundled
+PDFium license, including its BSD 3-Clause terms and Apache License 2.0 text, is
+in PDFIUM_LICENSE beside this notice. The complete pinned third-party inventory
+and license texts are in PDFIUM_THIRD_PARTY_NOTICES.
+
+pngjs 7.0.0
+Copyright (c) 2015 Luke Page & Original Contributors
+Copyright (c) 2012 Kuba Niegowski
+License: MIT (https://github.com/pngjs/pngjs/blob/v7.0.0/LICENSE)
+
+Both packages are distributed under the MIT License:
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+Package and asset integrity
+
+bun.lock records the exact registry integrity values:
+
+@hyzyla/pdfium 3.0.0
+sha512-Hw7/Pc/y2f8ZYVNXxAvDiLAV0qJT4+e5HMwbMghra/s2RKXuuWYdR/8ohoD4YwQfTL5UzSNlTtP1LJHip7LiEQ==
+
+dist/pdfium.wasm
+5,298,237 bytes
+SHA-256 beeaf5bbff216d555fecec7cd486072838c4632a2272d31b52ef1fd05008fe7c
+
+pngjs 7.0.0
+sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow==
+
+Dependency advisory review, 2026-11-11
+
+bun audit reports no advisory for @hyzyla/pdfium 3.0.0 or pngjs 7.0.0.
+It reports deepmerge 4.3.1 (low, prototype poisoning) and minimatch 10.2.6
+(moderate, glob amplification). Both are reachable only through the web
+package's development-only shadcn tooling and are absent from the harness
+bundle. This is a point-in-time review; refresh it with bun audit when the
+lockfile changes.

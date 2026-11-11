@@ -7,6 +7,8 @@ import { convertMessagesToResponsesInput } from "@langchain/openai"
 import { PERMISSION_ACTION, QUESTIONS_ACTION, type SessionEvent } from "@ashe-agent/protocol"
 import { Effect, Schema } from "effect"
 import type { ModelCall, ModelPort } from "../../src/agent/model.ts"
+import type { ConversionPort } from "../../src/content/conversion.ts"
+import type { ContentReferences, ContentPolicy } from "../../src/content/retention.ts"
 import { agentRunner } from "../../src/agent/runner.ts"
 import { builtinTool, type Tool, type ToolClock } from "../../src/agent/tools.ts"
 import type { AuxiliaryModels, ModelOverrides, Permission } from "../../src/inputs/shapes.ts"
@@ -278,6 +280,21 @@ export class AgentHarness {
       readonly clientActions?: boolean
       /** Elapsed-time limits for tool invocations. */
       readonly toolPolicy?: import("../../src/agent/tools.ts").ToolExecutionPolicy
+      readonly conversion?: ConversionPort | null
+      readonly contentPolicy?: ContentPolicy
+      readonly contentReferences?: ContentReferences
+      readonly imageTokens?: number
+      readonly pdfTokens?: number
+      readonly contentMediaOptions?: {
+        readonly dpi: number
+        readonly maxLongEdge: number
+        readonly maxPixelsPerPage: number
+        readonly pagesPerWindow: number
+        readonly previewLines?: number
+        readonly previewBytes: number
+        readonly imageTokens?: number
+        readonly pdfTokens?: number
+      }
     } = {},
   ) {
     this.db = openDatabase(join(this.dir, "ashe-agent.db"))
@@ -287,7 +304,13 @@ export class AgentHarness {
 
   private makeHub() {
     const models = this.options.models ?? agentModels
-    const runner = agentRunner({ port: this.options.port ?? this.model, models })
+    const runner = agentRunner({
+      port: this.options.port ?? this.model,
+      models,
+      ...(this.options.imageTokens === undefined ? {} : { imageTokens: this.options.imageTokens }),
+      ...(this.options.pdfTokens === undefined ? {} : { pdfTokens: this.options.pdfTokens }),
+      ...(this.options.contentPolicy === undefined ? {} : { contentPolicy: this.options.contentPolicy }),
+    })
     const tools = this.options.tools ?? testTools()
     const afterLoop = this.options.afterLoop
     const hub: SessionHub = new SessionHub(new SessionStore(this.db, join(this.dir, "sessions")), {
@@ -306,6 +329,9 @@ export class AgentHarness {
       ...(this.options.communicationWaitDefaultMs === undefined ? {} : { communicationWaitDefaultMs: this.options.communicationWaitDefaultMs }),
       ...(this.options.communicationWaitMaxMs === undefined ? {} : { communicationWaitMaxMs: this.options.communicationWaitMaxMs }),
       ...(this.options.sqlite3Path === undefined ? {} : { sqlite3Path: this.options.sqlite3Path }),
+      ...(this.options.conversion === undefined ? {} : { conversion: this.options.conversion }),
+      ...(this.options.contentMediaOptions === undefined ? {} : { contentMediaOptions: this.options.contentMediaOptions }),
+      ...(this.options.contentReferences === undefined ? {} : { contentReferences: this.options.contentReferences }),
       databasePath: join(this.dir, "ashe-agent.db"),
       serverTimeZone: "UTC",
       home: realpathSync(this.dir),
@@ -415,11 +441,11 @@ export class AgentHarness {
   }
 
   /** Waits until the session's turns, counted by their end events, reach `count`. */
-  async turnsEnded(sessionId: string, count: number) {
+  async turnsEnded(sessionId: string, count: number, timeoutMs = 10_000) {
     await waitFor(
       `${count} ended turns`,
       () => (this.types(sessionId).filter((type) => type === "RUN_FINISHED" || type === "RUN_ERROR").length >= count && !this.hub.isRunning(sessionId) ? true : undefined),
-      10_000,
+      timeoutMs,
     )
   }
 

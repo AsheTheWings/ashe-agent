@@ -21,6 +21,12 @@ classes, under a version that changes with any of them.
   with its name and bounded outcome; its duration is a histogram. Action
   arguments and results, question text, answer text, and permission notes
   are not attributes or span events.
+- Content work has spans for upload staging, retained tool output, attachment
+  projection, and each bounded PDF conversion job; conversion duration is a
+  histogram. Outcomes, routes, capture-loss presence, and error classes are
+  bounded attributes. A failed retention also emits a warning log.
+- Session communication spans record the operation and error class for
+  message, fork, subscription, wait, and list calls.
 - Context work has spans of its own: each context turn, a child of its
   turn's span; each tool result clearing, compaction, research, and
   handoff call, validation, and checkpoint window construction; each
@@ -46,9 +52,10 @@ or construction that could not read the user instructions carries
 or the offered tools do not define is recorded as `unknown`. No signal
 carries prompts, model
 output, tool arguments or results, shell commands or output, file
-contents, search queries, URLs, program code, passwords, or tokens, nor
-timeline entries, component text, questions, answers, or feedback; a log
-record's body is its catalog description.
+contents, attachment names or bytes, conversion paths, search queries, URLs,
+program code, passwords, or tokens, nor timeline entries, component text,
+questions, answers, or feedback; a log record's body is its catalog
+description.
 
 Every signal carries `service.namespace` `ashe-agent`, `service.name`
 `ashe-agent-server`, `service.version` set to the build revision, a

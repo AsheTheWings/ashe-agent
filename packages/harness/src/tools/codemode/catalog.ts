@@ -27,8 +27,9 @@
  */
 
 import { searchSignature } from "@ashe-agent/codemode"
+import { estimateText } from "@ashe-agent/protocol"
 import { codeModeCatalogSeed } from "../../context/components.ts"
-import { CHARACTERS_PER_TOKEN, CODE_MODE_CATALOG_ALLOWANCE, estimateTokens } from "../../context/constants.ts"
+import { CODE_MODE_CATALOG_ALLOWANCE } from "../../context/constants.ts"
 
 /** A callable tool of the code mode inventory: its path under `tools`, description, and signature. */
 export interface CatalogTool {
@@ -60,7 +61,7 @@ const DESCRIPTION_LIMIT = 120
 const byCodePoint = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0)
 
 /** A line's estimated tokens, its newline included, rounded up so the listing never exceeds the budget. */
-export const cost = (line: string) => Math.ceil((line.length + 1) / CHARACTERS_PER_TOKEN)
+export const cost = (line: string) => estimateText(`${line}\n`)
 
 /**
  * Keeps every namespace visible, then selects full listings one per
@@ -137,7 +138,7 @@ ${
  * component's allowance leaves after its heading, its introduction, and the
  * catalog's instructions.
  */
-export const CATALOG_BUDGET = CODE_MODE_CATALOG_ALLOWANCE - estimateTokens(codeModeCatalogSeed("-")!.text) - estimateTokens(prompt(true)) - 1
+export const CATALOG_BUDGET = CODE_MODE_CATALOG_ALLOWANCE - estimateText(codeModeCatalogSeed("-")!.text) - estimateText(prompt(true)) - 1
 
 /** The code mode catalog of the code mode catalog component, within the budget; null for an empty inventory. */
 export const renderCatalog = (tools: ReadonlyArray<CatalogTool>, budget = CATALOG_BUDGET): string | null => {

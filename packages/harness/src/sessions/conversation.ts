@@ -7,6 +7,8 @@ import type { ToolContent, ToolOutcome } from "../agent/window.ts"
 import type { Component, SourceName, SourceStates } from "../context/components.ts"
 import type { Reaction } from "./communication.ts"
 
+const contentDigest = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("hex")
+
 export type ItemBody =
   | { readonly kind: "component"; readonly component: Component }
   | {
@@ -433,14 +435,30 @@ export class Conversation {
 
   commitModelCall(sessionId: string, modelCallId: string, message: AIMessage, endedAt: number) {
     const replay = JSON.stringify(mapChatMessagesToStoredMessages([message])[0])
-    const replayRef = new Bun.CryptoHasher("sha256").update(replay).digest("hex")
+    const replayRef = contentDigest(replay)
     this.putContent(replayRef, replay, LEGACY_ASSISTANT_FORMAT)
+    const usage = (message as unknown as {
+      readonly usage_metadata?: {
+        readonly input_tokens?: number
+        readonly output_tokens?: number
+        readonly total_tokens?: number
+      }
+    }).usage_metadata
     this.db
       .query(
-        `UPDATE model_calls SET ended_at = ?, outcome = 'success', provider_replay_ref = ?
+        `UPDATE model_calls SET ended_at = ?, outcome = 'success', provider_replay_ref = ?,
+           provider_input_tokens = ?, provider_output_tokens = ?, provider_total_tokens = ?
           WHERE session_id = ? AND model_call_id = ?`,
       )
-      .run(endedAt, replayRef, sessionId, modelCallId)
+      .run(
+        endedAt,
+        replayRef,
+        usage?.input_tokens ?? null,
+        usage?.output_tokens ?? null,
+        usage?.total_tokens ?? null,
+        sessionId,
+        modelCallId,
+      )
   }
 
   endModelCall(sessionId: string, modelCallId: string, outcome: "failed" | "cancelled" | "interrupted", endedAt: number) {
@@ -671,6 +689,27 @@ export class Conversation {
       contentFormat: JSON_FORMAT,
       representationId: resultRef,
     }
+  }
+
+  /** Replaces a committed tool result's content while the result transaction is still open. */
+  replaceToolResultContent(
+    sessionId: string,
+    entryId: string,
+    result: { readonly callId: string; readonly name: string; readonly content: ToolContent; readonly outcome: ToolOutcome },
+  ) {
+    const contentId = this.putJson({
+      kind: "result",
+      callId: result.callId,
+      name: result.name,
+      content: result.content,
+      outcome: result.outcome,
+    })
+    this.db
+      .query("UPDATE session_entries SET content_sha256 = ? WHERE session_id = ? AND entry_id = ?")
+      .run(contentId, sessionId, entryId)
+    this.db
+      .query("UPDATE agent_tools SET result_ref = ? WHERE session_id = ? AND entry_id = ?")
+      .run(contentId, sessionId, entryId)
   }
 
   markToolStarted(sessionId: string, invocationId: string, startedAt: number) {
@@ -953,5 +992,14 @@ export class Conversation {
           )`,
       )
       .run(target, source, target, target)
+    this.db
+      .query(
+        `INSERT INTO content_references
+          (session_id, entry_id, content_sha256, name, media_type, capture_loss_bytes, created_at)
+          SELECT ?, entry_id, content_sha256, name, media_type, capture_loss_bytes, created_at
+          FROM content_references
+          WHERE session_id = ? AND entry_id IN (SELECT entry_id FROM session_entries WHERE session_id = ?)`,
+      )
+      .run(target, source, target)
   }
 }

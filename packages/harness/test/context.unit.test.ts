@@ -1,13 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { AIMessage } from "@langchain/core/messages"
+import { ESTIMATOR_IMAGE_TOKENS, estimateStructured, estimateText } from "@ashe-agent/protocol"
 import { estimateCall } from "../src/agent/window.ts"
 import { handoffTranscript } from "../src/context/auxiliary.ts"
 import { checkpointComponent, recentTranscript, timelinesOverhead, trimPlan } from "../src/context/checkpoint.ts"
 import { componentIssue } from "../src/context/seed.ts"
 import {
   CHECKPOINT_ALLOWANCE,
-  estimateTokens,
-  IMAGE_TOKENS,
   RECENT_TRANSCRIPT_ALLOWANCE,
   TIMELINES_ALLOWANCE,
   TOOL_DEFINITIONS_ALLOWANCE,
@@ -22,7 +21,7 @@ import {
   type Entry,
 } from "../src/context/entries.ts"
 import { answerEntries, questionProblems } from "../src/context/questions.ts"
-import { boundaryCloses, boundarySize, clearingPlan, itemTokens } from "../src/context/sizes.ts"
+import { boundaryCloses, boundarySize, clearingPlan, itemTokens, projectedItemMedia, resultTokens } from "../src/context/sizes.ts"
 import { toolDefinitionsIssue } from "../src/context/seed.ts"
 import { memoryViolations, researchViolations } from "../src/context/validation.ts"
 import type { AskArgs } from "../src/context/tools.ts"
@@ -246,18 +245,87 @@ describe("secondary timeline validation", () => {
 
 describe("sizes", () => {
   test("the estimate is characters over four rounded up, each image 1,500 tokens, and the call counts tools", () => {
-    expect(estimateTokens("")).toBe(0)
-    expect(estimateTokens("abcd")).toBe(1)
-    expect(estimateTokens("abcde")).toBe(2)
+    expect(estimateText("")).toBe(0)
+    expect(estimateText("abcd")).toBe(1)
+    expect(estimateText("abcde")).toBe(2)
     const image = result("c1", "")
     const picture = { type: "image" as const, path: "a.png", data: "AAAA", mimeType: "image/png" }
     const withImage = { ...image, content: [picture] } as Item
     const twoImages = { ...image, content: [picture, picture] } as Item
     // Each image adds its estimate and its text placeholder's few characters.
-    expect(itemTokens(twoImages) - itemTokens(withImage)).toBeGreaterThanOrEqual(IMAGE_TOKENS)
-    expect(itemTokens(twoImages) - itemTokens(withImage)).toBeLessThan(IMAGE_TOKENS + 10)
+    expect(itemTokens(twoImages) - itemTokens(withImage)).toBeGreaterThanOrEqual(ESTIMATOR_IMAGE_TOKENS)
+    expect(itemTokens(twoImages) - itemTokens(withImage)).toBeLessThan(ESTIMATOR_IMAGE_TOKENS + 10)
     const spec = { name: "t", description: "d".repeat(400), parameters: { type: "object" } }
-    expect(estimateCall("", [], [spec]) - estimateCall("", [], [])).toBe(estimateTokens(JSON.stringify([spec])) - estimateTokens("[]"))
+    expect(estimateCall("", [], [spec]) - estimateCall("", [], [])).toBe(estimateStructured(spec))
+  })
+
+  test("configured media allowances flow through item, boundary, and clearing estimates", () => {
+    const image = { type: "image" as const, path: "a.png", data: "AAAA", mimeType: "image/png" }
+    const withImages = { ...result("c1", ""), content: [image, image] } as Item
+    const resultItem = withImages as Extract<Item, { kind: "result" }>
+    expect(itemTokens(withImages, { imageTokens: 4_000 })).toBeGreaterThanOrEqual(8_000)
+    expect(boundarySize([withImages], () => null, { imageTokens: 4_000 })).toBe(itemTokens(withImages, { imageTokens: 4_000 }))
+    expect(clearingPlan([resultItem], 3, resultTokens(resultItem, { imageTokens: 4_000 }), 0, { imageTokens: 4_000 }).freed)
+      .toBe(resultTokens(resultItem, { imageTokens: 4_000 }))
+    const attachment = item({
+      kind: "user",
+      inputId: "with-image",
+      text: "inspect",
+      sender: { kind: "login", loginId: "u" },
+      attachments: [{
+        attachmentId: "a",
+        contentId: "c",
+        representationId: "r",
+        name: "photo.png",
+        mediaType: "image/png",
+        digest: "d",
+      }],
+    })
+    expect(itemTokens(attachment, { imageTokens: 9_000 })).toBeGreaterThanOrEqual(9_000)
+    expect(boundarySize([attachment], () => null, { imageTokens: 9_000 })).toBeGreaterThanOrEqual(9_000)
+    const pdf = { type: "pdf" as const, path: "a.pdf", mimeType: "application/pdf" as const, filename: "a.pdf", data: "AA==" }
+    const withPdf = { ...result("c2", ""), content: [pdf] } as Item
+    expect(itemTokens(withPdf, { pdfTokens: 7_000 })).toBeGreaterThanOrEqual(7_000)
+    expect(boundarySize([withPdf], () => null, { pdfTokens: 7_000 })).toBeGreaterThanOrEqual(7_000)
+    const pdfResult = withPdf as Extract<Item, { kind: "result" }>
+    expect(clearingPlan([pdfResult], 3, resultTokens(pdfResult, { pdfTokens: 7_000 }), 0, { pdfTokens: 7_000 }).freed)
+      .toBe(resultTokens(pdfResult, { pdfTokens: 7_000 }))
+    const measured = estimateCall("", [new AIMessage({ content: [{ type: "image_url", image_url: { url: "data:x" } }] as never })], [], {
+      imageTokens: 4_000,
+    })
+    expect(measured).toBeGreaterThanOrEqual(4_000)
+  })
+
+  test("projected media counts native, raster-page, and text fallbacks for user and result PDFs", () => {
+    const attachment = item({
+      kind: "user",
+      inputId: "with-pdf",
+      text: "inspect",
+      sender: { kind: "login", loginId: "u" },
+      attachments: [{
+        attachmentId: "a",
+        contentId: "c",
+        representationId: "r",
+        name: "report.pdf",
+        mediaType: "application/pdf",
+        digest: "d",
+      }],
+    })
+    const pdf = { type: "pdf" as const, path: "a.pdf", mimeType: "application/pdf" as const, filename: "a.pdf", data: "AA==" }
+    const resultItem = { ...result("c2", ""), content: [pdf] } as Extract<Item, { kind: "result" }>
+    const options = { imageTokens: 4_000, pdfTokens: 1_000 }
+    const native = (target: Item) => projectedItemMedia(target, { image: false, pdf: true }, 8)
+    const raster = (target: Item) => projectedItemMedia(target, { image: true, pdf: false }, 8)
+    const text = (target: Item) => projectedItemMedia(target, { image: false, pdf: false }, 8)
+    expect(itemTokens(attachment, options, native)).toBeGreaterThanOrEqual(1_000)
+    expect(itemTokens(attachment, options, raster)).toBeGreaterThanOrEqual(32_000)
+    expect(itemTokens(attachment, options, text)).toBeGreaterThanOrEqual(12_800)
+    expect(resultTokens(resultItem, options, native)).toBeGreaterThanOrEqual(1_000)
+    expect(resultTokens(resultItem, options, raster)).toBeGreaterThanOrEqual(32_000)
+    expect(resultTokens(resultItem, options, text)).toBeGreaterThanOrEqual(12_800)
+    expect(boundarySize([attachment], () => null, options, raster)).toBe(itemTokens(attachment, options, raster))
+    expect(clearingPlan([resultItem], 3, resultTokens(resultItem, options, raster), 0, options, raster).freed)
+      .toBe(resultTokens(resultItem, options, raster))
   })
 
   test("tool definitions are refused past 4,000 estimated tokens of names, descriptions, and schemas", () => {
@@ -293,7 +361,7 @@ describe("sizes", () => {
 
   test("clearings free 25%, 50%, then all of the clearable tokens before the first, oldest results first", () => {
     const results = [100, 100, 100, 100].map((tokens, index) => result(`c${index}`, "x".repeat(tokens * 4))) as Array<Extract<Item, { kind: "result" }>>
-    const tokens = results.map((entry) => estimateTokens(entry.content as string))
+    const tokens = results.map((entry) => estimateText(entry.content as string))
     const clearable = tokens.reduce((sum, value) => sum + value, 0)
     const first = clearingPlan(results, 1, clearable, 0)
     expect(first.positions).toEqual([results[0]!.position])
@@ -322,7 +390,7 @@ describe("sizes", () => {
     const items = [...exchange("first"), ...exchange("second")]
     const whole = handoffTranscript(items, 1_000_000)!
     expect(whole).toContain("o".repeat(40_000))
-    const budget = estimateTokens(whole) - 1
+    const budget = estimateText(whole) - 1
     const cut = handoffTranscript(items, budget)!
     expect(cut).toContain("characters cut")
     expect(cut.indexOf("characters cut")).toBeLessThan(cut.indexOf("second"))
@@ -330,7 +398,7 @@ describe("sizes", () => {
     const small = handoffTranscript(items, 2_000)!
     expect(small).toContain("[output left out]")
     expect(small).not.toContain("o".repeat(40_000))
-    const userOnly = handoffTranscript(items, estimateTokens(handoffTranscript([user("first"), user("second")], 1_000_000)!) + 1)!
+    const userOnly = handoffTranscript(items, estimateText(handoffTranscript([user("first"), user("second")], 1_000_000)!) + 1)!
     expect(userOnly).not.toContain("tool_call")
     expect(handoffTranscript(items, 1)).toBeNull()
   })
@@ -350,11 +418,11 @@ describe("sizes", () => {
       const over = [...prefix, entry(number, "compaction", { Text: `${text}c` })]
       expect(trimPlan("s1", over, timelines, entryRenderer(over))).toEqual([number])
       const ask = user("go")
-      const recent = reply("r".repeat((RECENT_TRANSCRIPT_ALLOWANCE - estimateTokens("## Recent Transcript\n\n") - 120) * 4))
+      const recent = reply("r".repeat((RECENT_TRANSCRIPT_ALLOWANCE - estimateText("## Recent Transcript\n\n") - 120) * 4))
       const transcript = recentTranscript([ask, recent])
       expect(transcript).toEqual([recent])
       const component = checkpointComponent({ sessionId: "s1", timelines, entries, render, transcript })
-      expect(estimateTokens(component.text)).toBeLessThanOrEqual(CHECKPOINT_ALLOWANCE)
+      expect(estimateText(component.text)).toBeLessThanOrEqual(CHECKPOINT_ALLOWANCE)
       expect(componentIssue(component)).toBeNull()
       expect(component.text.includes("open items are only in secondary timelines")).toBe(trimmedOpen === 1)
     }

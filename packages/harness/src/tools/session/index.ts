@@ -3,6 +3,7 @@ import { Schema } from "effect"
 import type { SelectionPatch } from "@ashe-agent/protocol"
 import { RetainedAttachmentRef } from "@ashe-agent/protocol"
 import { builtinTool, type Tool, type ToolResult, type ToolRun, type ToolExecutionPolicy } from "../../agent/tools.ts"
+import { endSpan, startSpan, type ErrorClass } from "../../telemetry/signals.ts"
 
 const Empty = Schema.Record(Schema.String, Schema.Never)
 const SessionId = Schema.NonEmptyString
@@ -53,6 +54,24 @@ export interface SessionToolHost {
 const selectionSubjects = (selection: SelectionPatch | undefined) =>
   selection?.agentTitle === undefined ? [] : [selection.agentTitle]
 
+const observed = async (
+  action: "message" | "subscribe" | "unsubscribe" | "fork" | "wait" | "list",
+  call: () => Promise<ToolResult>,
+): Promise<ToolResult> => {
+  const span = startSpan("ashe_agent.communication", { "ashe_agent.communication.action": action })
+  let failure: ErrorClass | undefined
+  try {
+    const result = await call()
+    if (result.outcome === "failed") failure = "internal"
+    return result
+  } catch (error) {
+    failure = "internal"
+    throw error
+  } finally {
+    endSpan(span, {}, failure)
+  }
+}
+
 /** The five direct-only session tools. */
 export const sessionTools = (host: SessionToolHost): ReadonlyArray<Tool> => [
   builtinTool({
@@ -65,7 +84,7 @@ export const sessionTools = (host: SessionToolHost): ReadonlyArray<Tool> => [
       const subjects = [args.sessionId ?? "new", ...selectionSubjects(args.selection)]
       return { check: { permission: "session", subjects, patterns: subjects }, plan: undefined }
     },
-    run: (args, run) => host.message(run, args),
+    run: (args, run) => observed("message", () => host.message(run, args)),
   }),
   builtinTool({
     namespace: "session",
@@ -78,7 +97,7 @@ export const sessionTools = (host: SessionToolHost): ReadonlyArray<Tool> => [
       const subjects = [run.sessionId]
       return { check: { permission: "session", subjects, patterns: subjects }, plan: undefined }
     },
-    run: (_args, run) => host.forkSession(run),
+    run: (_args, run) => observed("fork", () => host.forkSession(run)),
   }),
   builtinTool({
     namespace: "session",
@@ -90,7 +109,7 @@ export const sessionTools = (host: SessionToolHost): ReadonlyArray<Tool> => [
       const subjects = [args.sourceSessionId]
       return { check: { permission: "session", subjects, patterns: subjects }, plan: undefined }
     },
-    run: (args, run) => host.subscription(run, args),
+    run: (args, run) => observed(args.action === "subscribe" ? "subscribe" : "unsubscribe", () => host.subscription(run, args)),
   }),
   builtinTool({
     namespace: "session",
@@ -102,7 +121,7 @@ export const sessionTools = (host: SessionToolHost): ReadonlyArray<Tool> => [
       const subjects = [run.sessionId]
       return { check: { permission: "session", subjects, patterns: subjects }, plan: undefined }
     },
-    run: (args, run) => host.wait(run, args),
+    run: (args, run) => observed("wait", () => host.wait(run, args)),
   }),
   builtinTool({
     namespace: "session",
@@ -114,7 +133,7 @@ export const sessionTools = (host: SessionToolHost): ReadonlyArray<Tool> => [
       const subjects = [run.sessionId]
       return { check: { permission: "session", subjects, patterns: subjects }, plan: undefined }
     },
-    run: (_args, run) => Promise.resolve(host.listSessions(run)),
+    run: (_args, run) => observed("list", () => Promise.resolve(host.listSessions(run))),
   }),
 ]
 
