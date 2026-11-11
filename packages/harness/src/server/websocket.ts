@@ -23,6 +23,7 @@ import {
 import { authenticate, createLogin, principalActive, refresh, type AuthenticateResult } from "../auth/credentials.ts"
 import { GithubSignIn, type GithubSignInConfig } from "../auth/github.ts"
 import { emitLog, endSpan, startSpan, type ErrorClass } from "../telemetry/signals.ts"
+import { harnessIdentity } from "../store/identity.ts"
 
 /** How long a connection may wait before its first message, which must authenticate it. */
 export const AUTH_DEADLINE_MS = 10_000
@@ -328,7 +329,7 @@ export const startWebSocketServer = (options: WebSocketServerOptions): WebSocket
         }
         if (url.pathname === OWNER_IDENTITY_PATH) {
           return json(
-            { principal: auth.principal, credentialExpiresAt: auth.credentialExpiresAt },
+            { principal: auth.principal, credentialExpiresAt: auth.credentialExpiresAt, harnessId: harnessIdentity(options.db) },
             200,
             cors,
           )

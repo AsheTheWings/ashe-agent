@@ -127,6 +127,7 @@ export type Item = UserItem | AssistantItem | NoticeItem | ErrorItem | EntryItem
 /** A user message waiting for a turn, from its `INPUT_WAITING` until its `INPUT_RECEIVED`. */
 export type PendingInput = {
   readonly inputId: string
+  readonly submissionId?: string
   readonly seq: number
   readonly text: string
   readonly mode: InputMode
@@ -413,8 +414,10 @@ const reduce = (view: SessionView, { seq, event }: SessionEvent): SessionView =>
       if (event.cause === "notification") return mark(started, seq, event.runId, { mark: "developer_turn" })
       return started
     }
-    case "RUN_FINISHED":
-      return settled(endRun(view, seq, event.runId, event.outcome.type === "success" ? "finished" : "cancelled", null), event.runId)
+    case "RUN_FINISHED": {
+      const finished = event.outcome.type === "success" ? view : discardRunCalls(view, event.runId)
+      return settled(endRun(finished, seq, event.runId, event.outcome.type === "success" ? "finished" : "cancelled", null), event.runId)
+    }
     case "RUN_ERROR":
       return settled(endRun(discardRunCalls(view, event.runId), seq, event.runId, "failed", event.message), event.runId)
     case "RUN_INTERRUPTED":
@@ -573,6 +576,8 @@ const reduce = (view: SessionView, { seq, event }: SessionEvent): SessionView =>
     case "SESSION_REWOUND":
     case "ACTION_ASSIGNED":
     case "ACTION_SETTLED":
+    case "ACTION_ATTENTION":
+    case "OBSERVATION_CHANGED":
       return view
   }
 }

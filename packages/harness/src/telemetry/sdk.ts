@@ -30,6 +30,8 @@ export interface TelemetryOptions {
   readonly headers: Redacted.Redacted<Record<string, string>>
   readonly serviceVersion: string
   readonly deploymentEnvironment: string
+  /** The service.name attribute; defaults to the harness server. */
+  readonly serviceName?: string
 }
 
 /** How long one export, and the final flush at shutdown, may take. */
@@ -37,9 +39,9 @@ const EXPORT_TIMEOUT_MS = 10_000
 const METRIC_INTERVAL_MS = 60_000
 
 /** The resource attributes every signal carries. */
-export const resourceAttributes = (options: Pick<TelemetryOptions, "serviceVersion" | "deploymentEnvironment">) => ({
+export const resourceAttributes = (options: Pick<TelemetryOptions, "serviceVersion" | "deploymentEnvironment" | "serviceName">) => ({
   "service.namespace": "ashe-agent",
-  "service.name": "ashe-agent-server",
+  "service.name": options.serviceName ?? "ashe-agent-server",
   "service.version": options.serviceVersion,
   "service.instance.id": randomUUID(),
   "deployment.environment.name": options.deploymentEnvironment,

@@ -37,6 +37,13 @@ token. A server that does not support the stated version answers with the
 versions it does support. [Authentication](authentication.md) covers the
 rules for a connection's first message.
 
+`GET /v1/auth/identity` returns the authenticated principal, the
+credential's actual `credentialExpiresAt` (explicitly null for a
+non-expiring API token), and the harness database's durable opaque
+`harnessId`. The web backend validates current credentials through this
+endpoint before shared reads and mutations; it never trusts a URL, a
+session id, or a previously authenticated socket as installation identity.
+
 ## HTTP sign-in endpoints
 
 The same listener answers `GET /v1/auth/github/start` with the client's
@@ -68,9 +75,30 @@ the next section explains, and then sends any of these:
   [session events](#session-events) explains, and `session.unsubscribe`
   stops them.
 - `session.input` sends input: without a mode it is steering delivery, and
-  with mode `queue` it waits for idle. [Session input](sessions.md#input)
-  owns admission and lane priority. `session.cancel` cancels the running
-  turn.
+  with mode `queue` it waits for idle. A caller names the submission with
+  `submissionId`; retrying the same identity and payload returns the
+  accepted input instead of accepting another, while changing the payload
+  is refused. The result carries that receipt. `session.input.receipt`
+  resolves an accepted submission's input id and pending, admitted, or
+  removed disposition, or reports it not observed.
+  [Session input](sessions.md#input) owns admission and lane priority.
+  `session.cancel` names the observed `expectedTurnId`; a matching live turn
+  is cancelled, while a settled or replaced target reports no-longer-current
+  without touching newer execution.
+- `session.observe` returns a revision- and cursor-bound snapshot of ordered
+  typed pending input, its attachment references and requested selection,
+  execution/history eligibility, and validated action-attention facts.
+  Developer pending work is typed, but its full content stays in Session.
+- `session.semantics.page` returns bounded pages of `turns`, typed `entries`,
+  or successful `boundaries`; `revision` and `cursor` must agree, and a stale
+  pair is an explicit conflict. `session.semantics.body` and
+  `session.semantics.boundary` read one omitted body or boundary.
+  `session.modelCalls.usage` returns stored nullable provider counts for at
+  most 100 calls.
+- `session.history.inspect` returns a pending-aware mutation scope and target.
+  `session.rewind` and `session.fork` require its token and a stable
+  `operationId`; `session.history.result` resolves that operation, reports it
+  unresolved, or reports it not observed.
 - `session.resume` starts a continuation on an idle session. It is refused
   while execution or a context workflow is active.
 - Selection changes for an existing session travel with `session.input`
@@ -84,25 +112,49 @@ the next section explains, and then sends any of these:
   its declared `result`. Only the assigned, authenticated connection may
   complete it. Stale, duplicate, cross-session, and unassigned completions
   fail without settling it; an invalid result settles it as failed.
-- `session.fork` copies a settled prefix through the fork point `runId`,
-  or the latest settled point, into an idle session. `session.rewind`
-  removes the rewind point `runId` and every later turn, then reruns its
-  user messages or the given `text`; an optional `selection` applies with
-  that reconstructed input.
+- `session.history.inspect` returns the boundary target and a
+  harness-issued confirmation scope covering the retained-history
+  revision, pending input and current eligibility. `session.fork` copies
+  a settled prefix through the fork point `runId`, or the latest settled
+  point, and `session.rewind` removes the rewind point `runId` and every
+  later turn, then reruns its user messages or the given `text`; both
+  require that scope and a caller-owned `operationId`, and refuse a stale
+  confirmation. `session.history.result` resolves an operation's durable
+  result independently of the transport, reporting an unresolved
+  acknowledgement explicitly.
 - `session.semantics` returns the session's immutable turns, canonical
   semantic entries, and every successful request boundary. A boundary
   carries its ordered contribution representations and transformations,
   offered tool definitions, rendered identities, attribution, and
   measurement, so an owner client can build its own model-input view
   without database access.
+- `session.semantics.page` reads turns, typed entries or successful
+  boundaries in bounded cursor pages under one history revision. A stale
+  revision, a cursor without its revision, or a cursor of another
+  collection fails explicitly. An entry whose retained body exceeds the
+  inline bound carries a body reference; boundary summaries always carry
+  theirs. `session.semantics.body` and `session.semantics.boundary` read
+  the full immutable body. The page result also names the latest
+  successful boundary.
+- `session.modelCalls.usage` returns stored nullable provider input,
+  output and total token counts by `modelCallId`, separately from the
+  manifest measurement. Missing counts stay null and are never estimated.
+- `session.observe` returns a coherent cursor-bound owner snapshot: the
+  ordered pending user and developer input with requested selection patches
+  and attachment references, active execution, continuation, rewind and
+  fork eligibility, context/restore state, selection, latest successful
+  boundary and validated live attention hints. `OBSERVATION_CHANGED` names
+  its canonical revision; any session event is an invalidation, and the
+  snapshot itself creates no model input or agent wakeup.
 - `session.grants.list` returns persisted always-approval rules for a
   session across title scopes, and `session.grants.clear` removes one
   title's rules.
 
 `GET /v1/auth/identity` accepts an access or API credential in an
 `Authorization: Bearer` header. It returns
-`{ principal, credentialExpiresAt }`; an access token reports its actual
-expiry and an API token reports null. Responses use `Cache-Control:
+`{ principal, credentialExpiresAt, harnessId }`; an access token reports its
+actual expiry, an API token reports null, and `harnessId` is the durable
+opaque identity of the retained harness database. Responses use `Cache-Control:
 no-store`, accept no token in the URL, and enforce the configured browser
 origins.
 
@@ -116,6 +168,35 @@ and active-looking MIME types. Browser access follows the configured
 origin policy and is never cached.
 
 [Sessions](sessions.md) explains turns, input, fork, and rewind in full.
+
+## Built-in web-state protocol
+
+The built-in web backend has a second WebSocket path, `/v1/web-state`,
+separate from the harness execution socket. Its version 1 messages are a
+closed shared format in `packages/web/src/shared/web-state.ts`:
+
+- the first message is `web.authenticate` with an access credential and
+  protocol version; credential-bearing URLs are not accepted;
+- `web.command` carries an `organization.set`, `read.set`, `file.manual`,
+  or `undo` command with a caller-owned `operationId`;
+- `web.snapshot` returns a consistent revision and every organization row;
+  `web.update` carries a revision and changed rows; `web.receipt` reports
+  `confirmed`, `rejected`, or `uncertain` for one operation;
+- `web.operation` reconciles a lost acknowledgement without reapplying it.
+
+`organization.set` patches independent fields; same-field changes follow
+server acceptance order, and conditional undo refuses when a later change
+replaced the value. `read.set` marks unread with a generation increment and
+accepts mark-read only under the current generation. `file.manual` requires
+fresh reconciled quiescence. The backend validates the presented access
+credential online for every command and sends a replacement access token
+through another `web.authenticate` on the same socket only for the same
+principal and bound harness.
+
+A revision gap makes the client request a snapshot. Unknown operations
+stay explicit; mutations remain disabled until their receipt is
+reconciled. A different `harnessId` at the same or reconfigured endpoint
+refuses access without rewriting the store's binding.
 
 ## Uploads
 
@@ -131,6 +212,12 @@ to its draft and expires after its configured lifetime or owner quota.
 Passing a finalized retained-attachment reference to `session.input`,
 `session.message`, or rewind claims the original for that input's durable
 ownership before staging expiry can remove it.
+
+A large tool observation can also retain a producer capture beside the
+session. `content.capture` reads one bounded chunk by session, entry and
+content identity; the entry's typed `captures` metadata distinguishes the
+retained capture from the model preview and any capture loss. Raw paths,
+foreign entries and removed entries are not accepted.
 
 ## Client actions
 
@@ -150,6 +237,14 @@ assigned connection when its invocation ends. Unsubscribe and capability
 withdrawal do not invalidate an existing assignment; disconnect does, and
 the server does not reassign it. If no eligible executor exists, the tool
 call gets an unavailable failure immediately.
+
+The assigned connection reports its live action's human-interaction need
+with `action.reportInteraction` and `needsHumanInput`. The broker derives
+the session and AgentTurn from the assignment, accepts only that
+connection's report, and publishes `ACTION_ATTENTION` to owner observers.
+Withdrawal, terminal settlement and disconnect clear the hint. The report
+creates no UserTurn, developer notification, model input, reassignment or
+completion, and observing another connection's hint grants no authority.
 
 [Model context](model-context.md#questions) owns question arguments and
 results; [permissions](permissions.md) owns permission decisions.
@@ -174,6 +269,8 @@ cover what AG-UI does not:
 | `CHECKPOINT_WINDOW_SEEDED` | A checkpoint window's construction, with its number and each seed component's type, heading, and text; `runId` is null for the first window and names the context turn that built a later one. |
 | `INPUT_WAITING` | A message stored as waiting input, with its id, text, mode, and sender: the user or the session whose agent submitted it. |
 | `INPUT_RECEIVED` | A user message entering the conversation, with its sender and mode; a session sender records the source session identity and effective title and model. |
+| `OBSERVATION_CHANGED` | The canonical pending/history/eligibility revision changed; reread `session.observe`. |
+| `ACTION_ATTENTION` | The assigned executor reported or withdrew a live action's human-interaction need, with its action, name and AgentTurn. |
 | `DEVELOPER_MESSAGE` | A developer message delivered into a run, with each component's type, heading, and text. |
 | `SESSION_ERROR` | An error that ends nothing, such as unreadable user instructions, with a code, a message, and the run it arose in. |
 | `TIMELINE_ENTRY` | A timeline entry recorded in a run: its number, kind, fields, and for a `done` entry the entries it resolves. |

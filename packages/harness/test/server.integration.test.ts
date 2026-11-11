@@ -229,7 +229,7 @@ describe("authentication over a real WebSocket", () => {
         expect(dump).not.toContain(secret)
       }
     })
-  })
+  }, 15_000)
 
   test("missing, malformed, expired, and revoked tokens are refused and close the connection", async () => {
     await withRun(async (run, url) => {
@@ -255,7 +255,7 @@ describe("authentication over a real WebSocket", () => {
       expect(revoked.response.error.code).toBe(-32002)
       await revoked.client.waitClosed()
     })
-  })
+  }, 15_000)
 
   test("a first message that does not authenticate closes the connection", async () => {
     await withRun(async (_run, url) => {

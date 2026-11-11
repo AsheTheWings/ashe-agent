@@ -23,6 +23,7 @@ export type ItemBody =
   | {
       readonly kind: "user"
       readonly inputId: string
+      readonly submissionId?: string
       readonly text: string
       readonly sender: MessageSender
       readonly attachments?: ReadonlyArray<RetainedAttachmentRef>
@@ -64,6 +65,7 @@ export type WaitingEntry =
       readonly position: number
       readonly kind: "user"
       readonly inputId: string
+      readonly submissionId?: string
       readonly text: string
       readonly mode: InputMode
       readonly sender: MessageSender
@@ -234,6 +236,7 @@ const representationKind = (
 const semanticEntryFromRow = (row: SemanticRow): SemanticEntry | null => {
   const base = {
     id: row.entry_id,
+    contentId: row.content_sha256,
     position: row.position,
     turnId: row.owner_turn_id,
     authorship: {
@@ -364,6 +367,7 @@ const semanticEntryFromRow = (row: SemanticRow): SemanticEntry | null => {
             content: resultParts,
             structured: null,
           },
+      captures: [],
     }
     return { ...base, kind: "agent-tool", tool }
   }
@@ -622,6 +626,30 @@ export class Conversation {
     ) + 1
   }
 
+  /**
+   * The canonical retained-history revision: turn and entry identities with
+   * their positions plus every successful request boundary. Provisional
+   * stream chunks do not change it.
+   */
+  historyRevision(sessionId: string): string {
+    const turns = this.db
+      .query<{ run_id: string; position: number; status: string; user_message_ids: string }, [string]>(
+        "SELECT run_id, position, status, user_message_ids FROM turns WHERE session_id = ? ORDER BY position",
+      )
+      .all(sessionId)
+    const entries = this.db
+      .query<{ entry_id: string; position: number }, [string]>(
+        "SELECT entry_id, position FROM session_entries WHERE session_id = ? ORDER BY position",
+      )
+      .all(sessionId)
+    const boundaries = this.db
+      .query<{ manifest_id: string }, [string]>(
+        "SELECT manifest_id FROM request_manifests WHERE session_id = ? ORDER BY manifest_id",
+      )
+      .all(sessionId)
+    return contentDigest(JSON.stringify({ turns, entries, boundaries }))
+  }
+
   commitModelCall(sessionId: string, modelCallId: string, message: AIMessage, endedAt: number) {
     const replay = JSON.stringify(mapChatMessagesToStoredMessages([message])[0])
     const replayRef = contentDigest(replay)
@@ -673,6 +701,20 @@ export class Conversation {
     return this.successfulManifests(sessionId).at(-1) ?? null
   }
 
+  /** The latest successful request boundary's manifest identity. */
+  latestBoundaryId(sessionId: string): string | null {
+    return (
+      this.db
+        .query<{ manifest_id: string }, [string]>(
+          `SELECT r.manifest_id FROM model_calls m
+            JOIN request_manifests r ON r.session_id = m.session_id AND r.model_call_id = m.model_call_id
+            WHERE m.session_id = ? AND m.outcome = 'success'
+            ORDER BY m.started_at DESC, m.rowid DESC LIMIT 1`,
+        )
+        .get(sessionId)?.manifest_id ?? null
+    )
+  }
+
   /** Canonical entries in retained order, with calls and results correlated by invocation identity. */
   semanticEntries(sessionId: string): ReadonlyArray<SemanticEntry> {
     return this.db
@@ -691,10 +733,96 @@ export class Conversation {
          WHERE e.session_id = ? ORDER BY e.position`,
       )
       .all(sessionId)
-      .flatMap((row) => {
+      .flatMap((row): Array<SemanticEntry> => {
         const entry = semanticEntryFromRow(row)
-        return entry === null ? [] : [entry]
+        if (entry === null) return []
+        if (entry.kind !== "agent-tool") return [entry]
+        return [{ ...entry, tool: { ...entry.tool, captures: this.captureReferences(sessionId, entry.id) } }]
       })
+  }
+
+  /** One typed entry by identity, or null when this session does not own it. */
+  semanticEntry(sessionId: string, entryId: string): SemanticEntry | null {
+    return this.semanticEntries(sessionId).find((entry) => entry.id === entryId) ?? null
+  }
+
+  /** One successful boundary by manifest identity, or null when this session does not own it. */
+  semanticBoundary(sessionId: string, manifestId: string): ModelInputManifest | null {
+    return this.semanticBoundaries(sessionId).find((boundary) => boundary.id === manifestId) ?? null
+  }
+
+  /** The retained body identity and size of one request manifest. */
+  boundaryBodyRef(sessionId: string, manifestId: string): { readonly contentId: string; readonly byteLength: number } | null {
+    const row = this.db
+      .query<{ body_ref: string; byte_length: number }, [string, string]>(
+        `SELECT r.body_ref, length(c.data) AS byte_length FROM request_manifests r
+          JOIN contents c ON c.sha256 = r.body_ref
+          WHERE r.session_id = ? AND r.manifest_id = ?`,
+      )
+      .get(sessionId, manifestId)
+    return row === null ? null : { contentId: row.body_ref, byteLength: row.byte_length }
+  }
+
+  /** Retained producer captures owned by one tool entry. */
+  captureReferences(sessionId: string, entryId: string): ReadonlyArray<{
+    readonly contentId: string
+    readonly name: string
+    readonly mediaType: string
+    readonly byteLength: number
+    readonly captureLossBytes: number
+  }> {
+    return this.db
+      .query<{
+        content_sha256: string
+        name: string
+        media_type: string
+        byte_length: number
+        capture_loss_bytes: number
+      }, [string, string]>(
+        `SELECT r.content_sha256, r.name, r.media_type, length(c.data) AS byte_length, r.capture_loss_bytes
+          FROM content_references r JOIN contents c ON c.sha256 = r.content_sha256
+          WHERE r.session_id = ? AND r.entry_id = ? ORDER BY r.created_at, r.name`,
+      )
+      .all(sessionId, entryId)
+      .map((row) => ({
+        contentId: row.content_sha256,
+        name: row.name,
+        mediaType: row.media_type,
+        byteLength: row.byte_length,
+        captureLossBytes: row.capture_loss_bytes,
+      }))
+  }
+
+  /** Stored nullable provider usage for the requested model calls owned by this session. */
+  providerUsage(sessionId: string, modelCallIds: ReadonlyArray<string>): ReadonlyArray<{
+    readonly modelCallId: string
+    readonly providerUsage: {
+      readonly inputTokens: number | null
+      readonly outputTokens: number | null
+      readonly totalTokens: number | null
+    }
+  }> {
+    const ids = JSON.stringify(modelCallIds)
+    return this.db
+      .query<{
+        model_call_id: string
+        provider_input_tokens: number | null
+        provider_output_tokens: number | null
+        provider_total_tokens: number | null
+      }, [string, string]>(
+        `SELECT model_call_id, provider_input_tokens, provider_output_tokens, provider_total_tokens
+          FROM model_calls WHERE session_id = ? AND model_call_id IN (SELECT value FROM json_each(?))
+          ORDER BY started_at, rowid`,
+      )
+      .all(sessionId, ids)
+      .map((row) => ({
+        modelCallId: row.model_call_id,
+        providerUsage: {
+          inputTokens: row.provider_input_tokens,
+          outputTokens: row.provider_output_tokens,
+          totalTokens: row.provider_total_tokens,
+        },
+      }))
   }
 
   /** Successful request boundaries with their ordered contributions and attribution. */
@@ -1422,9 +1550,11 @@ export class Conversation {
       .query(
         `INSERT INTO model_calls
           (session_id, model_call_id, turn_id, ordinal, window_position, input_manifest_ref,
-           offered_tools_ref, started_at, ended_at, outcome, provider_replay_ref)
+           offered_tools_ref, started_at, ended_at, outcome, provider_replay_ref,
+           provider_input_tokens, provider_output_tokens, provider_total_tokens)
           SELECT ?, model_call_id, turn_id, ordinal, window_position, input_manifest_ref,
-            offered_tools_ref, started_at, ended_at, outcome, provider_replay_ref
+            offered_tools_ref, started_at, ended_at, outcome, provider_replay_ref,
+            provider_input_tokens, provider_output_tokens, provider_total_tokens
           FROM model_calls WHERE session_id = ? AND turn_id IN (SELECT value FROM json_each(?))`,
       )
       .run(target, source, kept)

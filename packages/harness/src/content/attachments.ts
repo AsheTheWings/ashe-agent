@@ -86,6 +86,7 @@ export class AttachmentStore {
       createdAt: row.created_at,
       expiresAt: row.expires_at,
       claimed: row.attachment_id !== null && this.claimCount(row.attachment_id) > 0,
+      ...(row.attachment_id === null ? {} : { attachmentId: row.attachment_id, contentId: row.digest! }),
     }
   }
 

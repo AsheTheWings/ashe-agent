@@ -37,8 +37,13 @@ export const browserPorts = (serverUrl: string): SessionClientPorts => ({
     navigate: (url) => window.location.assign(url),
     randomBytes: () => window.crypto.getRandomValues(new Uint8Array(32)),
   },
-  // Web Locks exist only in secure contexts; elsewhere the task runs unlocked.
-  withLock: (name, task) => ("locks" in navigator ? navigator.locks.request(name, task) : task()),
+  // An unlocked refresh could replay a rotated token and invalidate the login.
+  withLock: (name, task) => {
+    if (!("locks" in navigator)) return Promise.reject(new Error("Web Locks are unavailable; sign in again in a secure context"))
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => controller.abort(), 15_000)
+    return navigator.locks.request(name, { mode: "exclusive", signal: controller.signal }, task).finally(() => window.clearTimeout(timer))
+  },
   now: () => Date.now(),
   setTimer: (callback, delayMs) => window.setTimeout(callback, delayMs),
   clearTimer: (timer) => {

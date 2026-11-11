@@ -1,5 +1,5 @@
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { basename, join } from "node:path"
 import type { Database } from "bun:sqlite"
 import type { ToolResult } from "../agent/tools.ts"
 import type { ToolContent, ToolContentPart } from "../agent/window.ts"
@@ -234,6 +234,43 @@ export class ContentReferences {
 
   private directory(sessionId: string) {
     return join(this.sessionsDir, sessionId, "references")
+  }
+
+  /** One bounded chunk of an entry-owned retained capture, or null when no such capture exists. */
+  read(sessionId: string, entryId: string, contentId: string, offset: number, length: number) {
+    const row = this.db
+      .query<{
+        name: string
+        media_type: string
+        capture_loss_bytes: number
+        content_sha256: string
+      }, [string, string, string]>(
+        `SELECT name, media_type, capture_loss_bytes, content_sha256 FROM content_references
+          WHERE session_id = ? AND entry_id = ? AND content_sha256 = ?`,
+      )
+      .get(sessionId, entryId, contentId)
+    if (row === null) return null
+    if (basename(row.name) !== row.name || row.name === "" || row.name === "." || row.name === "..") return null
+    const path = join(this.directory(sessionId), row.name)
+    let byteLength: number
+    try {
+      byteLength = statSync(path).size
+    } catch {
+      return null
+    }
+    if (offset > byteLength) return null
+    const bytes = readFileSync(path)
+    return {
+      sessionId,
+      entryId,
+      contentId,
+      name: row.name,
+      mediaType: row.media_type,
+      byteLength,
+      captureLossBytes: row.capture_loss_bytes,
+      offset,
+      bytes: bytes.subarray(offset, Math.min(byteLength, offset + length)),
+    }
   }
 
   /** Writes the retained bytes and records their owning entry in one caller transaction. */

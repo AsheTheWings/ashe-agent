@@ -127,6 +127,9 @@ describe("semantic history migrations", () => {
         "0031_subscription_operation_ownership.sql",
         "0032_content_pipeline.sql",
         "0033_model_provider_usage.sql",
+        "0034_input_receipts.sql",
+        "0035_history_operations.sql",
+        "0036_harness_identity.sql",
       ])
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([])
       const store = new SessionStore(db, runDir)
@@ -200,6 +203,9 @@ describe("semantic history migrations", () => {
         "0031_subscription_operation_ownership.sql",
         "0032_content_pipeline.sql",
         "0033_model_provider_usage.sql",
+        "0034_input_receipts.sql",
+        "0035_history_operations.sql",
+        "0036_harness_identity.sql",
       ])
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([])
       const columns = db.query<{ name: string }, []>("PRAGMA table_info(agent_tools)").all().map((column) => column.name)
@@ -347,7 +353,7 @@ describe("retained attachments and uploads", () => {
             digest,
           },
         ],
-      })
+      }).inputId
       expect(h.hub.store.conversation.waiting(id).find((entry) => entry.inputId === inputId)).toMatchObject({ kind: "user" })
       expect(
         h.db.query<{ n: number }, [string]>("SELECT count(*) AS n FROM attachment_references WHERE reference_id = ?").get(inputId),

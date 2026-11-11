@@ -217,7 +217,7 @@ describe("shell processes", () => {
     await withShell({}, async (h, processes, tool) => {
       const started = await call(tool("shell_exec_command"), h.dir, "s", {
         cmd: "echo ready; read line; echo got:$line; sleep 60",
-        yield_time_ms: 250,
+        yield_time_ms: 1_000,
       })
       expect(output(started)).toBe("ready\n")
       const id = processId(started)

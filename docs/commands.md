@@ -18,6 +18,14 @@ with status 1.
 | `token revoke <name>` | Revokes an API token and closes its connections. |
 | `--version` | Prints `AsheAgent` and the revision the command was built from. |
 
+`ashe-agent-web` is the built-in backend's separate command. It has
+`serve`, `migrate`, `migrate status`, `db dump <path>`, and `--version`
+with the same exit and validation rules. `serve` starts its observer and
+HTTP/WebSocket listener only after every web migration is current; it
+never synchronizes the schema. `migrate status` opens the web database
+read-only and writes nothing. See [web client](web-client.md) and
+[storage](storage.md#built-in-web-state).
+
 `serve`, `db dump`, and the `token` commands refuse
 to run until `migrate` has applied every migration, and `serve` also
 refuses a ledger that drifted from the migrations it carries. See

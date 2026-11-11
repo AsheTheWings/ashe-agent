@@ -128,3 +128,10 @@ starts with its source's grants. Grants are stored in the
 Each grant is scoped by session and title. Switching to another title uses
 that title's grants, and switching back restores the first title's grants.
 Starting with stricter configuration does not revoke persisted grants.
+
+The built-in web client's Session details surface defaults to the current
+title, lets the owner choose another persisted title scope, lists that
+scope's grants, and clears all of them only after confirmation. It does
+not edit the configured rules or offer individual-grant revocation. The
+current connection's assigned approval action remains the only way to
+answer a live permission request.

@@ -11,12 +11,23 @@ import {
   QuestionsActionArgs,
   PROTOCOL_VERSION,
   type Agent,
+  type ApprovalGrant,
   type InputMode,
+  type InputReceipt,
+  type SessionObservation,
+  type SemanticEntry,
+  type SemanticPageEntry,
+  type Turn,
+  type BoundarySummary,
+  type ModelInputManifest,
+  type ModelCallUsage,
+  type HistoryOperationResult,
   type MethodName,
   type Model,
   type ParamsOf,
   type PermissionAnswer,
   type ResultOf,
+  type RetainedAttachmentRef,
   type SelectionPatch,
   type Sender,
   type SessionEvent,
@@ -44,6 +55,19 @@ export type ClientState = {
   /** Selection changes this client will submit with the next input or rewind. */
   readonly requestedSelections: Readonly<Record<string, SelectionPatch>>
   readonly views: Readonly<Record<string, SessionView>>
+  readonly observations: Readonly<Record<string, SessionObservation>>
+  readonly semantic: Readonly<
+    Record<
+      string,
+      {
+        readonly revision: string
+        readonly turns: ReadonlyArray<Turn>
+        readonly entries: ReadonlyArray<SemanticPageEntry>
+        readonly boundaries: ReadonlyArray<BoundarySummary>
+        readonly latestSuccessfulBoundaryId: string | null
+      }
+    >
+  >
   /** Question set and permission request ids whose live action this connection owns. */
   readonly owned: { readonly questions: ReadonlyArray<string>; readonly permissions: ReadonlyArray<string> }
 }
@@ -73,6 +97,8 @@ type PendingAction = {
 }
 
 const base64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+const base64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes))
+const hex = (bytes: Uint8Array) => [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")
 
 type AccessToken = { readonly token: string; readonly expiresAt: number }
 
@@ -119,6 +145,7 @@ export class SessionClient {
   private reconnectDelay = RECONNECT_FIRST_DELAY_MS
   /** Live actions assigned to this connection, keyed by their session, name, and subject. */
   private readonly pendingActions = new Map<string, PendingAction>()
+  private readonly unreconciledQuestions = new Map<string, PendingAction>()
   /** Bumped on sign-in and sign-out, so work of an earlier connection ends quietly. */
   private generation = 0
 
@@ -135,6 +162,8 @@ export class SessionClient {
       activeSessionId: null,
       requestedSelections: {},
       views: {},
+      observations: {},
+      semantic: {},
       owned: { questions: [], permissions: [] },
     }))
   }
@@ -215,6 +244,8 @@ export class SessionClient {
       principal: null,
       activeSessionId: null,
       views: {},
+      observations: {},
+      semantic: {},
       sessions: [],
       requestedSelections: {},
       owned: { questions: [], permissions: [] },
@@ -347,6 +378,10 @@ export class SessionClient {
         this.set({ error: "the session expired; sign in again" })
         return
       }
+      if (error instanceof Error && (error.message.includes("Web Locks") || error.name === "AbortError" || error.name === "SecurityError")) {
+        this.set({ error: "secure browser coordination is unavailable; sign in again in a secure context" })
+        return
+      }
       this.scheduleRefresh(REFRESH_RETRY_DELAY_MS)
     } finally {
       if (this.side === side) this.side = null
@@ -390,6 +425,10 @@ export class SessionClient {
     const params = view === undefined || view.lastSeq === 0 ? { sessionId } : { sessionId, afterSeq: view.lastSeq }
     const { session } = await connection.request("session.subscribe", params)
     this.upsert(session)
+    setTimeout(() => {
+      void this.observe(sessionId).catch(() => {})
+      void this.reloadSemantic(sessionId).catch(() => {})
+    }, 0)
   }
 
   private upsert(session: SessionSummary) {
@@ -402,6 +441,14 @@ export class SessionClient {
     const view = views[event.sessionId] ?? emptyView(event.sessionId)
     const next = applyEvent(view, event)
     if (next !== view) this.set({ views: { ...views, [event.sessionId]: next } })
+    if (
+      ["OBSERVATION_CHANGED", "INPUT_WAITING", "INPUT_RECEIVED", "SELECTION_CHANGED", "SESSION_REWOUND", "RUN_STARTED", "RUN_FINISHED", "ACTION_ATTENTION", "ACTION_SETTLED"].includes(event.event.type)
+    ) {
+      void this.observe(event.sessionId).catch(() => {})
+    }
+    if (["SESSION_REWOUND", "MODEL_CALL_COMMITTED", "RUN_FINISHED", "RUN_ERROR"].includes(event.event.type)) {
+      void this.reloadSemantic(event.sessionId).catch(() => {})
+    }
   }
 
   /** Records a declared action so the UI's answer can complete this exact assignment. */
@@ -513,11 +560,12 @@ export class SessionClient {
       (action) => action.sessionId === sessionId && action.name === QUESTIONS_ACTION,
     )
     const selection = this.state.requestedSelections[sessionId]
-    await this.call("session.input", {
+    const result = await this.call("session.input", {
       sessionId,
       text,
       ...(mode === undefined ? {} : { mode }),
       ...(selection === undefined ? {} : { selection }),
+      submissionId: crypto.randomUUID(),
     })
     if (selection !== undefined && this.state.requestedSelections[sessionId] === selection) {
       const requestedSelections = { ...this.state.requestedSelections }
@@ -527,10 +575,44 @@ export class SessionClient {
     if (question !== undefined && mode !== "queue") {
       await this.completeAction(question, { kind: "repliedByMessage" }).catch(() => {})
     }
+    return result
   }
 
-  async cancel() {
-    await this.call("session.cancel", { sessionId: this.activeId() })
+  /** Submits one immutable snapshot with a caller-owned identity. */
+  async submit(
+    sessionId: string,
+    input: {
+      readonly text: string
+      readonly mode: InputMode
+      readonly submissionId: string
+      readonly attachments?: ReadonlyArray<RetainedAttachmentRef>
+      readonly selection?: SelectionPatch
+    },
+  ): Promise<InputReceipt> {
+    const question = [...this.pendingActions.values()].find(
+      (action) => action.sessionId === sessionId && action.name === QUESTIONS_ACTION,
+    )
+    if (question !== undefined && input.mode !== "queue") this.unreconciledQuestions.set(input.submissionId, question)
+    const result = await this.call("session.input", {
+      sessionId,
+      text: input.text,
+      mode: input.mode,
+      submissionId: input.submissionId,
+      ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
+      ...(input.selection === undefined ? {} : { selection: input.selection }),
+    })
+    if (question !== undefined && input.mode !== "queue") {
+      await this.completeAction(question, { kind: "repliedByMessage" }).catch(() => {})
+      this.unreconciledQuestions.delete(input.submissionId)
+    }
+    return result.receipt
+  }
+
+  async cancel(expected?: string) {
+    const sessionId = this.activeId()
+    const expectedTurnId = expected ?? this.state.views[sessionId]?.runId
+    if (expectedTurnId === null || expectedTurnId === undefined) return
+    return this.call("session.cancel", { sessionId, expectedTurnId })
   }
 
   /** Resumes the open session with continuation content; the server refuses while it is active. */
@@ -587,17 +669,196 @@ export class SessionClient {
     await this.completeAction(action, trimmed === "" ? { answer } : { answer, message: trimmed })
   }
 
+  /** The current access credential, for the separately authenticated web-state socket. */
+  accessToken(): { readonly token: string; readonly expiresAt: number } | null {
+    return this.access
+  }
+
+  /** Renews the access credential on a side connection without replacing the direct harness socket. */
+  async renewAccessToken(): Promise<void> {
+    if (this.state.status !== "connected" || this.connection === null) return
+    const generation = this.generation
+    const side = new Connection(this.state.serverUrl, this.ports, {
+      onEvent: () => {},
+      onActionExecute: () => {},
+      onActionCancel: () => {},
+      onClose: () => {},
+    })
+    this.side = side
+    try {
+      await this.refreshOn(side, generation)
+    } finally {
+      if (this.side === side) this.side = null
+      side.close()
+    }
+  }
+
+  /** A coherent owner observation for one session, cached for the UI. */
+  async observe(sessionId: string): Promise<SessionObservation> {
+    const observation = await this.call("session.observe", { sessionId })
+    this.set({ observations: { ...this.state.observations, [sessionId]: observation } })
+    return observation
+  }
+
+  /** Reads every bounded page of a session's semantic history under one revision. */
+  async reloadSemantic(sessionId: string): Promise<void> {
+    if (this.connection === null || this.state.status !== "connected") return
+    const firstEntries = await this.call("session.semantics.page", { sessionId, object: "entries", limit: 200 })
+    if (firstEntries.object !== "entries") throw new Error("the harness returned the wrong semantic page")
+    const revision = firstEntries.revision
+    const entries = [...firstEntries.items]
+    let cursor = firstEntries.nextCursor
+    while (cursor !== null) {
+      const page = await this.call("session.semantics.page", { sessionId, object: "entries", revision, cursor, limit: 200 })
+      if (page.object !== "entries" || page.revision !== revision) throw new Error("the semantic page revision changed")
+      entries.push(...page.items)
+      cursor = page.nextCursor
+    }
+    const turnsFirst = await this.call("session.semantics.page", { sessionId, object: "turns", revision, limit: 200 })
+    if (turnsFirst.object !== "turns") throw new Error("the harness returned the wrong turn page")
+    const turns = [...turnsFirst.items]
+    cursor = turnsFirst.nextCursor
+    while (cursor !== null) {
+      const page = await this.call("session.semantics.page", { sessionId, object: "turns", revision, cursor, limit: 200 })
+      if (page.object !== "turns") throw new Error("the harness returned the wrong turn page")
+      turns.push(...page.items)
+      cursor = page.nextCursor
+    }
+    const boundariesFirst = await this.call("session.semantics.page", { sessionId, object: "boundaries", revision, limit: 200 })
+    if (boundariesFirst.object !== "boundaries") throw new Error("the harness returned the wrong boundary page")
+    const boundaries = [...boundariesFirst.items]
+    cursor = boundariesFirst.nextCursor
+    while (cursor !== null) {
+      const page = await this.call("session.semantics.page", { sessionId, object: "boundaries", revision, cursor, limit: 200 })
+      if (page.object !== "boundaries") throw new Error("the harness returned the wrong boundary page")
+      boundaries.push(...page.items)
+      cursor = page.nextCursor
+    }
+    this.set({
+      semantic: {
+        ...this.state.semantic,
+        [sessionId]: {
+          revision,
+          turns,
+          entries,
+          boundaries,
+          latestSuccessfulBoundaryId: firstEntries.latestSuccessfulBoundaryId,
+        },
+      },
+    })
+  }
+
+  async semanticBody(sessionId: string, entryId: string, contentId: string): Promise<SemanticEntry> {
+    return (await this.call("session.semantics.body", { sessionId, entryId, contentId })).entry
+  }
+
+  async semanticBoundary(sessionId: string, manifestId: string): Promise<ModelInputManifest> {
+    return (await this.call("session.semantics.boundary", { sessionId, manifestId })).boundary
+  }
+
+  async modelUsage(sessionId: string, modelCallIds: ReadonlyArray<string>): Promise<ReadonlyArray<ModelCallUsage>> {
+    return (await this.call("session.modelCalls.usage", { sessionId, modelCallIds: [...modelCallIds] })).usage
+  }
+
+  async capture(sessionId: string, entryId: string, contentId: string, offset: number, length: number) {
+    return (await this.call("content.capture", { sessionId, entryId, contentId, offset, length })).capture
+  }
+
+  async inputReceipt(sessionId: string, submissionId: string): Promise<InputReceipt | null> {
+    const result = await this.call("session.input.receipt", { sessionId, submissionId })
+    return result.kind === "observed" ? result.receipt : null
+  }
+
+  /** Completes a steering question after a receipt proves the lost input was accepted. */
+  async reconcileSubmission(sessionId: string, submissionId: string): Promise<void> {
+    const question = this.unreconciledQuestions.get(submissionId)
+    if (question === undefined || question.sessionId !== sessionId) return
+    this.unreconciledQuestions.delete(submissionId)
+    await this.completeAction(question, { kind: "repliedByMessage" }).catch(() => {})
+  }
+
+  async grants(sessionId: string): Promise<ReadonlyArray<ApprovalGrant>> {
+    return (await this.call("session.grants.list", { sessionId })).grants
+  }
+
+  async clearGrants(sessionId: string, agentTitle: string): Promise<number> {
+    return (await this.call("session.grants.clear", { sessionId, agentTitle })).cleared
+  }
+
+  async historyResult(sessionId: string, operationId: string): Promise<HistoryOperationResult> {
+    return this.call("session.history.result", { sessionId, operationId })
+  }
+
+  /** Uploads one file into a draft-owned staging area and returns its retained reference. */
+  async uploadFile(file: File, draftId: string): Promise<RetainedAttachmentRef> {
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    const digest = hex(sha256(bytes))
+    let upload = (
+      await this.call("upload.create", {
+        draftId,
+        name: file.name,
+        mediaType: file.type === "" ? "application/octet-stream" : file.type,
+        size: bytes.byteLength,
+      })
+    ).upload
+    for (let offset = 0; offset < bytes.byteLength; offset += 64 * 1024) {
+      upload = (
+        await this.call("upload.append", {
+          uploadId: upload.uploadId,
+          offset,
+          data: base64(bytes.slice(offset, offset + 64 * 1024)),
+        })
+      ).upload
+    }
+    upload = (await this.call("upload.finalize", { uploadId: upload.uploadId, size: bytes.byteLength, digest })).upload
+    if (upload.attachmentId === undefined || upload.contentId === undefined) {
+      throw new Error("the upload did not return a retained attachment identity")
+    }
+    return {
+      attachmentId: upload.attachmentId,
+      contentId: upload.contentId,
+      representationId: upload.contentId,
+      name: upload.filename,
+      mediaType: upload.mediaType,
+      digest,
+    }
+  }
+
+  /** Rechecks staging by upload identity; an expired upload needs explicit reselection. */
+  async uploadStatus(uploadId: string) {
+    return (await this.call("upload.status", { uploadId })).upload
+  }
+
+  /** Fetches one retained representation with the current access credential; never a token URL. */
+  async downloadContent(sessionId: string, contentId: string, referenceId: string): Promise<Blob> {
+    const token = this.access?.token
+    if (token === undefined) throw new Error("not signed in")
+    const url = new URL(this.state.serverUrl)
+    url.protocol = url.protocol === "wss:" ? "https:" : "http:"
+    url.pathname = `/v1/content/${encodeURIComponent(sessionId)}/${encodeURIComponent(contentId)}/${encodeURIComponent(referenceId)}`
+    url.search = ""
+    const response = await fetch(url, { headers: { authorization: `Bearer ${token}` } })
+    if (!response.ok) throw new Error(response.status === 401 ? "sign in again" : `content download failed (${response.status})`)
+    return (await response.blob()) as Blob
+  }
+
   /** Removes the turn `runId` and every later one, then reruns its input, or `text` instead. */
-  async rewind(runId: string, text?: string) {
+  async rewind(runId: string, text?: string, operationId = crypto.randomUUID(), selection?: SelectionPatch) {
     const sessionId = this.activeId()
-    const selection = this.state.requestedSelections[sessionId]
+    const requested = selection ?? this.state.requestedSelections[sessionId]
+    const inspected = await this.call("session.history.inspect", { sessionId, runId })
+    if (inspected.target === null || !inspected.target.rewindEligible) {
+      throw new Error("the turn is no rewind point")
+    }
     await this.call("session.rewind", {
       sessionId,
       runId,
+      historyScope: inspected.scope.token,
+      operationId,
       ...(text === undefined ? {} : { text }),
-      ...(selection === undefined ? {} : { selection }),
+      ...(requested === undefined ? {} : { selection: requested }),
     })
-    if (selection !== undefined && this.state.requestedSelections[sessionId] === selection) {
+    if (requested !== undefined && this.state.requestedSelections[sessionId] === requested) {
       const requestedSelections = { ...this.state.requestedSelections }
       delete requestedSelections[sessionId]
       this.set({ requestedSelections })
@@ -605,8 +866,18 @@ export class SessionClient {
   }
 
   /** Copies the open session through the turn `runId` into a new session and opens it. */
-  async fork(runId: string) {
-    const { session } = await this.call("session.fork", { sessionId: this.activeId(), runId })
+  async fork(runId: string, operationId = crypto.randomUUID()) {
+    const sessionId = this.activeId()
+    const inspected = await this.call("session.history.inspect", { sessionId, runId })
+    if (inspected.target === null || !inspected.target.forkEligible) {
+      throw new Error("the turn is no fork point")
+    }
+    const { session } = await this.call("session.fork", {
+      sessionId,
+      runId,
+      historyScope: inspected.scope.token,
+      operationId,
+    })
     this.upsert(session)
     await this.open(session.id)
     return session

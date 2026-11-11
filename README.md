@@ -21,7 +21,8 @@ The repository is a Bun workspace of four packages. `packages/harness`
 holds the server's input layer, store, WebSocket server, turn loop, and
 the `ashe-agent` command; `packages/protocol` the protocol's message
 schemas; `packages/codemode` the interpreter that runs code mode
-programs; and `packages/web` the web client.
+programs; and `packages/web` the built-in browser client and its Bun
+web backend.
 
 ## Set up
 
@@ -42,14 +43,12 @@ migrated bundle database.
 ## Build
 
 `bun run bundle` builds, from a commit with no uncommitted changes,
-`dist/ashe-agent-linux-x64.tar`: the server and its commands as one
-executable, `bin/ashe-agent`, the web client's static files under `web/`,
-and the bundled license and third-party notices. `bun run release-gate`
-also tests and qualifies it; see [testing](docs/testing.md). CI builds the
-same bundle on every push and publishes it to the host's artifact
-registry.
-It also builds, qualifies, and publishes the
-[web client image](docs/web-client.md#container-image).
+`dist/ashe-agent-linux-x64.tar`: the harness executable `bin/ashe-agent`,
+the built web application under `web/` including its backend binary,
+ordered migrations, and browser assets, and the bundled notices.
+`bun run release-gate` tests and qualifies the exact bundle and web image;
+see [testing](docs/testing.md). CI builds the same artifacts on every push
+and publishes them to the host's artifact registry.
 
 ## Use
 
@@ -78,9 +77,10 @@ selects development itself and uses the same config-file loader; it refuses
 an occupied port.
 
 `serve` also needs the providers, with each provider's API key file, and
-the default model; see [configuration](docs/configuration.md). Open the
-[web client](docs/web-client.md), with `/v1/*` routed to the server on the
-client's origin, and choose **Continue with GitHub**.
+the default model; see [configuration](docs/configuration.md). The web
+backend serves the browser assets and its own authenticated state. Start
+it with the web inputs and observer credential, open the
+[web client](docs/web-client.md), and choose **Continue with GitHub**.
 [Authentication](docs/authentication.md) describes the flow and limits.
 
 ## Documentation
@@ -107,8 +107,8 @@ client's origin, and choose **Continue with GitHub**.
   permissions and limits of programs.
 - [Model context](docs/model-context.md): what each model call carries,
   developer components, and model switching.
-- [Web client](docs/web-client.md): running and building the web client,
-  signing in, and what it keeps in the browser.
+- [Web client](docs/web-client.md): the built-in backend, three views,
+  composer recovery, inbox, signing in, and browser state.
 - [Telemetry](docs/telemetry.md): the traces, metrics, and logs the server
   emits, and where it exports them.
 - [Trust model](docs/trust-model.md): what the agent can reach and what

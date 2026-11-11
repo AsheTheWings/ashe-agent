@@ -334,6 +334,7 @@ export class ContextTurns {
       },
       {
         sessionId: run.sessionId,
+        runId: run.runId,
         clock: run.clock,
         signal: run.signal,
         deadline: run.deadline,

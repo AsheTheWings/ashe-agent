@@ -9,6 +9,8 @@ export const OwnerIdentity = Schema.Struct({
   principal: Sender,
   /** Null explicitly means a non-expiring API credential. */
   credentialExpiresAt: Schema.NullOr(Timestamp),
+  /** The opaque durable identity of the retained harness database. */
+  harnessId: Id,
 })
 
 export type OwnerIdentity = typeof OwnerIdentity.Type
@@ -81,6 +83,10 @@ export const UploadStatus = Schema.Struct({
   createdAt: Timestamp,
   expiresAt: Timestamp,
   claimed: Schema.Boolean,
+  /** The retained attachment identity once finalization succeeded. */
+  attachmentId: Schema.optionalKey(Id),
+  /** The retained content identity once finalization succeeded. */
+  contentId: Schema.optionalKey(Id),
 })
 
 export type UploadStatus = typeof UploadStatus.Type

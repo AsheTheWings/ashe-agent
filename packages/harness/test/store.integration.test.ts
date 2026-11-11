@@ -7,6 +7,7 @@ import { SessionStore } from "../src/sessions/store.ts"
 import { openDatabase, openDatabaseReadonly } from "../src/store/database.ts"
 import { dumpDatabase } from "../src/store/dump.ts"
 import { migrationFiles } from "../src/store/migration-files.ts"
+import { createApiToken } from "../src/auth/credentials.ts"
 import {
   applyMigrations,
   discoverMigrations,
@@ -45,6 +46,58 @@ describe("migrations on a real SQLite file", () => {
       expect(applyMigrations(db, migrations)).toEqual([])
       expect(readLedger(db)).toHaveLength(migrations.length)
       expect(db.query("SELECT sql FROM sqlite_master ORDER BY name").all()).toEqual(schemaBefore)
+    } finally {
+      db.close()
+    }
+  })
+
+  test("follow-on migrations preserve representative predecessor auth and history", () => {
+    const path = freshPath("follow-on.db")
+    const db = openDatabase(path)
+    try {
+      const predecessor = migrations.filter((migration) => migration.position <= 33)
+      applyMigrations(db, predecessor)
+      db.transaction(() => {
+        db.run("PRAGMA defer_foreign_keys = ON")
+        db.run(
+          `INSERT INTO sessions (id, current_settings_revision, created_at, next_seq) VALUES ('kept', 'settings:1', 1, 3)`,
+        )
+        db.run(
+          `INSERT INTO session_settings (session_id, revision, agent_title, model_id, reasoning_effort, applied_at)
+            VALUES ('kept', 'settings:1', 'untitled', 'test/alpha', NULL, 1)`,
+        )
+      })()
+      db.run("INSERT INTO contents (sha256, data, format) VALUES ('digest', ?, 'text/plain')", [Buffer.from("hello")])
+      db.run(
+        `INSERT INTO session_entries
+          (session_id, entry_id, position, owner_turn_id, kind, content_sha256, agent_title, model_id,
+           authorship_session_id, ownership_kind, source_session_id, source_entry_id, created_at)
+          VALUES ('kept', 'entry', 1, NULL, 'system', 'digest', 'untitled', NULL, 'kept', 'local', NULL, NULL, 1)`,
+      )
+      db.run(
+        `INSERT INTO events (session_id, seq, timestamp, body)
+          VALUES ('kept', 1, 1, '{"type":"SESSION_CREATED","sessionDir":"/tmp/kept","selection":{"agentTitle":"untitled","modelSettings":{"modelId":"test/alpha","reasoningEffort":null}},"forkedFrom":null}')`,
+      )
+      const token = createApiToken(db, "predecessor", 1)
+      expect(token.ok).toBe(true)
+      const before = {
+        tokens: db.query("SELECT * FROM api_tokens ORDER BY id").all(),
+        events: db.query("SELECT * FROM events ORDER BY seq").all(),
+        entries: db.query("SELECT * FROM session_entries ORDER BY position").all(),
+        contents: db.query("SELECT * FROM contents ORDER BY sha256").all(),
+      }
+      expect(applyMigrations(db, migrations).map((migration) => migration.name)).toEqual(
+        migrations.slice(33).map((migration) => migration.name),
+      )
+      expect(db.query("SELECT * FROM api_tokens ORDER BY id").all()).toEqual(before.tokens)
+      expect(db.query("SELECT * FROM events ORDER BY seq").all()).toEqual(before.events)
+      expect(db.query("SELECT * FROM session_entries ORDER BY position").all()).toEqual(before.entries)
+      expect(db.query("SELECT * FROM contents ORDER BY sha256").all()).toEqual(before.contents)
+      expect(db.query("SELECT harness_id FROM harness_identity").all()).toHaveLength(1)
+      expect(db.query("SELECT count(*) AS n FROM input_receipts").get()).toEqual({ n: 0 })
+      expect(db.query("SELECT count(*) AS n FROM history_operations").get()).toEqual({ n: 0 })
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([])
+      expect(applyMigrations(db, migrations)).toEqual([])
     } finally {
       db.close()
     }

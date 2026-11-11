@@ -187,3 +187,45 @@ export class Client {
     this.socket.close()
   }
 }
+
+/** The current mutation scope for a history boundary, or the session's latest settled one. */
+export const inspectHistory = async (client: Client, sessionId: string, runId?: string) => {
+  const response = await client.request("session.history.inspect", { sessionId, ...(runId === undefined ? {} : { runId }) })
+  if (response.error !== undefined) throw new Error(response.error.message)
+  return response.result
+}
+
+/** Rewinds through the harness-issued scope with a fresh owner operation identity. */
+export const rewindSession = async (
+  client: Client,
+  params: { readonly sessionId: string; readonly runId: string | undefined; readonly text?: string; readonly selection?: unknown },
+) => {
+  const inspected = await inspectHistory(client, params.sessionId, params.runId)
+  return client.request("session.rewind", {
+    ...params,
+    historyScope: inspected.scope.token,
+    operationId: crypto.randomUUID(),
+  })
+}
+
+/** Forks through the harness-issued scope with a fresh owner operation identity. */
+export const forkSession = async (
+  client: Client,
+  params: { readonly sessionId: string; readonly runId?: string | undefined },
+) => {
+  const inspected = await inspectHistory(client, params.sessionId, params.runId)
+  return client.request("session.fork", {
+    ...params,
+    historyScope: inspected.scope.token,
+    operationId: crypto.randomUUID(),
+  })
+}
+
+/** Stops the observed turn, if one is running. */
+export const cancelSession = async (client: Client, sessionId: string) => {
+  const inspected = await inspectHistory(client, sessionId)
+  if (inspected.scope.activeTurnId === null) {
+    return { error: { code: -32005, message: "no turn is running" } }
+  }
+  return client.request("session.cancel", { sessionId, expectedTurnId: inspected.scope.activeTurnId })
+}

@@ -135,9 +135,44 @@ class FakeServer {
       case "action.complete":
         return { result: {} }
       case "session.input":
-        return this.failInput
-          ? { error: { code: ErrorCode.conflict, message: "input refused" } }
-          : { result: { inputId: `input-${this.issued++}` } }
+        if (this.failInput) return { error: { code: ErrorCode.conflict, message: "input refused" } }
+        {
+          const inputId = `input-${this.issued++}`
+          return {
+            result: {
+              inputId,
+              submissionId: `sub-${this.issued}`,
+              receipt: { submissionId: `sub-${this.issued}`, inputId, disposition: "pending", acceptedAt: START },
+            },
+          }
+        }
+      case "session.history.inspect":
+        {
+          const runId = (request.params.runId as string | undefined) ?? "r1"
+          return {
+            result: {
+              scope: {
+                token: "history-scope",
+                sessionId: SESSION,
+                targetRunId: runId,
+                readRevision: "revision",
+                activeTurnId: null,
+                pendingInputIds: [],
+                contextActive: false,
+                restorePending: false,
+              },
+              target: {
+                runId,
+                position: 1,
+                userMessageIds: ["u1"],
+                affectedTurnIds: [runId],
+                pendingInputIds: [],
+                rewindEligible: true,
+                forkEligible: true,
+              },
+            },
+          }
+        }
       case "session.resume":
       case "session.rewind":
         return { result: {} }
@@ -630,6 +665,23 @@ describe("session client", () => {
     expect(texts(view(client))).toEqual(["assistant:kept:failed"])
   })
 
+  test("a cancelled run discards provisional parts while retaining committed output", async () => {
+    const { server, client } = await signedIn()
+    await client.open(SESSION)
+    const socket = server.last()
+    socket.push(1, created)
+    socket.push(2, { type: "RUN_STARTED", threadId: SESSION, runId: "r1", selection, settingsRevision: "s1", cause: "user", userMessageIds: [], membership: [] })
+    socket.push(3, { type: "MODEL_CALL_STARTED", runId: "r1", modelCallId: "mc1", ordinal: 1 })
+    socket.push(4, { type: "TEXT_MESSAGE_START", modelCallId: "mc1", messageId: "kept", role: "assistant" })
+    socket.push(5, { type: "TEXT_MESSAGE_CONTENT", modelCallId: "mc1", messageId: "kept", delta: "kept" })
+    socket.push(6, { type: "MODEL_CALL_COMMITTED", runId: "r1", modelCallId: "mc1", inputBoundaryId: "b1" })
+    socket.push(7, { type: "MODEL_CALL_STARTED", runId: "r1", modelCallId: "mc2", ordinal: 2 })
+    socket.push(8, { type: "TEXT_MESSAGE_START", modelCallId: "mc2", messageId: "partial", role: "assistant" })
+    socket.push(9, { type: "TEXT_MESSAGE_CONTENT", modelCallId: "mc2", messageId: "partial", delta: "discard" })
+    socket.push(10, { type: "RUN_FINISHED", threadId: SESSION, runId: "r1", outcome: { type: "cancelled" } })
+    expect(texts(view(client))).toEqual(["assistant:kept:cancelled"])
+  })
+
   test("queued and failed sends leave questions open, reconnect clears ownership, and fork uses its adapter", async () => {
     const { server, client } = await signedIn()
     await client.open(SESSION)
@@ -657,10 +709,19 @@ describe("session client", () => {
     expect(socket.requests.slice(-2).map((request) => request.method)).toEqual(["session.input", "action.complete"])
     expect(client.store.getState().owned.questions).toEqual([])
 
+    socket.pushAction("a-q3", SESSION, "questions.answer", { ...question, questionSetId: "q3" })
+    await client.submit(SESSION, { text: "detached steer", mode: "steer", submissionId: "sub-q3" })
+    expect(socket.requests.at(-1)?.method).toBe("action.complete")
+    expect(client.store.getState().owned.questions).toEqual([])
+
+    socket.pushAction("a-q4", SESSION, "questions.answer", { ...question, questionSetId: "q4" })
+    await client.submit(SESSION, { text: "detached queue", mode: "queue", submissionId: "sub-q4" })
+    expect(client.store.getState().owned.questions).toEqual(["q4"])
+
     socket.pushAction("a-q2", SESSION, "questions.answer", { ...question, questionSetId: "q2" })
     server.failInput = true
     await expect(client.send("refused")).rejects.toThrow()
-    expect(client.store.getState().owned.questions).toEqual(["q2"])
+    expect(client.store.getState().owned.questions).toEqual(["q4", "q2"])
     expect(
       socket.requests.some(
         (request) => request.method === "action.complete" && request.params.actionId === "a-q2",

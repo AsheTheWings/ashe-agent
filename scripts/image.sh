@@ -62,7 +62,7 @@ build)
 			echo "packages/web/dist is not the web build of $revision; run bun run build:web" >&2
 			exit 1
 		fi
-		cp packages/web/image/Containerfile packages/web/image/caddy.json "$context/"
+		cp packages/web/image/Containerfile "$context/"
 		cp -R packages/web/dist "$context/site"
 		;;
 	*)

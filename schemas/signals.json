@@ -1,5 +1,5 @@
 {
-  "version": 8,
+  "version": 9,
   "scope": "ashe-agent",
   "attributes": {
     "rpc.method": {
@@ -247,6 +247,39 @@
         "list"
       ],
       "description": "The session communication operation."
+    },
+    "web.operation": {
+      "type": "string",
+      "description": "A built-in web operation: sync, renew, command, snapshot, read, or filing."
+    },
+    "web.outcome": {
+      "type": "string",
+      "description": "The bounded outcome class of a built-in web operation."
+    },
+    "web.view": {
+      "type": "string",
+      "values": [
+        "chat",
+        "session",
+        "checkpoint"
+      ],
+      "description": "The selected built-in web view."
+    },
+    "web.error_type": {
+      "type": "string",
+      "description": "A bounded renderer or content failure class."
+    },
+    "web.revision_gap": {
+      "type": "boolean",
+      "description": "Whether a web-state update required snapshot reconciliation."
+    },
+    "web.queue_depth": {
+      "type": "int",
+      "description": "The bounded number of queued browser diagnostics."
+    },
+    "web.protocol_version": {
+      "type": "int",
+      "description": "The built-in web-state protocol version."
     }
   },
   "errorClasses": [
@@ -590,6 +623,49 @@
       "attributes": [
         "ashe_agent.content.operation",
         "error.type"
+      ]
+    },
+    "web.sync": {
+      "severity": "INFO",
+      "description": "A built-in web synchronization operation completed or failed.",
+      "attributes": [
+        "web.operation",
+        "web.outcome",
+        "web.revision_gap",
+        "web.protocol_version"
+      ]
+    },
+    "web.interaction": {
+      "severity": "INFO",
+      "description": "A built-in web composer, history, or attention interaction completed or failed.",
+      "attributes": [
+        "web.operation",
+        "web.outcome",
+        "web.view"
+      ]
+    },
+    "web.render_failure": {
+      "severity": "WARN",
+      "description": "A typed web renderer failed and its block used the generic fallback.",
+      "attributes": [
+        "web.error_type",
+        "web.view"
+      ]
+    },
+    "web.draft": {
+      "severity": "WARN",
+      "description": "A browser draft operation could not persist or restore its local state.",
+      "attributes": [
+        "web.operation",
+        "web.outcome"
+      ]
+    },
+    "web.auth": {
+      "severity": "INFO",
+      "description": "A built-in web credential validation or same-socket renewal completed.",
+      "attributes": [
+        "web.operation",
+        "web.outcome"
       ]
     }
   }

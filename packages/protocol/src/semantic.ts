@@ -151,12 +151,16 @@ export const AgentTool = Schema.Struct({
       structured: Schema.NullOr(StructuredContent),
     }),
   ),
+  /** Retained producer captures owned by this tool entry. */
+  captures: Schema.Array(Schema.suspend(() => CaptureReference)),
 })
 
 export type AgentTool = typeof AgentTool.Type
 
 const entryFields = {
   id: Id,
+  /** The retained content identity of this entry's canonical body. */
+  contentId: Id,
   position: Seq,
   turnId: Schema.NullOr(Id),
   authorship: Authorship,
@@ -189,6 +193,55 @@ export const SemanticEntry = Schema.Union([
 ])
 
 export type SemanticEntry = typeof SemanticEntry.Type
+
+/** A retained body a page omits, addressed by its owning entry. */
+export const EntryBodyReference = Schema.Struct({
+  contentId: Id,
+  referenceId: Id,
+  byteLength: Count,
+})
+
+export type EntryBodyReference = typeof EntryBodyReference.Type
+
+/** One paged entry and the reference to its body when the page omitted it. */
+export const SemanticPageEntry = Schema.Struct({
+  entry: SemanticEntry,
+  body: Schema.NullOr(EntryBodyReference),
+})
+
+export type SemanticPageEntry = typeof SemanticPageEntry.Type
+
+/** A successful boundary without its potentially large contribution body. */
+export const BoundarySummary = Schema.Struct({
+  id: Id,
+  modelCallId: Id,
+  turnId: Id,
+  windowPosition: Seq,
+  committedAt: Timestamp,
+  contributionCount: Count,
+  body: EntryBodyReference,
+})
+
+export type BoundarySummary = typeof BoundarySummary.Type
+
+/** Stored provider-reported usage for one model call; nulls stay unknown. */
+export const ModelCallUsage = Schema.Struct({
+  modelCallId: Id,
+  providerUsage: Schema.suspend(() => ProviderUsage),
+})
+
+export type ModelCallUsage = typeof ModelCallUsage.Type
+
+/** A typed entry-owned retained producer capture, distinct from the model preview. */
+export const CaptureReference = Schema.Struct({
+  contentId: Id,
+  name: Schema.String,
+  mediaType: Schema.String,
+  byteLength: Count,
+  captureLossBytes: Count,
+})
+
+export type CaptureReference = typeof CaptureReference.Type
 
 /** The provider response grouping retained with committed output and opaque replay state. */
 export const ModelResponse = Schema.Struct({
@@ -250,7 +303,7 @@ export const ModelInputManifest = Schema.Struct({
   windowPosition: Seq,
   committedAt: Timestamp,
   contributions: Schema.Array(InputContribution),
-  measurement: Schema.suspend(() => Measurement),
+  measurement: Schema.suspend(() => MeasurementFields),
 })
 
 export type ModelInputManifest = typeof ModelInputManifest.Type
@@ -277,8 +330,8 @@ export const ContributionMeasurement = Schema.Struct({
 
 export type ContributionMeasurement = typeof ContributionMeasurement.Type
 
-/** A shared estimate that never presents unknown contributions as zero. */
-export const Measurement = Schema.Struct({
+/** The fields of a shared estimate; `Measurement` adds their consistency filter. */
+export const MeasurementFields = Schema.Struct({
   method: Schema.Literal("ashe-agent-estimator"),
   methodVersion: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
   purpose: Schema.Literals(["execution", "analysis"]),
@@ -291,7 +344,10 @@ export const Measurement = Schema.Struct({
       reason: Schema.String,
     }),
   ),
-}).check(
+})
+
+/** A shared estimate that never presents unknown contributions as zero. */
+export const Measurement = MeasurementFields.check(
   Schema.makeFilter(
     (measurement: {
       readonly coverage: string

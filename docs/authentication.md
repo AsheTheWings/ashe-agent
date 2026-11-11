@@ -68,7 +68,8 @@ principal remains active.
 `GET /v1/auth/identity` accepts either credential through
 `Authorization: Bearer`. It returns the authenticated `principal` and
 `credentialExpiresAt`: the access-token expiry, or null for a
-non-expiring API token. The endpoint accepts no token in its URL, returns
+non-expiring API token, and the durable opaque `harnessId` of the retained
+database. The endpoint accepts no token in its URL, returns
 `Cache-Control: no-store`, and applies the configured browser-origin
 policy. Revoked credentials, expired access tokens, and logins issued for
 a different configured owner receive 401.
@@ -76,3 +77,26 @@ a different configured owner receive 401.
 The database stores AsheAgent tokens only as SHA-256 hashes, with each
 login's GitHub user ID. [Setup](../README.md#use) explains the OAuth app;
 the [input catalog](../schemas/config.schema.json) defines its inputs.
+
+## Built-in web backend
+
+The web backend has its own observer credential, delivered as a protected
+file. It is an ordinary harness credential, not a read-only token; its
+scope is exactly the public owner methods the observer calls. It is
+validated online through `GET /v1/auth/identity` before shared state is
+used and is never exposed to the browser.
+
+The browser's web-state socket authenticates with its current harness
+access credential and validates it online for every command. A replacement
+access token may arrive through `web.authenticate` on the same socket only
+when its principal and `harnessId` match. A different principal, a revoked
+credential, or a different harness binding closes shared access and
+requires a new authenticated snapshot. Refresh tokens never travel to the
+web backend.
+
+The browser keeps the existing cross-tab refresh coordinator and its
+separate refresh connection, so ordinary renewal preserves the direct
+execution socket. If Web Locks are unavailable or a bounded acquisition
+fails, the browser performs no unlocked exchange. An uncertain rotation is
+not treated as transparent success; recoverable work remains and the user
+is asked to sign in again in a secure context.

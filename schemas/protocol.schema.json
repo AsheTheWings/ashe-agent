@@ -602,6 +602,10 @@
                   "type": "string",
                   "minLength": 1
                 },
+                "submissionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
                 "text": {
                   "type": "string"
                 },
@@ -727,6 +731,109 @@
             "method": {
               "type": "string",
               "enum": [
+                "session.input.receipt"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "submissionId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "sessionId",
+                "submissionId"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "session.observe"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "sessionId"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
                 "action.complete"
               ]
             },
@@ -747,6 +854,59 @@
                 "sessionId",
                 "actionId",
                 "result"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "action.reportInteraction"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "actionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "needsHumanInput": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "actionId",
+                "needsHumanInput"
               ],
               "additionalProperties": false
             }
@@ -841,10 +1001,15 @@
                 "sessionId": {
                   "type": "string",
                   "minLength": 1
+                },
+                "expectedTurnId": {
+                  "type": "string",
+                  "minLength": 1
                 }
               },
               "required": [
-                "sessionId"
+                "sessionId",
+                "expectedTurnId"
               ],
               "additionalProperties": false
             }
@@ -894,6 +1059,248 @@
               },
               "required": [
                 "sessionId"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "session.semantics.page"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "object": {
+                  "type": "string",
+                  "enum": [
+                    "turns",
+                    "entries",
+                    "boundaries"
+                  ]
+                },
+                "revision": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "cursor": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "limit": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 200
+                }
+              },
+              "required": [
+                "sessionId",
+                "object"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "session.semantics.body"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "entryId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "contentId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "sessionId",
+                "entryId",
+                "contentId"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "session.semantics.boundary"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "manifestId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "sessionId",
+                "manifestId"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "session.modelCalls.usage"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "modelCallIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "maxItems": 100
+                }
+              },
+              "required": [
+                "sessionId",
+                "modelCallIds"
               ],
               "additionalProperties": false
             }
@@ -1046,10 +1453,20 @@
                 "runId": {
                   "type": "string",
                   "minLength": 1
+                },
+                "historyScope": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "operationId": {
+                  "type": "string",
+                  "minLength": 1
                 }
               },
               "required": [
-                "sessionId"
+                "sessionId",
+                "historyScope",
+                "operationId"
               ],
               "additionalProperties": false
             }
@@ -1100,6 +1517,14 @@
                   "type": "string",
                   "minLength": 1
                 },
+                "historyScope": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "operationId": {
+                  "type": "string",
+                  "minLength": 1
+                },
                 "text": {
                   "type": "string"
                 },
@@ -1143,7 +1568,116 @@
               },
               "required": [
                 "sessionId",
-                "runId"
+                "runId",
+                "historyScope",
+                "operationId"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "session.history.inspect"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "runId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "sessionId"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "session.history.result"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "operationId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "sessionId",
+                "operationId"
               ],
               "additionalProperties": false
             }
@@ -1203,6 +1737,77 @@
                 "sessionId",
                 "contentId",
                 "referenceId"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "content.capture"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "entryId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "contentId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "offset": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "length": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65536
+                }
+              },
+              "required": [
+                "sessionId",
+                "entryId",
+                "contentId",
+                "offset",
+                "length"
               ],
               "additionalProperties": false
             }
@@ -2504,6 +3109,10 @@
                           "type": "string",
                           "minLength": 1
                         },
+                        "submissionId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
                         "text": {
                           "type": "string"
                         },
@@ -2619,6 +3228,10 @@
                           ]
                         },
                         "inputId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "submissionId": {
                           "type": "string",
                           "minLength": 1
                         },
@@ -3608,6 +4221,67 @@
                         "actionId",
                         "name",
                         "outcome"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "ACTION_ATTENTION"
+                          ]
+                        },
+                        "actionId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "runId": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "needsHumanInput": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "actionId",
+                        "name",
+                        "runId",
+                        "needsHumanInput"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "OBSERVATION_CHANGED"
+                          ]
+                        },
+                        "revision": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "revision"
                       ],
                       "additionalProperties": false
                     }
@@ -4657,6 +5331,10 @@
               "type": "string",
               "minLength": 1
             },
+            "submissionId": {
+              "type": "string",
+              "minLength": 1
+            },
             "text": {
               "type": "string"
             },
@@ -4772,6 +5450,10 @@
               ]
             },
             "inputId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "submissionId": {
               "type": "string",
               "minLength": 1
             },
@@ -5761,6 +6443,67 @@
             "actionId",
             "name",
             "outcome"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "ACTION_ATTENTION"
+              ]
+            },
+            "actionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "runId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "needsHumanInput": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "actionId",
+            "name",
+            "runId",
+            "needsHumanInput"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "OBSERVATION_CHANGED"
+              ]
+            },
+            "revision": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "revision"
           ],
           "additionalProperties": false
         }
@@ -6912,6 +7655,10 @@
           "type": "string",
           "minLength": 1
         },
+        "submissionId": {
+          "type": "string",
+          "minLength": 1
+        },
         "text": {
           "type": "string"
         },
@@ -7010,10 +7757,657 @@
         "inputId": {
           "type": "string",
           "minLength": 1
+        },
+        "submissionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "receipt": {
+          "type": "object",
+          "properties": {
+            "submissionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "inputId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "disposition": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "admitted",
+                "removed"
+              ]
+            },
+            "acceptedAt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "submissionId",
+            "inputId",
+            "disposition",
+            "acceptedAt"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
-        "inputId"
+        "inputId",
+        "submissionId",
+        "receipt"
+      ],
+      "additionalProperties": false
+    },
+    "session.input.receipt.params": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "submissionId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "sessionId",
+        "submissionId"
+      ],
+      "additionalProperties": false
+    },
+    "session.input.receipt.result": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "observed"
+              ]
+            },
+            "receipt": {
+              "type": "object",
+              "properties": {
+                "submissionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "inputId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "disposition": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "admitted",
+                    "removed"
+                  ]
+                },
+                "acceptedAt": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "submissionId",
+                "inputId",
+                "disposition",
+                "acceptedAt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "kind",
+            "receipt"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "not_observed"
+              ]
+            },
+            "submissionId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "submissionId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "session.observe.params": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "additionalProperties": false
+    },
+    "session.observe.result": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cursor": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "selection": {
+          "type": "object",
+          "properties": {
+            "agentTitle": {
+              "type": "string",
+              "minLength": 1
+            },
+            "modelSettings": {
+              "type": "object",
+              "properties": {
+                "modelId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "reasoningEffort": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "modelId",
+                "reasoningEffort"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "agentTitle",
+            "modelSettings"
+          ],
+          "additionalProperties": false
+        },
+        "activeSelection": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "agentTitle": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "modelSettings": {
+                  "type": "object",
+                  "properties": {
+                    "modelId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reasoningEffort": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "modelId",
+                    "reasoningEffort"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "agentTitle",
+                "modelSettings"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pending": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "user"
+                    ]
+                  },
+                  "inputId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "submissionId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "steer",
+                      "queue"
+                    ]
+                  },
+                  "sender": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "token"
+                            ]
+                          },
+                          "tokenId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "tokenId",
+                          "name"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "login"
+                            ]
+                          },
+                          "loginId": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "loginId"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "session"
+                            ]
+                          },
+                          "sessionId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "agentTitle": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "modelId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "sessionId",
+                          "agentTitle",
+                          "modelId"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "attachments": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "attachmentId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "contentId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "representationId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "mediaType": {
+                          "type": "string"
+                        },
+                        "digest": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "attachmentId",
+                        "contentId",
+                        "representationId",
+                        "name",
+                        "mediaType",
+                        "digest"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "selection": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "agentTitle": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "modelSettings": {
+                            "type": "object",
+                            "properties": {
+                              "modelId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "reasoningEffort": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "additionalProperties": false
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "inputId",
+                  "submissionId",
+                  "text",
+                  "mode",
+                  "sender",
+                  "attachments",
+                  "selection"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "developer"
+                    ]
+                  },
+                  "inputId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "trigger": {
+                    "type": "string",
+                    "enum": [
+                      "notification",
+                      "continuation",
+                      "fork",
+                      "context"
+                    ]
+                  },
+                  "componentType": {
+                    "type": "string"
+                  },
+                  "componentName": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "heading": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "inputId",
+                  "trigger",
+                  "componentType",
+                  "componentName",
+                  "heading"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "execution": {
+          "type": "object",
+          "properties": {
+            "activeTurnId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "activity": {
+              "type": "string",
+              "enum": [
+                "working",
+                "idle"
+              ]
+            },
+            "canResume": {
+              "type": "boolean"
+            },
+            "canRewind": {
+              "type": "boolean"
+            },
+            "canFork": {
+              "type": "boolean"
+            },
+            "contextWorkflowActive": {
+              "type": "boolean"
+            },
+            "restorePending": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "activeTurnId",
+            "activity",
+            "canResume",
+            "canRewind",
+            "canFork",
+            "contextWorkflowActive",
+            "restorePending"
+          ],
+          "additionalProperties": false
+        },
+        "userTurnIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "latestSuccessfulBoundaryId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attention": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "actionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "runId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "needsHumanInput": {
+                "type": "boolean",
+                "enum": [
+                  true
+                ]
+              }
+            },
+            "required": [
+              "actionId",
+              "name",
+              "runId",
+              "needsHumanInput"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "sessionId",
+        "revision",
+        "cursor",
+        "selection",
+        "activeSelection",
+        "pending",
+        "execution",
+        "userTurnIds",
+        "latestSuccessfulBoundaryId",
+        "attention"
       ],
       "additionalProperties": false
     },
@@ -7040,6 +8434,26 @@
     "action.complete.result": {
       "type": "object"
     },
+    "action.reportInteraction.params": {
+      "type": "object",
+      "properties": {
+        "actionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "needsHumanInput": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "actionId",
+        "needsHumanInput"
+      ],
+      "additionalProperties": false
+    },
+    "action.reportInteraction.result": {
+      "type": "object"
+    },
     "session.resume.params": {
       "type": "object",
       "properties": {
@@ -7062,15 +8476,45 @@
         "sessionId": {
           "type": "string",
           "minLength": 1
+        },
+        "expectedTurnId": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "required": [
-        "sessionId"
+        "sessionId",
+        "expectedTurnId"
       ],
       "additionalProperties": false
     },
     "session.cancel.result": {
-      "type": "object"
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "cancelled",
+            "no_longer_current"
+          ]
+        },
+        "currentTurnId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "outcome",
+        "currentTurnId"
+      ],
+      "additionalProperties": false
     },
     "session.semantics.params": {
       "type": "object",
@@ -7219,6 +8663,10 @@
                     "type": "string",
                     "minLength": 1
                   },
+                  "contentId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
                   "position": {
                     "type": "integer",
                     "minimum": 1,
@@ -7347,6 +8795,7 @@
                 },
                 "required": [
                   "id",
+                  "contentId",
                   "position",
                   "turnId",
                   "authorship",
@@ -7361,6 +8810,10 @@
                 "type": "object",
                 "properties": {
                   "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "contentId": {
                     "type": "string",
                     "minLength": 1
                   },
@@ -7506,6 +8959,7 @@
                 },
                 "required": [
                   "id",
+                  "contentId",
                   "position",
                   "turnId",
                   "authorship",
@@ -7520,6 +8974,10 @@
                 "type": "object",
                 "properties": {
                   "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "contentId": {
                     "type": "string",
                     "minLength": 1
                   },
@@ -7715,6 +9173,7 @@
                 },
                 "required": [
                   "id",
+                  "contentId",
                   "position",
                   "turnId",
                   "authorship",
@@ -7729,6 +9188,10 @@
                 "type": "object",
                 "properties": {
                   "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "contentId": {
                     "type": "string",
                     "minLength": 1
                   },
@@ -7930,6 +9393,7 @@
                 },
                 "required": [
                   "id",
+                  "contentId",
                   "position",
                   "turnId",
                   "authorship",
@@ -7945,6 +9409,10 @@
                 "type": "object",
                 "properties": {
                   "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "contentId": {
                     "type": "string",
                     "minLength": 1
                   },
@@ -8066,6 +9534,7 @@
                 },
                 "required": [
                   "id",
+                  "contentId",
                   "position",
                   "turnId",
                   "authorship",
@@ -8081,6 +9550,10 @@
                 "type": "object",
                 "properties": {
                   "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "contentId": {
                     "type": "string",
                     "minLength": 1
                   },
@@ -8435,6 +9908,42 @@
                             "type": "null"
                           }
                         ]
+                      },
+                      "captures": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "contentId": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "mediaType": {
+                              "type": "string"
+                            },
+                            "byteLength": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "captureLossBytes": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "contentId",
+                            "name",
+                            "mediaType",
+                            "byteLength",
+                            "captureLossBytes"
+                          ],
+                          "additionalProperties": false
+                        }
                       }
                     },
                     "required": [
@@ -8448,13 +9957,15 @@
                       "startedAt",
                       "settledAt",
                       "outcome",
-                      "result"
+                      "result",
+                      "captures"
                     ],
                     "additionalProperties": false
                   }
                 },
                 "required": [
                   "id",
+                  "contentId",
                   "position",
                   "turnId",
                   "authorship",
@@ -8882,6 +10393,3613 @@
       ],
       "additionalProperties": false
     },
+    "session.semantics.page.params": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "object": {
+          "type": "string",
+          "enum": [
+            "turns",
+            "entries",
+            "boundaries"
+          ]
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cursor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        }
+      },
+      "required": [
+        "sessionId",
+        "object"
+      ],
+      "additionalProperties": false
+    },
+    "session.semantics.page.result": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "object": {
+              "type": "string",
+              "enum": [
+                "turns"
+              ]
+            },
+            "revision": {
+              "type": "string",
+              "minLength": 1
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "position": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "admittedAt": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "inputEntryIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "userMessageIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "profile": {
+                    "type": "object",
+                    "properties": {
+                      "agentTitle": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "modelSettings": {
+                        "type": "object",
+                        "properties": {
+                          "modelId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "reasoningEffort": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "modelId",
+                          "reasoningEffort"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "agentTitle",
+                      "modelSettings"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "settingsRevision": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "outcome": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "completed",
+                          "failed",
+                          "cancelled",
+                          "interrupted"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "contextMaintenance": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "id",
+                  "position",
+                  "admittedAt",
+                  "inputEntryIds",
+                  "userMessageIds",
+                  "profile",
+                  "settingsRevision",
+                  "outcome",
+                  "contextMaintenance"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "nextCursor": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "latestSuccessfulBoundaryId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "object",
+            "revision",
+            "items",
+            "nextCursor",
+            "latestSuccessfulBoundaryId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "object": {
+              "type": "string",
+              "enum": [
+                "entries"
+              ]
+            },
+            "revision": {
+              "type": "string",
+              "minLength": 1
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "entry": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "contentId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "position": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "turnId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "authorship": {
+                            "type": "object",
+                            "properties": {
+                              "sessionId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "agentTitle": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "modelId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "sessionId",
+                              "agentTitle",
+                              "modelId"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "ownership": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "local"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "kind"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "inherited"
+                                    ]
+                                  },
+                                  "sourceSessionId": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "sourceEntryId": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "sourceSessionId",
+                                  "sourceEntryId"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "system"
+                            ]
+                          },
+                          "content": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "text"
+                                ]
+                              },
+                              "text": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "kind",
+                              "text"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "contentId",
+                          "position",
+                          "turnId",
+                          "authorship",
+                          "ownership",
+                          "createdAt",
+                          "kind",
+                          "content"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "contentId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "position": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "turnId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "authorship": {
+                            "type": "object",
+                            "properties": {
+                              "sessionId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "agentTitle": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "modelId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "sessionId",
+                              "agentTitle",
+                              "modelId"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "ownership": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "local"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "kind"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "inherited"
+                                    ]
+                                  },
+                                  "sourceSessionId": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "sourceEntryId": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "sourceSessionId",
+                                  "sourceEntryId"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "developer"
+                            ]
+                          },
+                          "components": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "seed",
+                                    "state",
+                                    "notification",
+                                    "title",
+                                    "global"
+                                  ]
+                                },
+                                "heading": {
+                                  "type": "string"
+                                },
+                                "text": {
+                                  "type": "string"
+                                },
+                                "source": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "type",
+                                "heading",
+                                "text"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "contentId",
+                          "position",
+                          "turnId",
+                          "authorship",
+                          "ownership",
+                          "createdAt",
+                          "kind",
+                          "components"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "contentId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "position": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "turnId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "authorship": {
+                            "type": "object",
+                            "properties": {
+                              "sessionId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "agentTitle": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "modelId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "sessionId",
+                              "agentTitle",
+                              "modelId"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "ownership": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "local"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "kind"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "inherited"
+                                    ]
+                                  },
+                                  "sourceSessionId": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "sourceEntryId": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "sourceSessionId",
+                                  "sourceEntryId"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "user"
+                            ]
+                          },
+                          "parts": {
+                            "type": "array",
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "text"
+                                      ]
+                                    },
+                                    "text": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "text"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "attachment"
+                                      ]
+                                    },
+                                    "attachmentId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "content": {
+                                      "type": "object",
+                                      "properties": {
+                                        "representationId": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "contentId": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "mediaType": {
+                                          "type": "string"
+                                        },
+                                        "digest": {
+                                          "type": "string"
+                                        },
+                                        "transformation": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "representationId",
+                                        "contentId",
+                                        "mediaType",
+                                        "digest",
+                                        "transformation"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "attachmentId",
+                                    "name",
+                                    "content"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "contentId",
+                          "position",
+                          "turnId",
+                          "authorship",
+                          "ownership",
+                          "createdAt",
+                          "kind",
+                          "parts"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "contentId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "position": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "turnId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "authorship": {
+                            "type": "object",
+                            "properties": {
+                              "sessionId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "agentTitle": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "modelId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "sessionId",
+                              "agentTitle",
+                              "modelId"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "ownership": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "local"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "kind"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "inherited"
+                                    ]
+                                  },
+                                  "sourceSessionId": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "sourceEntryId": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "sourceSessionId",
+                                  "sourceEntryId"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "agent"
+                            ]
+                          },
+                          "modelCallId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "parts": {
+                            "type": "array",
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "text"
+                                      ]
+                                    },
+                                    "text": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "text"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "media"
+                                      ]
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "content": {
+                                      "type": "object",
+                                      "properties": {
+                                        "representationId": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "contentId": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "mediaType": {
+                                          "type": "string"
+                                        },
+                                        "digest": {
+                                          "type": "string"
+                                        },
+                                        "transformation": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "representationId",
+                                        "contentId",
+                                        "mediaType",
+                                        "digest",
+                                        "transformation"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "name",
+                                    "content"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "contentId",
+                          "position",
+                          "turnId",
+                          "authorship",
+                          "ownership",
+                          "createdAt",
+                          "kind",
+                          "modelCallId",
+                          "parts"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "contentId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "position": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "turnId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "authorship": {
+                            "type": "object",
+                            "properties": {
+                              "sessionId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "agentTitle": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "modelId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "sessionId",
+                              "agentTitle",
+                              "modelId"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "ownership": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "local"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "kind"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "inherited"
+                                    ]
+                                  },
+                                  "sourceSessionId": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "sourceEntryId": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "sourceSessionId",
+                                  "sourceEntryId"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "agent-thought"
+                            ]
+                          },
+                          "modelCallId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "text": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "contentId",
+                          "position",
+                          "turnId",
+                          "authorship",
+                          "ownership",
+                          "createdAt",
+                          "kind",
+                          "modelCallId",
+                          "text"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "contentId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "position": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "turnId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "authorship": {
+                            "type": "object",
+                            "properties": {
+                              "sessionId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "agentTitle": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "modelId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "sessionId",
+                              "agentTitle",
+                              "modelId"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "ownership": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "local"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "kind"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "inherited"
+                                    ]
+                                  },
+                                  "sourceSessionId": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "sourceEntryId": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "sourceSessionId",
+                                  "sourceEntryId"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "agent-tool"
+                            ]
+                          },
+                          "tool": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "agent-tool"
+                                ]
+                              },
+                              "modelCallId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "providerCallId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "parentInvocationId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "arguments": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "structured"
+                                    ]
+                                  },
+                                  "value": {}
+                                },
+                                "required": [
+                                  "id",
+                                  "kind",
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "startedAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "settledAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "outcome": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "success",
+                                      "failed",
+                                      "canceled",
+                                      "declined",
+                                      "interrupted"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "result": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "content": {
+                                        "type": "array",
+                                        "items": {
+                                          "anyOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "id": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                },
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "text"
+                                                  ]
+                                                },
+                                                "text": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "id",
+                                                "kind",
+                                                "text"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "id": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                },
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "media"
+                                                  ]
+                                                },
+                                                "name": {
+                                                  "type": "string"
+                                                },
+                                                "content": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "representationId": {
+                                                      "type": "string",
+                                                      "minLength": 1
+                                                    },
+                                                    "contentId": {
+                                                      "type": "string",
+                                                      "minLength": 1
+                                                    },
+                                                    "mediaType": {
+                                                      "type": "string"
+                                                    },
+                                                    "digest": {
+                                                      "type": "string"
+                                                    },
+                                                    "transformation": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "representationId",
+                                                    "contentId",
+                                                    "mediaType",
+                                                    "digest",
+                                                    "transformation"
+                                                  ],
+                                                  "additionalProperties": false
+                                                }
+                                              },
+                                              "required": [
+                                                "id",
+                                                "kind",
+                                                "name",
+                                                "content"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "structured": {
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "id": {
+                                                "type": "string",
+                                                "minLength": 1
+                                              },
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "structured"
+                                                ]
+                                              },
+                                              "value": {}
+                                            },
+                                            "required": [
+                                              "id",
+                                              "kind",
+                                              "value"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "content",
+                                      "structured"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "captures": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "contentId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "mediaType": {
+                                      "type": "string"
+                                    },
+                                    "byteLength": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "captureLossBytes": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "contentId",
+                                    "name",
+                                    "mediaType",
+                                    "byteLength",
+                                    "captureLossBytes"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "kind",
+                              "modelCallId",
+                              "providerCallId",
+                              "parentInvocationId",
+                              "name",
+                              "arguments",
+                              "startedAt",
+                              "settledAt",
+                              "outcome",
+                              "result",
+                              "captures"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "contentId",
+                          "position",
+                          "turnId",
+                          "authorship",
+                          "ownership",
+                          "createdAt",
+                          "kind",
+                          "tool"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "body": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "contentId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "referenceId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "byteLength": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "contentId",
+                          "referenceId",
+                          "byteLength"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "entry",
+                  "body"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "nextCursor": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "latestSuccessfulBoundaryId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "object",
+            "revision",
+            "items",
+            "nextCursor",
+            "latestSuccessfulBoundaryId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "object": {
+              "type": "string",
+              "enum": [
+                "boundaries"
+              ]
+            },
+            "revision": {
+              "type": "string",
+              "minLength": 1
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "modelCallId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "turnId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "windowPosition": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "committedAt": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "contributionCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "body": {
+                    "type": "object",
+                    "properties": {
+                      "contentId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "referenceId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "byteLength": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "contentId",
+                      "referenceId",
+                      "byteLength"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "id",
+                  "modelCallId",
+                  "turnId",
+                  "windowPosition",
+                  "committedAt",
+                  "contributionCount",
+                  "body"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "nextCursor": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "latestSuccessfulBoundaryId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "object",
+            "revision",
+            "items",
+            "nextCursor",
+            "latestSuccessfulBoundaryId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "session.semantics.body.params": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "entryId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contentId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "sessionId",
+        "entryId",
+        "contentId"
+      ],
+      "additionalProperties": false
+    },
+    "session.semantics.body.result": {
+      "type": "object",
+      "properties": {
+        "entry": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "contentId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "position": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "turnId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "authorship": {
+                  "type": "object",
+                  "properties": {
+                    "sessionId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "agentTitle": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "modelId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "sessionId",
+                    "agentTitle",
+                    "modelId"
+                  ],
+                  "additionalProperties": false
+                },
+                "ownership": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "local"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "inherited"
+                          ]
+                        },
+                        "sourceSessionId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "sourceEntryId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "sourceSessionId",
+                        "sourceEntryId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "system"
+                  ]
+                },
+                "content": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "text"
+                      ]
+                    },
+                    "text": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "text"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "id",
+                "contentId",
+                "position",
+                "turnId",
+                "authorship",
+                "ownership",
+                "createdAt",
+                "kind",
+                "content"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "contentId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "position": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "turnId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "authorship": {
+                  "type": "object",
+                  "properties": {
+                    "sessionId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "agentTitle": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "modelId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "sessionId",
+                    "agentTitle",
+                    "modelId"
+                  ],
+                  "additionalProperties": false
+                },
+                "ownership": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "local"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "inherited"
+                          ]
+                        },
+                        "sourceSessionId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "sourceEntryId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "sourceSessionId",
+                        "sourceEntryId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "developer"
+                  ]
+                },
+                "components": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "seed",
+                          "state",
+                          "notification",
+                          "title",
+                          "global"
+                        ]
+                      },
+                      "heading": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "type": "string"
+                      },
+                      "source": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "type",
+                      "heading",
+                      "text"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "contentId",
+                "position",
+                "turnId",
+                "authorship",
+                "ownership",
+                "createdAt",
+                "kind",
+                "components"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "contentId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "position": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "turnId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "authorship": {
+                  "type": "object",
+                  "properties": {
+                    "sessionId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "agentTitle": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "modelId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "sessionId",
+                    "agentTitle",
+                    "modelId"
+                  ],
+                  "additionalProperties": false
+                },
+                "ownership": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "local"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "inherited"
+                          ]
+                        },
+                        "sourceSessionId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "sourceEntryId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "sourceSessionId",
+                        "sourceEntryId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "user"
+                  ]
+                },
+                "parts": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "text"
+                            ]
+                          },
+                          "text": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "text"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "attachment"
+                            ]
+                          },
+                          "attachmentId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "content": {
+                            "type": "object",
+                            "properties": {
+                              "representationId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "contentId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "mediaType": {
+                                "type": "string"
+                              },
+                              "digest": {
+                                "type": "string"
+                              },
+                              "transformation": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "representationId",
+                              "contentId",
+                              "mediaType",
+                              "digest",
+                              "transformation"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "attachmentId",
+                          "name",
+                          "content"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "contentId",
+                "position",
+                "turnId",
+                "authorship",
+                "ownership",
+                "createdAt",
+                "kind",
+                "parts"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "contentId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "position": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "turnId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "authorship": {
+                  "type": "object",
+                  "properties": {
+                    "sessionId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "agentTitle": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "modelId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "sessionId",
+                    "agentTitle",
+                    "modelId"
+                  ],
+                  "additionalProperties": false
+                },
+                "ownership": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "local"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "inherited"
+                          ]
+                        },
+                        "sourceSessionId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "sourceEntryId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "sourceSessionId",
+                        "sourceEntryId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "agent"
+                  ]
+                },
+                "modelCallId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parts": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "text"
+                            ]
+                          },
+                          "text": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "text"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "media"
+                            ]
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "content": {
+                            "type": "object",
+                            "properties": {
+                              "representationId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "contentId": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "mediaType": {
+                                "type": "string"
+                              },
+                              "digest": {
+                                "type": "string"
+                              },
+                              "transformation": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "representationId",
+                              "contentId",
+                              "mediaType",
+                              "digest",
+                              "transformation"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "name",
+                          "content"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "contentId",
+                "position",
+                "turnId",
+                "authorship",
+                "ownership",
+                "createdAt",
+                "kind",
+                "modelCallId",
+                "parts"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "contentId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "position": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "turnId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "authorship": {
+                  "type": "object",
+                  "properties": {
+                    "sessionId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "agentTitle": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "modelId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "sessionId",
+                    "agentTitle",
+                    "modelId"
+                  ],
+                  "additionalProperties": false
+                },
+                "ownership": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "local"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "inherited"
+                          ]
+                        },
+                        "sourceSessionId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "sourceEntryId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "sourceSessionId",
+                        "sourceEntryId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "agent-thought"
+                  ]
+                },
+                "modelCallId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "contentId",
+                "position",
+                "turnId",
+                "authorship",
+                "ownership",
+                "createdAt",
+                "kind",
+                "modelCallId",
+                "text"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "contentId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "position": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "turnId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "authorship": {
+                  "type": "object",
+                  "properties": {
+                    "sessionId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "agentTitle": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "modelId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "sessionId",
+                    "agentTitle",
+                    "modelId"
+                  ],
+                  "additionalProperties": false
+                },
+                "ownership": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "local"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "inherited"
+                          ]
+                        },
+                        "sourceSessionId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "sourceEntryId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "sourceSessionId",
+                        "sourceEntryId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "agent-tool"
+                  ]
+                },
+                "tool": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "agent-tool"
+                      ]
+                    },
+                    "modelCallId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "providerCallId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "parentInvocationId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "arguments": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "structured"
+                          ]
+                        },
+                        "value": {}
+                      },
+                      "required": [
+                        "id",
+                        "kind",
+                        "value"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "startedAt": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "settledAt": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "outcome": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "success",
+                            "failed",
+                            "canceled",
+                            "declined",
+                            "interrupted"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "result": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "content": {
+                              "type": "array",
+                              "items": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "text"
+                                        ]
+                                      },
+                                      "text": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "kind",
+                                      "text"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "media"
+                                        ]
+                                      },
+                                      "name": {
+                                        "type": "string"
+                                      },
+                                      "content": {
+                                        "type": "object",
+                                        "properties": {
+                                          "representationId": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "contentId": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "mediaType": {
+                                            "type": "string"
+                                          },
+                                          "digest": {
+                                            "type": "string"
+                                          },
+                                          "transformation": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "representationId",
+                                          "contentId",
+                                          "mediaType",
+                                          "digest",
+                                          "transformation"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "kind",
+                                      "name",
+                                      "content"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                ]
+                              }
+                            },
+                            "structured": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "structured"
+                                      ]
+                                    },
+                                    "value": {}
+                                  },
+                                  "required": [
+                                    "id",
+                                    "kind",
+                                    "value"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "content",
+                            "structured"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "captures": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "contentId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "mediaType": {
+                            "type": "string"
+                          },
+                          "byteLength": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "captureLossBytes": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "contentId",
+                          "name",
+                          "mediaType",
+                          "byteLength",
+                          "captureLossBytes"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "modelCallId",
+                    "providerCallId",
+                    "parentInvocationId",
+                    "name",
+                    "arguments",
+                    "startedAt",
+                    "settledAt",
+                    "outcome",
+                    "result",
+                    "captures"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "id",
+                "contentId",
+                "position",
+                "turnId",
+                "authorship",
+                "ownership",
+                "createdAt",
+                "kind",
+                "tool"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "entry"
+      ],
+      "additionalProperties": false
+    },
+    "session.semantics.boundary.params": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "manifestId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "sessionId",
+        "manifestId"
+      ],
+      "additionalProperties": false
+    },
+    "session.semantics.boundary.result": {
+      "type": "object",
+      "properties": {
+        "boundary": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "modelCallId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "turnId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "windowPosition": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "committedAt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "contributions": {
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "position": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "instruction",
+                          "message",
+                          "transcript"
+                        ]
+                      },
+                      "sourceEntryId": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "sourceEntryIds": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "representation": {
+                        "type": "object",
+                        "properties": {
+                          "representationId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "contentId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "mediaType": {
+                            "type": "string"
+                          },
+                          "digest": {
+                            "type": "string"
+                          },
+                          "transformation": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "representationId",
+                          "contentId",
+                          "mediaType",
+                          "digest",
+                          "transformation"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "transformation": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "rendered": {
+                        "type": "object",
+                        "properties": {
+                          "representationId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "contentId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "mediaType": {
+                            "type": "string"
+                          },
+                          "digest": {
+                            "type": "string"
+                          },
+                          "byteLength": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "renderer": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "representationId",
+                          "contentId",
+                          "mediaType",
+                          "digest",
+                          "byteLength",
+                          "renderer"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "position",
+                      "kind",
+                      "sourceEntryId",
+                      "sourceEntryIds",
+                      "representation",
+                      "transformation",
+                      "rendered"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "position": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "tool-definition"
+                        ]
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "parameters": {},
+                      "rendered": {
+                        "type": "object",
+                        "properties": {
+                          "representationId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "contentId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "mediaType": {
+                            "type": "string"
+                          },
+                          "digest": {
+                            "type": "string"
+                          },
+                          "byteLength": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "renderer": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "representationId",
+                          "contentId",
+                          "mediaType",
+                          "digest",
+                          "byteLength",
+                          "renderer"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "position",
+                      "kind",
+                      "name",
+                      "description",
+                      "parameters",
+                      "rendered"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "position": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "placeholder"
+                        ]
+                      },
+                      "sourceEntryId": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "reason": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "position",
+                      "kind",
+                      "sourceEntryId",
+                      "reason"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "measurement": {
+              "type": "object",
+              "properties": {
+                "method": {
+                  "type": "string",
+                  "enum": [
+                    "ashe-agent-estimator"
+                  ]
+                },
+                "methodVersion": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "purpose": {
+                  "type": "string",
+                  "enum": [
+                    "execution",
+                    "analysis"
+                  ]
+                },
+                "coverage": {
+                  "type": "string",
+                  "enum": [
+                    "complete",
+                    "partial"
+                  ]
+                },
+                "knownSubtotal": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "contributions": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "contributionPosition": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "basis": {
+                        "type": "string",
+                        "enum": [
+                          "ashe-agent-text-v1",
+                          "configured-image-allowance",
+                          "configured-pdf-allowance",
+                          "provider-reported",
+                          "unavailable"
+                        ]
+                      },
+                      "methodVersion": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      "tokens": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "representationIds": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "unavailableReason": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "contributionPosition",
+                      "basis",
+                      "methodVersion",
+                      "tokens",
+                      "representationIds"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "unavailable": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "contributionPosition": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "reason": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "contributionPosition",
+                      "reason"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "method",
+                "methodVersion",
+                "purpose",
+                "coverage",
+                "knownSubtotal",
+                "contributions",
+                "unavailable"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "id",
+            "modelCallId",
+            "turnId",
+            "windowPosition",
+            "committedAt",
+            "contributions",
+            "measurement"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "boundary"
+      ],
+      "additionalProperties": false
+    },
+    "session.modelCalls.usage.params": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "modelCallIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxItems": 100
+        }
+      },
+      "required": [
+        "sessionId",
+        "modelCallIds"
+      ],
+      "additionalProperties": false
+    },
+    "session.modelCalls.usage.result": {
+      "type": "object",
+      "properties": {
+        "usage": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "modelCallId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "providerUsage": {
+                "type": "object",
+                "properties": {
+                  "inputTokens": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "outputTokens": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "totalTokens": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "inputTokens",
+                  "outputTokens",
+                  "totalTokens"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "modelCallId",
+              "providerUsage"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "usage"
+      ],
+      "additionalProperties": false
+    },
     "session.grants.list.params": {
       "type": "object",
       "properties": {
@@ -8981,10 +14099,20 @@
         "runId": {
           "type": "string",
           "minLength": 1
+        },
+        "historyScope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operationId": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "required": [
-        "sessionId"
+        "sessionId",
+        "historyScope",
+        "operationId"
       ],
       "additionalProperties": false
     },
@@ -9175,6 +14303,14 @@
           "type": "string",
           "minLength": 1
         },
+        "historyScope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operationId": {
+          "type": "string",
+          "minLength": 1
+        },
         "text": {
           "type": "string"
         },
@@ -9218,12 +14354,269 @@
       },
       "required": [
         "sessionId",
-        "runId"
+        "runId",
+        "historyScope",
+        "operationId"
       ],
       "additionalProperties": false
     },
     "session.rewind.result": {
       "type": "object"
+    },
+    "session.history.inspect.params": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "additionalProperties": false
+    },
+    "session.history.inspect.result": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "object",
+          "properties": {
+            "token": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sessionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "targetRunId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "readRevision": {
+              "type": "string",
+              "minLength": 1
+            },
+            "activeTurnId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "pendingInputIds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "contextActive": {
+              "type": "boolean"
+            },
+            "restorePending": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "token",
+            "sessionId",
+            "targetRunId",
+            "readRevision",
+            "activeTurnId",
+            "pendingInputIds",
+            "contextActive",
+            "restorePending"
+          ],
+          "additionalProperties": false
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "position": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "userMessageIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "affectedTurnIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "pendingInputIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "rewindEligible": {
+                  "type": "boolean"
+                },
+                "forkEligible": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "runId",
+                "position",
+                "userMessageIds",
+                "affectedTurnIds",
+                "pendingInputIds",
+                "rewindEligible",
+                "forkEligible"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "scope",
+        "target"
+      ],
+      "additionalProperties": false
+    },
+    "session.history.result.params": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operationId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "sessionId",
+        "operationId"
+      ],
+      "additionalProperties": false
+    },
+    "session.history.result.result": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "observed"
+              ]
+            },
+            "operationId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "action": {
+              "type": "string",
+              "enum": [
+                "rewind",
+                "fork"
+              ]
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "succeeded"
+              ]
+            },
+            "result": {}
+          },
+          "required": [
+            "kind",
+            "operationId",
+            "action",
+            "status",
+            "result"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "unresolved"
+              ]
+            },
+            "operationId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "action": {
+              "type": "string",
+              "enum": [
+                "rewind",
+                "fork"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "operationId",
+            "action"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "not_observed"
+              ]
+            },
+            "operationId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "operationId"
+          ],
+          "additionalProperties": false
+        }
+      ]
     },
     "content.get.params": {
       "type": "object",
@@ -9363,6 +14756,103 @@
       ],
       "additionalProperties": false
     },
+    "content.capture.params": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "entryId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contentId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536
+        }
+      },
+      "required": [
+        "sessionId",
+        "entryId",
+        "contentId",
+        "offset",
+        "length"
+      ],
+      "additionalProperties": false
+    },
+    "content.capture.result": {
+      "type": "object",
+      "properties": {
+        "capture": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "entryId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "contentId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "type": "string"
+            },
+            "mediaType": {
+              "type": "string"
+            },
+            "byteLength": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "captureLossBytes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "data": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "sessionId",
+            "entryId",
+            "contentId",
+            "name",
+            "mediaType",
+            "byteLength",
+            "captureLossBytes",
+            "offset",
+            "data"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "capture"
+      ],
+      "additionalProperties": false
+    },
     "upload.create.params": {
       "type": "object",
       "properties": {
@@ -9449,6 +14939,14 @@
             },
             "claimed": {
               "type": "boolean"
+            },
+            "attachmentId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "contentId": {
+              "type": "string",
+              "minLength": 1
             }
           },
           "required": [
@@ -9543,6 +15041,14 @@
             },
             "claimed": {
               "type": "boolean"
+            },
+            "attachmentId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "contentId": {
+              "type": "string",
+              "minLength": 1
             }
           },
           "required": [
@@ -9647,6 +15153,14 @@
             },
             "claimed": {
               "type": "boolean"
+            },
+            "attachmentId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "contentId": {
+              "type": "string",
+              "minLength": 1
             }
           },
           "required": [
@@ -9751,6 +15265,14 @@
             },
             "claimed": {
               "type": "boolean"
+            },
+            "attachmentId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "contentId": {
+              "type": "string",
+              "minLength": 1
             }
           },
           "required": [

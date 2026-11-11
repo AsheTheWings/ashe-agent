@@ -609,7 +609,7 @@ describe("content measurement and retention", () => {
       const session = h.create()
       const ref = upload(h, "pdf", "report.pdf", "application/pdf", readFileSync("packages/harness/test/fixtures/documents/orchard.pdf"))
       h.model.next(say("read it"))
-      const inputId = h.hub.input(session, "inspect", "steer", h.sender, { attachments: [ref] })
+      const inputId = h.hub.input(session, "inspect", "steer", h.sender, { attachments: [ref] }).inputId
       await h.turnsEnded(session, 1)
       expect(converter.calls).toHaveLength(1)
       const content = h.model.last().messages.flatMap((message) => typeof message.content === "string" ? [] : message.content)

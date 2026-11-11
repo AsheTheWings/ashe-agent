@@ -150,6 +150,26 @@ pair, or the source's stable current files when no later turn exists, and copies
 source's scratch, keeping symlinks, skipping sockets, FIFOs, and devices,
 and refusing a scratch over 2 GiB.
 
+## Built-in web state
+
+The built-in web backend owns a separate SQLite database, `web.sqlite`,
+under its configured web state directory. It never reads or joins the
+harness's private tables. It stores the bound harness identity, shared
+session organization rows, durable operation receipts, observer cursors,
+and one global revision. Each accepted semantic organization command,
+its receipt and its resulting revision commit in one transaction; an
+observer event commits its consumed source cursor with every derived
+organization change. Replayed source events are deduplicated by cursor.
+
+The binding row records the first online-validated `harnessId` and is not
+rewritten. A different identity refuses reads and mutations while leaving
+the state untouched. Browser drafts are not in this database: they stay
+partitioned in browser storage and are never synchronized as shared
+authority. The public consistent-dump contract below applies separately to
+the web database; the companion operating docs own its schedule, repair,
+and copy boundaries. [Authentication](authentication.md) owns identity
+validation.
+
 ## Migrations
 
 The schema comes only from the migrations in `packages/harness/migrations`.
@@ -179,6 +199,12 @@ rebuilds tool lifecycle rows with explicit unavailable call markers and
 session-scoped foreign keys, and replaces the compatibility views with the
 declared text, numeric-position, and settled-result shapes.
 
+The web backend has its own ordered migration directory and
+`web_schema_migrations` ledger. Its runner refuses drift, gaps, duplicates
+and unknown recorded migrations, applies each pending file in one
+transaction, and reads status without writing. Startup only validates that
+every migration is current; it never synchronizes the schema.
+
 ## Dumps
 
 A dump writes a consistent copy of the live database with SQLite's
@@ -190,3 +216,7 @@ destination unchanged. Only flushing the directory after the rename can
 still fail; its error says the complete copy is in place but the rename
 may not survive a crash. The copy is an ordinary SQLite file that opens
 without the server.
+
+`ashe-agent-web db dump <path>` applies the same temporary-name and rename
+contract to `web.sqlite`. Its temporary file is in the destination's
+directory and only the run's own file is removed on failure.
