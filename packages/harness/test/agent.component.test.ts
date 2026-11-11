@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { rmSync, symlinkSync, unlinkSync } from "node:fs"
 import { join } from "node:path"
+import { AIMessage } from "@langchain/core/messages"
 import type { SessionEvent } from "@ashe-agent/protocol"
 import { REQUEST_INSTRUCTIONS } from "../src/agent/blocks.ts"
 import type { Tool } from "../src/agent/tools.ts"
@@ -259,9 +260,9 @@ describe("the agent loop", () => {
     }
     await withHarness(
       async (h) => {
-        expect(h.hub.create({ agent: "pinned", model: alpha }).model).toBe(beta)
-        expect(h.hub.create({ agent: "free", model: beta }).model).toBe(beta)
-        expect(h.hub.create({ agent: "free" }).model).toBe(alpha)
+        expect(h.hub.create({ agent: "pinned", model: alpha }).selection.modelSettings.modelId).toBe(beta)
+        expect(h.hub.create({ agent: "free", model: beta }).selection.modelSettings.modelId).toBe(beta)
+        expect(h.hub.create({ agent: "free" }).selection.modelSettings.modelId).toBe(alpha)
         expect(() => h.hub.create({ agent: "broken" })).toThrow("no configured model no/such")
       },
       { setup },
@@ -280,11 +281,14 @@ describe("the agent loop", () => {
         "INPUT_WAITING",
         "INPUT_RECEIVED",
         "RUN_STARTED",
+        "MODEL_CALL_STARTED",
         "TOOL_CALL_START",
         "TOOL_CALL_ARGS",
         "TOOL_CALL_END",
+        "MODEL_CALL_COMMITTED",
         "TOOL_EXECUTION_STARTED",
         "TOOL_CALL_RESULT",
+        "MODEL_CALL_STARTED",
         "REASONING_START",
         "REASONING_MESSAGE_START",
         "REASONING_MESSAGE_CONTENT",
@@ -293,8 +297,10 @@ describe("the agent loop", () => {
         "TEXT_MESSAGE_START",
         "TEXT_MESSAGE_CONTENT",
         "TEXT_MESSAGE_END",
+        "MODEL_CALL_COMMITTED",
         "RUN_FINISHED",
       ])
+      expect(ofType(h.events(id), "MODEL_CALL_STARTED").map((event) => event.ordinal)).toEqual([1, 2])
       const items = responsesInput(h.model.last())
       expect(items.map((item) => item.type)).toEqual(["message", "function_call", "function_call_output"])
       expect(items[1]).toMatchObject({ name: "echo", arguments: '{"text":"a"}' })
@@ -348,7 +354,7 @@ describe("the agent loop", () => {
     )
   })
 
-  test("a model call that fails after streaming a tool call gives the call a failed result", async () => {
+  test("a model call that fails after streaming a tool call discards its provisional output", async () => {
     const streamThenFail: Reply = async function* (call, signal) {
       yield* callTools([{ name: "echo", args: { text: "never" }, id: "call_partial" }])(call, signal)
       throw new Error("connection reset")
@@ -358,14 +364,220 @@ describe("the agent loop", () => {
       h.model.next(streamThenFail)
       h.input(id, "go")
       await h.turnsEnded(id, 1)
-      expect(h.types(id).slice(-5)).toEqual(["TOOL_CALL_START", "TOOL_CALL_ARGS", "TOOL_CALL_END", "TOOL_CALL_RESULT", "RUN_ERROR"])
-      const result = ofType(h.events(id), "TOOL_CALL_RESULT")[0]
-      expect(result).toMatchObject({ toolCallId: "call_partial", outcome: "failed", content: "The tool call failed when its turn failed before it started." })
+      expect(h.types(id).slice(-5)).toEqual([
+        "MODEL_CALL_STARTED",
+        "TOOL_CALL_START",
+        "TOOL_CALL_ARGS",
+        "MODEL_CALL_DISCARDED",
+        "RUN_ERROR",
+      ])
+      expect(ofType(h.events(id), "TOOL_CALL_RESULT")).toEqual([])
       expect(ofType(h.events(id), "RUN_ERROR")[0]).toMatchObject({ code: "model_failed" })
       h.model.next(say("next"))
       h.input(id, "again")
       await h.turnsEnded(id, 2)
       expect(responsesInput(h.model.last()).some((item) => item.type === "function_call" || item.type === "function_call_output")).toBe(false)
+    })
+  })
+
+  test("repeated provider tool ids stay scoped to the model call that streamed them", async () => {
+    const streamThenFail: Reply = async function* (call, signal) {
+      yield* callTools([{ name: "echo", args: { text: "discard" }, id: "call_1" }])(call, signal)
+      throw new Error("connection reset")
+    }
+    await withHarness(async (h) => {
+      const id = h.create()
+      h.model.next(callTools([{ name: "echo", args: { text: "keep" }, id: "call_1" }]), streamThenFail)
+      h.input(id, "go")
+      await h.turnsEnded(id, 1)
+      const results = ofType(h.events(id), "TOOL_CALL_RESULT")
+      const discarded = ofType(h.events(id), "MODEL_CALL_DISCARDED")
+      expect(results).toHaveLength(1)
+      expect(results[0]).toMatchObject({ toolCallId: "call_1", content: "echoed keep", outcome: "success" })
+      expect(discarded).toHaveLength(1)
+      expect(discarded[0]!.modelCallId).not.toBe(results[0]!.modelCallId)
+    })
+  })
+
+  test("recovery discards a model call a crash left open before the turn is interrupted", async () => {
+    await withHarness(async (h) => {
+      const id = h.create()
+      h.model.next(say("earlier committed"))
+      h.input(id, "first")
+      await h.turnsEnded(id, 1)
+      const session = h.hub.store.getSession(id)!
+      const runId = crypto.randomUUID()
+      const timestamp = Date.now()
+      h.hub.store.insertTurn(
+        id,
+        {
+          runId,
+          cause: "user",
+          membership: [{ kind: "user", inputId: "crashed-input" }],
+          userMessageIds: ["crashed-input"],
+          model: session.model,
+          reasoningEffort: session.reasoningEffort,
+          firstSeq: session.nextSeq,
+          contextWorkflowId: null,
+          contextStartItem: null,
+        },
+        timestamp,
+      )
+      h.hub.store.appendEvent(
+        id,
+        {
+          type: "RUN_STARTED",
+          threadId: id,
+          runId,
+          selection: { agentTitle: "untitled", modelSettings: { modelId: session.model, reasoningEffort: null } },
+          settingsRevision: runId,
+          cause: "user",
+          userMessageIds: ["crashed-input"],
+          membership: [{ kind: "user", inputId: "crashed-input" }],
+        },
+        timestamp,
+      )
+      h.hub.store.appendEvent(id, { type: "MODEL_CALL_STARTED", runId, modelCallId: "open-call", ordinal: 1 }, timestamp)
+      h.hub.store.appendEvent(
+        id,
+        { type: "TEXT_MESSAGE_START", modelCallId: "open-call", messageId: "partial", role: "assistant" },
+        timestamp,
+      )
+      h.hub.store.appendEvent(
+        id,
+        { type: "TEXT_MESSAGE_CONTENT", modelCallId: "open-call", messageId: "partial", delta: "discarded" },
+        timestamp,
+      )
+      h.hub.recover()
+      const events = h.events(id).map(({ event }) => event)
+      const discard = events.findIndex(
+        (event) => event.type === "MODEL_CALL_DISCARDED" && event.modelCallId === "open-call" && event.reason === "interrupted",
+      )
+      const interrupted = events.findIndex((event) => event.type === "RUN_INTERRUPTED" && event.runId === runId)
+      expect(discard).toBeGreaterThan(-1)
+      expect(interrupted).toBeGreaterThan(discard)
+      expect(events.some((event) => event.type === "TEXT_MESSAGE_CONTENT" && event.delta === "earlier committed")).toBe(true)
+      expect(h.hub.store.getTurn(id, runId)?.status).toBe("interrupted")
+    })
+  })
+
+  test("recovery keeps a committed result and does not materialize a provisional repeated call", async () => {
+    await withHarness(async (h) => {
+      const id = h.create()
+      const session = h.hub.store.getSession(id)!
+      const runId = crypto.randomUUID()
+      const timestamp = Date.now()
+      h.hub.store.insertTurn(
+        id,
+        {
+          runId,
+          cause: "user",
+          membership: [{ kind: "user", inputId: "manual-input" }],
+          userMessageIds: ["manual-input"],
+          model: session.model,
+          reasoningEffort: session.reasoningEffort,
+          firstSeq: session.nextSeq,
+          contextWorkflowId: null,
+          contextStartItem: null,
+        },
+        timestamp,
+      )
+      const window = h.hub.store.conversation.currentWindow(id)!
+      const owner = { runId, model: session.model }
+      h.hub.store.appendEvent(id, { type: "MODEL_CALL_STARTED", runId, modelCallId: "mc1", ordinal: 1 }, timestamp)
+      h.hub.store.appendEvent(
+        id,
+        { type: "TOOL_CALL_START", modelCallId: "mc1", toolCallId: "call_1", toolCallName: "echo" },
+        timestamp,
+      )
+      h.hub.store.appendEvent(id, { type: "MODEL_CALL_COMMITTED", runId, modelCallId: "mc1", inputBoundaryId: "b1" }, timestamp)
+      h.hub.store.conversation.appendItem(id, window.position, owner, {
+        kind: "assistant",
+        message: new AIMessage({
+          content: "",
+          tool_calls: [{ id: "call_1", name: "echo", args: { text: "keep" }, type: "tool_call" }],
+        }),
+      })
+      h.hub.store.conversation.appendItem(id, window.position, owner, {
+        kind: "result",
+        callId: "call_1",
+        name: "echo",
+        content: "kept result",
+        outcome: "success",
+      })
+      h.hub.store.appendEvent(
+        id,
+        { type: "TOOL_CALL_RESULT", modelCallId: "mc1", messageId: "result-1", toolCallId: "call_1", role: "tool", content: "kept result", outcome: "success" },
+        timestamp,
+      )
+      h.hub.store.appendEvent(id, { type: "MODEL_CALL_STARTED", runId, modelCallId: "mc2", ordinal: 2 }, timestamp)
+      h.hub.store.appendEvent(
+        id,
+        { type: "TOOL_CALL_START", modelCallId: "mc2", toolCallId: "call_1", toolCallName: "wait" },
+        timestamp,
+      )
+      h.hub.store.appendEvent(
+        id,
+        { type: "TOOL_CALL_ARGS", modelCallId: "mc2", toolCallId: "call_1", delta: "{}" },
+        timestamp,
+      )
+      h.hub.recover()
+      const results = h.hub.store.conversation.turnItems(id, runId).filter((item) => item.kind === "result")
+      expect(results).toHaveLength(1)
+      expect(results[0]).toMatchObject({ callId: "call_1", name: "echo", content: "kept result", outcome: "success" })
+    })
+  })
+
+  test("a failure while committing a streamed response discards that model call", async () => {
+    await withHarness(async (h) => {
+      const id = h.create()
+      h.model.next(say("earlier"))
+      h.input(id, "first")
+      await h.turnsEnded(id, 1)
+      h.db.run(
+        "CREATE TRIGGER fail_model_commit BEFORE INSERT ON events WHEN NEW.body LIKE '%MODEL_CALL_COMMITTED%' BEGIN SELECT RAISE(ABORT, 'injected'); END",
+      )
+      h.model.next(say("discard me"))
+      h.input(id, "second")
+      await h.turnsEnded(id, 2)
+      const events = h.events(id).map(({ event }) => event)
+      const failureAt = events.findIndex((event) => event.type === "RUN_ERROR")
+      const discard = events.findIndex(
+        (event) => event.type === "MODEL_CALL_DISCARDED" && event.reason === "failed",
+      )
+      expect(discard).toBeGreaterThan(-1)
+      expect(discard).toBeLessThan(failureAt)
+      expect(events.some((event) => event.type === "TEXT_MESSAGE_CONTENT" && event.delta === "earlier")).toBe(true)
+      const discarded = ofType(h.events(id), "MODEL_CALL_DISCARDED").find((event) => event.reason === "failed")!
+      expect(
+        ofType(h.events(id), "MODEL_CALL_COMMITTED").some((event) => event.modelCallId === discarded.modelCallId),
+      ).toBe(false)
+    })
+  })
+
+  test("a post-commit context failure keeps the durable model call and assistant response", async () => {
+    await withHarness(async (h) => {
+      const id = h.create()
+      const waiting = gate()
+      h.model.next(hold(waiting.promise, say("committed survives")))
+      h.input(id, "run")
+      await h.calls(1)
+      const context = (h.hub as unknown as { context: { afterItems: (sessionId: string, turn: unknown) => void } }).context
+      context.afterItems = () => {
+        throw new Error("post-commit context failed")
+      }
+      waiting.open()
+      await h.turnsEnded(id, 1)
+      const committed = ofType(h.events(id), "MODEL_CALL_COMMITTED")
+      expect(committed).toHaveLength(1)
+      expect(
+        ofType(h.events(id), "MODEL_CALL_DISCARDED").some((event) => event.modelCallId === committed[0]!.modelCallId),
+      ).toBe(false)
+      expect(ofType(h.events(id), "RUN_ERROR")).toHaveLength(1)
+      const turn = h.hub.store.turns(id)[0]!
+      expect(turn.status).toBe("failed")
+      const assistant = h.hub.store.conversation.turnItems(id, turn.runId).find((item) => item.kind === "assistant")
+      expect(assistant?.kind === "assistant" ? messageText(assistant.message) : null).toBe("committed survives")
     })
   })
 
@@ -599,7 +811,7 @@ describe("fork and rewind", () => {
       h.input(id, "running")
       await h.calls(before + 1)
       const settledFork = h.hub.fork(id, undefined)
-      expect(settledFork).toMatchObject({ running: false })
+      expect(settledFork).toMatchObject({ activity: "idle" })
       expect(h.hub.isRunning(settledFork.id)).toBe(false)
       expect(h.hub.store.conversation.waiting(settledFork.id)).toEqual([])
       h.model.next(say("rewound while running"))

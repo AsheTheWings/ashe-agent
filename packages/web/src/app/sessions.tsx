@@ -171,10 +171,12 @@ export const SessionList = () => {
               >
                 <span className="flex items-center gap-2">
                   <span className="truncate font-mono text-xs">{session.id}</span>
-                  {session.running && <Badge variant="secondary">running</Badge>}
+                  {session.activity === "working" && <Badge variant="secondary">working</Badge>}
                 </span>
                 <span className="text-muted-foreground truncate text-xs">
-                  {session.agent === null ? session.model : `${session.agent} · ${session.model}`} ·{" "}
+                  {session.selection.agentTitle === "untitled"
+                    ? (session.selection.modelSettings.modelId ?? "unconfigured")
+                    : `${session.selection.agentTitle} · ${session.selection.modelSettings.modelId ?? "unconfigured"}`} ·{" "}
                   {new Date(session.createdAt).toLocaleString()}
                 </span>
               </button>

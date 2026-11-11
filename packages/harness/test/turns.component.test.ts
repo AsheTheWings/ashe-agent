@@ -60,6 +60,12 @@ describe("turn admission ownership", () => {
       h.input(id, "first")
       await h.calls(1)
       h.hub.setModel(id, beta!.id, undefined, h.sender)
+      h.hub.store.db.run("UPDATE sessions SET agent_key = 'writer' WHERE id = ?", [id])
+      expect(h.hub.summary(id)).toMatchObject({
+        selection: { agentTitle: "writer", modelSettings: { modelId: beta!.id } },
+        activeSelection: { agentTitle: "untitled", modelSettings: { modelId: alpha!.id } },
+      })
+      h.hub.store.db.run("UPDATE sessions SET agent_key = NULL WHERE id = ?", [id])
       h.input(id, "steer")
       first.open()
       await h.calls(2)
@@ -67,6 +73,7 @@ describe("turn admission ownership", () => {
       expect(h.model.calls[1]!.call.model).toBe(beta!.id)
       second.open()
       await h.turnsEnded(id, 2)
+      expect(h.hub.summary(id)).toMatchObject({ selection: { modelSettings: { modelId: beta!.id } }, activeSelection: null })
     } finally {
       await h.cleanup()
     }

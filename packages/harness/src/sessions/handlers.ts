@@ -33,7 +33,17 @@ export const sessionHandlers = (hub: SessionHub) => {
       return { agents: [...agents], defaultAgent }
     },
     "session.list": async () => ({ sessions: [...hub.list()] }),
-    "session.create": async (params) => ({ session: hub.create(params) }),
+    "session.create": async (params) => ({
+      session: hub.create({
+        ...(params.selection?.agentTitle === undefined ? {} : { agent: params.selection.agentTitle }),
+        ...(params.selection?.modelSettings?.modelId == null
+          ? {}
+          : { model: params.selection.modelSettings.modelId }),
+        ...(params.selection?.modelSettings?.reasoningEffort == null
+          ? {}
+          : { reasoningEffort: params.selection.modelSettings.reasoningEffort }),
+      }),
+    }),
     "session.subscribe": async (params, context) => {
       const session = hub.summary(params.sessionId)
       const mine = of(context.connection)
@@ -76,10 +86,6 @@ export const sessionHandlers = (hub: SessionHub) => {
     },
     "session.cancel": async (params) => {
       hub.cancel(params.sessionId)
-      return {}
-    },
-    "session.setModel": async (params, context) => {
-      hub.setModel(params.sessionId, params.model, params.reasoningEffort, context.principal)
       return {}
     },
     "session.fork": async (params) => ({ session: hub.fork(params.sessionId, params.runId) }),

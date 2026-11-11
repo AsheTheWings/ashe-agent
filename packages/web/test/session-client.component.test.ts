@@ -1,10 +1,19 @@
 import { describe, expect, test } from "bun:test"
+import { renderToStaticMarkup } from "react-dom/server"
 import type { Model, SessionEvent, SessionEventBody } from "@ashe-agent/protocol"
 import { ErrorCode } from "@ashe-agent/protocol"
 import { REFRESH_MARGIN_MS, SessionClient, storageKeys } from "../src/session/client.ts"
 import type { KeyValueStorage, SessionClientPorts, SocketHandlers } from "../src/session/ports.ts"
 import type { SessionView } from "../src/session/projection.ts"
 import { splitPending } from "../src/chat/pending-permissions.ts"
+import { SelectionReadouts } from "../src/app/selection-readout.ts"
+import {
+  effortControlValue,
+  effortRequestValue,
+  modelControlValue,
+  titleControlValue,
+  titleOptions,
+} from "../src/session/selection-controls.ts"
 
 type Request = { readonly id: number; readonly method: string; readonly params: Record<string, unknown> }
 type Answer = { readonly result: unknown } | { readonly error: { code: number; message: string } }
@@ -16,7 +25,17 @@ const models: Array<Model> = [
   { id: "alpha", name: "Alpha", contextLimit: 200_000, imageInput: false, pdfInput: false, reasoningEfforts: [], reasoningEffort: null },
   { id: "beta", name: "Beta", contextLimit: 480_000, imageInput: true, pdfInput: true, reasoningEfforts: ["low", "high"], reasoningEffort: "low" },
 ]
-const summary = { id: SESSION, sessionDir: "/state/sessions/s1", agent: null, model: "alpha", reasoningEffort: null, createdAt: START, running: false, lastSeq: 0 }
+const selection = { agentTitle: "untitled", modelSettings: { modelId: "alpha", reasoningEffort: null } }
+const summary = {
+  id: SESSION,
+  sessionDir: "/state/sessions/s1",
+  identity: { sessionId: SESSION, agentTitle: "untitled", modelId: "alpha" },
+  selection,
+  activeSelection: null,
+  activity: "idle" as const,
+  createdAt: START,
+  lastSeq: 0,
+}
 const principal = { kind: "login", loginId: "l1" } as const
 
 /** One socket the fake server accepted, with the requests it received. */
@@ -212,9 +231,7 @@ const view = (client: SessionClient): SessionView => client.store.getState().vie
 const created: SessionEventBody = {
   type: "SESSION_CREATED",
   sessionDir: "/state/sessions/s1",
-  agent: null,
-  model: "alpha",
-  reasoningEffort: null,
+  selection,
   forkedFrom: null,
 }
 const sender = principal
@@ -223,10 +240,10 @@ const sender = principal
 const firstTurn: Array<[number, SessionEventBody]> = [
   [1, created],
   [2, { type: "INPUT_RECEIVED", inputId: "i1", text: "greet me", mode: "steer", sender }],
-  [3, { type: "RUN_STARTED", threadId: SESSION, runId: "r1", model: "alpha", cause: "user", userMessageIds: ["i1"], membership: [{ kind: "system", inputId: "system:1" }, { kind: "user", inputId: "i1" }] }],
-  [4, { type: "TEXT_MESSAGE_START", messageId: "m1", role: "assistant" }],
-  [5, { type: "TEXT_MESSAGE_CONTENT", messageId: "m1", delta: "Hel" }],
-  [6, { type: "TEXT_MESSAGE_CONTENT", messageId: "m1", delta: "lo" }],
+  [3, { type: "RUN_STARTED", threadId: SESSION, runId: "r1", selection, settingsRevision: "s1", cause: "user", userMessageIds: ["i1"], membership: [{ kind: "system", inputId: "system:1" }, { kind: "user", inputId: "i1" }] }],
+  [4, { type: "TEXT_MESSAGE_START", modelCallId: "mc1", messageId: "m1", role: "assistant" }],
+  [5, { type: "TEXT_MESSAGE_CONTENT", modelCallId: "mc1", messageId: "m1", delta: "Hel" }],
+  [6, { type: "TEXT_MESSAGE_CONTENT", modelCallId: "mc1", messageId: "m1", delta: "lo" }],
 ]
 const permission: SessionEventBody = {
   type: "PERMISSION_REQUESTED",
@@ -358,6 +375,258 @@ describe("session client", () => {
     expect(socket.requests.at(-1)).toMatchObject({ method: "session.rewind", params: { sessionId: SESSION, runId: "r1" } })
   })
 
+  test("selection changes stay local until input or rewind submission", async () => {
+    const { server, client } = await signedIn()
+    await client.open(SESSION)
+    const socket = server.last()
+    const before = socket.requests.length
+
+    await client.setModel("beta", "high")
+    expect(socket.requests).toHaveLength(before)
+    expect(client.store.getState().requestedSelections[SESSION]).toEqual({
+      modelSettings: { modelId: "beta", reasoningEffort: "high" },
+    })
+
+    await client.send("use the new model")
+    expect(socket.requests.at(-1)).toMatchObject({
+      method: "session.input",
+      params: {
+        sessionId: SESSION,
+        text: "use the new model",
+        selection: { modelSettings: { modelId: "beta", reasoningEffort: "high" } },
+      },
+    })
+    expect(client.store.getState().requestedSelections[SESSION]).toBeUndefined()
+
+    const applied = { agentTitle: "untitled", modelSettings: { modelId: "beta", reasoningEffort: "high" } }
+    socket.push(1, { type: "SELECTION_CHANGED", selection: applied, settingsRevisionId: "s2", sender })
+    socket.push(2, {
+      type: "RUN_STARTED",
+      threadId: SESSION,
+      runId: "r2",
+      selection: applied,
+      settingsRevision: "s2",
+      cause: "user",
+      userMessageIds: [],
+      membership: [],
+    })
+    expect(view(client).model).toBe("beta")
+    expect(view(client).activeSelection).toEqual(applied)
+
+    await client.setModel("alpha")
+    await client.rewind("r1")
+    expect(socket.requests.at(-1)).toMatchObject({
+      method: "session.rewind",
+      params: {
+        sessionId: SESSION,
+        runId: "r1",
+        selection: { modelSettings: { modelId: "alpha", reasoningEffort: null } },
+      },
+    })
+  })
+
+  test("requested title, model, and effort changes accumulate with explicit nulls", async () => {
+    const { server, client } = await signedIn()
+    await client.open(SESSION)
+    const socket = server.last()
+
+    await client.setAgentTitle("writer")
+    expect(client.store.getState().requestedSelections[SESSION]).toEqual({ agentTitle: "writer" })
+    await client.setSelection({ modelSettings: { modelId: "beta" } })
+    await client.setReasoningEffort("high")
+    expect(client.store.getState().requestedSelections[SESSION]).toEqual({
+      agentTitle: "writer",
+      modelSettings: { modelId: "beta", reasoningEffort: "high" },
+    })
+    await client.setReasoningEffort(null)
+    expect(client.store.getState().requestedSelections[SESSION]?.modelSettings).toEqual({
+      modelId: "beta",
+      reasoningEffort: null,
+    })
+    await client.send("use these settings")
+    expect(socket.requests.at(-1)?.params.selection).toEqual({
+      agentTitle: "writer",
+      modelSettings: { modelId: "beta", reasoningEffort: null },
+    })
+    expect(client.store.getState().requestedSelections[SESSION]).toBeUndefined()
+
+    await client.clearModel()
+    expect(client.store.getState().requestedSelections[SESSION]).toEqual({
+      modelSettings: { modelId: null, reasoningEffort: null },
+    })
+  })
+
+  test("selection controls follow requested values, preserve default effort, and represent no model", () => {
+    expect(modelControlValue({ modelSettings: { modelId: "beta" } }, "alpha")).toBe("beta")
+    expect(modelControlValue({ modelSettings: { modelId: null } }, "alpha")).toBeNull()
+    expect(effortControlValue({ modelSettings: { reasoningEffort: null } }, "high", "low")).toBe("low")
+    expect(effortControlValue({ modelSettings: { modelId: "beta" } }, "high", "low")).toBe("high")
+    expect(effortRequestValue("low", "low")).toBeNull()
+    expect(effortRequestValue("high", "low")).toBe("high")
+    const agents = [
+      {
+        key: "code-reviewer",
+        title: "Code Reviewer",
+        description: null,
+        model: null,
+        reasoningEfforts: {},
+        titleFile: { state: "absent" as const },
+      },
+    ]
+    expect(titleOptions(agents)).toEqual([{ value: "code-reviewer", label: "Code Reviewer" }])
+    expect(titleControlValue(undefined, "code-reviewer")).toBe("code-reviewer")
+    const active = { agentTitle: "untitled", modelSettings: { modelId: "alpha", reasoningEffort: null } }
+    const requested = { agentTitle: "code-reviewer", modelSettings: { modelId: "beta", reasoningEffort: "high" } }
+    expect(titleControlValue(requested, "untitled")).toBe("code-reviewer")
+    expect(modelControlValue(requested, active.modelSettings.modelId)).toBe("beta")
+    const applied = { agentTitle: "untitled", modelSettings: { modelId: null, reasoningEffort: null } }
+    const readout = renderToStaticMarkup(SelectionReadouts({ applied, requested, active }))
+    expect(readout).toContain("applied: untitled · no model · default effort")
+    expect(readout).toContain("requested: code-reviewer · beta · high")
+    expect(readout).toContain("active: untitled · alpha · default effort")
+  })
+
+  test("a submission clears only the requested patch it submitted", async () => {
+    const { server, client } = await signedIn()
+    await client.open(SESSION)
+    const socket = server.last()
+    server.held.add("session.input")
+    await client.setModel("alpha")
+    const sending = client.send("first")
+    for (let turn = 0; turn < 20 && server.pending.length === 0; turn++) await Promise.resolve()
+    await client.setModel("beta")
+    server.pending.shift()!()
+    await sending
+    expect(client.store.getState().requestedSelections[SESSION]).toEqual({
+      modelSettings: { modelId: "beta", reasoningEffort: null },
+    })
+    server.held.delete("session.input")
+    await client.send("second")
+    expect(socket.requests.at(-1)?.params.selection).toEqual({
+      modelSettings: { modelId: "beta", reasoningEffort: null },
+    })
+    expect(client.store.getState().requestedSelections[SESSION]).toBeUndefined()
+  })
+
+  test("discarded model output is removed while earlier committed output remains", async () => {
+    const { server, client } = await signedIn()
+    await client.open(SESSION)
+    const socket = server.last()
+    socket.push(1, created)
+    socket.push(2, {
+      type: "RUN_STARTED",
+      threadId: SESSION,
+      runId: "r1",
+      selection,
+      settingsRevision: "s1",
+      cause: "user",
+      userMessageIds: [],
+      membership: [],
+    })
+    socket.push(3, { type: "MODEL_CALL_STARTED", runId: "r1", modelCallId: "mc1", ordinal: 1 })
+    socket.push(4, { type: "TEXT_MESSAGE_START", modelCallId: "mc1", messageId: "kept", role: "assistant" })
+    socket.push(5, { type: "TEXT_MESSAGE_CONTENT", modelCallId: "mc1", messageId: "kept", delta: "kept" })
+    socket.push(6, { type: "MODEL_CALL_COMMITTED", runId: "r1", modelCallId: "mc1", inputBoundaryId: "b1" })
+    socket.push(7, { type: "MODEL_CALL_STARTED", runId: "r1", modelCallId: "mc2", ordinal: 2 })
+    socket.push(8, { type: "TEXT_MESSAGE_START", modelCallId: "mc2", messageId: "discard", role: "assistant" })
+    socket.push(9, { type: "TEXT_MESSAGE_CONTENT", modelCallId: "mc2", messageId: "discard", delta: "discard" })
+    socket.push(10, { type: "MODEL_CALL_DISCARDED", runId: "r1", modelCallId: "mc2", reason: "failed" })
+    expect(texts(view(client))).toEqual(["assistant:kept:running"])
+  })
+
+  test("a repeated provider tool id is scoped to its model call when discarded", async () => {
+    const { server, client } = await signedIn()
+    await client.open(SESSION)
+    const socket = server.last()
+    socket.push(1, created)
+    socket.push(2, {
+      type: "RUN_STARTED",
+      threadId: SESSION,
+      runId: "r1",
+      selection,
+      settingsRevision: "s1",
+      cause: "user",
+      userMessageIds: [],
+      membership: [],
+    })
+    socket.push(3, { type: "MODEL_CALL_STARTED", runId: "r1", modelCallId: "mc1", ordinal: 1 })
+    socket.push(4, { type: "TOOL_CALL_START", modelCallId: "mc1", toolCallId: "call_1", toolCallName: "echo" })
+    socket.push(5, { type: "TOOL_CALL_ARGS", modelCallId: "mc1", toolCallId: "call_1", delta: '{"text":"kept"}' })
+    socket.push(6, { type: "TOOL_CALL_END", modelCallId: "mc1", toolCallId: "call_1" })
+    socket.push(7, { type: "MODEL_CALL_COMMITTED", runId: "r1", modelCallId: "mc1", inputBoundaryId: "b1" })
+    socket.push(8, {
+      type: "TOOL_CALL_RESULT",
+      modelCallId: "mc1",
+      messageId: "tool-result-1",
+      toolCallId: "call_1",
+      role: "tool",
+      content: "kept result",
+      outcome: "success",
+    })
+    socket.push(9, { type: "MODEL_CALL_STARTED", runId: "r1", modelCallId: "mc2", ordinal: 2 })
+    socket.push(10, { type: "TOOL_CALL_START", modelCallId: "mc2", toolCallId: "call_1", toolCallName: "echo" })
+    socket.push(11, { type: "TOOL_CALL_ARGS", modelCallId: "mc2", toolCallId: "call_1", delta: '{"text":"discard"}' })
+    socket.push(12, { type: "MODEL_CALL_DISCARDED", runId: "r1", modelCallId: "mc2", reason: "failed" })
+    const tools = view(client).items.flatMap((item) =>
+      item.kind === "assistant" ? item.parts.filter((part) => part.type === "tool") : [],
+    )
+    expect(tools).toEqual([
+      expect.objectContaining({ id: "call_1", modelCallId: "mc1", result: { content: "kept result", outcome: "success" } }),
+    ])
+  })
+
+  test("an interrupted run discards provisional parts even without a discard event", async () => {
+    const { server, client } = await signedIn()
+    await client.open(SESSION)
+    const socket = server.last()
+    socket.push(1, created)
+    socket.push(2, {
+      type: "RUN_STARTED",
+      threadId: SESSION,
+      runId: "r1",
+      selection,
+      settingsRevision: "s1",
+      cause: "user",
+      userMessageIds: [],
+      membership: [],
+    })
+    socket.push(3, { type: "MODEL_CALL_STARTED", runId: "r1", modelCallId: "mc1", ordinal: 1 })
+    socket.push(4, { type: "TEXT_MESSAGE_START", modelCallId: "mc1", messageId: "kept", role: "assistant" })
+    socket.push(5, { type: "TEXT_MESSAGE_CONTENT", modelCallId: "mc1", messageId: "kept", delta: "kept" })
+    socket.push(6, { type: "MODEL_CALL_COMMITTED", runId: "r1", modelCallId: "mc1", inputBoundaryId: "b1" })
+    socket.push(7, { type: "MODEL_CALL_STARTED", runId: "r1", modelCallId: "mc2", ordinal: 2 })
+    socket.push(8, { type: "TEXT_MESSAGE_START", modelCallId: "mc2", messageId: "partial", role: "assistant" })
+    socket.push(9, { type: "TEXT_MESSAGE_CONTENT", modelCallId: "mc2", messageId: "partial", delta: "discard" })
+    socket.push(10, { type: "RUN_INTERRUPTED", threadId: SESSION, runId: "r1" })
+    expect(texts(view(client))).toEqual(["assistant:kept:interrupted"])
+  })
+
+  test("a failed run discards provisional parts while retaining an earlier committed response", async () => {
+    const { server, client } = await signedIn()
+    await client.open(SESSION)
+    const socket = server.last()
+    socket.push(1, created)
+    socket.push(2, {
+      type: "RUN_STARTED",
+      threadId: SESSION,
+      runId: "r1",
+      selection,
+      settingsRevision: "s1",
+      cause: "user",
+      userMessageIds: [],
+      membership: [],
+    })
+    socket.push(3, { type: "MODEL_CALL_STARTED", runId: "r1", modelCallId: "mc1", ordinal: 1 })
+    socket.push(4, { type: "TEXT_MESSAGE_START", modelCallId: "mc1", messageId: "kept", role: "assistant" })
+    socket.push(5, { type: "TEXT_MESSAGE_CONTENT", modelCallId: "mc1", messageId: "kept", delta: "kept" })
+    socket.push(6, { type: "MODEL_CALL_COMMITTED", runId: "r1", modelCallId: "mc1", inputBoundaryId: "b1" })
+    socket.push(7, { type: "MODEL_CALL_STARTED", runId: "r1", modelCallId: "mc2", ordinal: 2 })
+    socket.push(8, { type: "TEXT_MESSAGE_START", modelCallId: "mc2", messageId: "partial", role: "assistant" })
+    socket.push(9, { type: "TEXT_MESSAGE_CONTENT", modelCallId: "mc2", messageId: "partial", delta: "discard" })
+    socket.push(10, { type: "RUN_ERROR", runId: "r1", code: "state_integrity_failed", message: "commit failed" })
+    expect(texts(view(client))).toEqual(["assistant:kept:failed"])
+  })
+
   test("queued and failed sends leave questions open, reconnect clears ownership, and fork uses its adapter", async () => {
     const { server, client } = await signedIn()
     await client.open(SESSION)
@@ -422,7 +691,7 @@ describe("session client", () => {
     expect(view(client).runId).toBeNull()
     expect(view(client).lastSeq).toBe(8)
     socket.push(9, { type: "INPUT_RECEIVED", inputId: "i2", text: "greet me again", mode: "steer", sender })
-    socket.push(10, { type: "RUN_STARTED", threadId: SESSION, runId: "r2", model: "alpha", cause: "user", userMessageIds: ["i2"], membership: [{ kind: "system", inputId: "system:1" }, { kind: "user", inputId: "i2" }] })
+    socket.push(10, { type: "RUN_STARTED", threadId: SESSION, runId: "r2", selection, settingsRevision: "s2", cause: "user", userMessageIds: ["i2"], membership: [{ kind: "system", inputId: "system:1" }, { kind: "user", inputId: "i2" }] })
     expect(texts(view(client))).toEqual(["user:greet me again"])
     expect(view(client).items[0]).toMatchObject({ kind: "user", runId: "r2" })
   })
@@ -507,11 +776,11 @@ describe("session client", () => {
       created,
       { type: "CHECKPOINT_WINDOW_SEEDED", runId: null, window: 1, components: [] },
       { type: "INPUT_RECEIVED", inputId: "i1", text: "start", mode: "steer", sender },
-      { type: "RUN_STARTED", threadId: SESSION, runId: "r1", model: "alpha", cause: "user", userMessageIds: ["i1"], membership: [{ kind: "system", inputId: "system:1" }, { kind: "user", inputId: "i1" }] },
+      { type: "RUN_STARTED", threadId: SESSION, runId: "r1", selection, settingsRevision: "s1", cause: "user", userMessageIds: ["i1"], membership: [{ kind: "system", inputId: "system:1" }, { kind: "user", inputId: "i1" }] },
       entry(1, "open", { Text: "Write the parser" }),
       entry(2, "compaction", { Text: "Requests:\n- old" }),
       { type: "TIMELINE_ENTRY_REPLACED", runId: "r1", number: 2, text: "Requests:\n- new" },
-      { type: "TOOL_CALL_START", toolCallId: "tq", toolCallName: "context_ask_question" },
+      { type: "TOOL_CALL_START", modelCallId: "mc1", toolCallId: "tq", toolCallName: "context_ask_question" },
       { type: "QUESTIONS_ASKED", runId: "r1", toolCallId: "tq", questionSetId: "qs1", feedback: "Noted.", questions: [question] },
     ]
     events.forEach((event, index) => socket.push(index + 1, event))
@@ -532,7 +801,7 @@ describe("session client", () => {
     const later: Array<SessionEventBody> = [
       { type: "QUESTIONS_ANSWERED", questionSetId: "qs1", answers: [{ id: "q1", selection: "SQLite", note: "Keep it local." }], sender },
       entry(3, "answer", { Question: "Where?", Selection: "SQLite: a file", UserNote: "Keep it local." }),
-      { type: "TOOL_CALL_RESULT", messageId: "rq", toolCallId: "tq", content: "[ANSWER #3]", role: "tool", outcome: "success" },
+      { type: "TOOL_CALL_RESULT", modelCallId: "mc1", messageId: "rq", toolCallId: "tq", content: "[ANSWER #3]", role: "tool", outcome: "success" },
       entry(4, "done", { Text: "Parser written" }, [1]),
       { type: "SESSION_ERROR", code: "user_instructions_unreadable", message: "AGENTS.md cannot be read; the known user instructions stay", runId: "r1" },
       { type: "INPUT_WAITING", inputId: "i2", text: "held one", mode: "steer", sender },
@@ -572,7 +841,7 @@ describe("session client", () => {
       developer("r2", "Continuation"),
       { type: "INPUT_RECEIVED", inputId: "i2", text: "held one", mode: "steer", sender },
       { type: "INPUT_RECEIVED", inputId: "i3", text: "held two", mode: "steer", sender },
-      { type: "RUN_STARTED", threadId: SESSION, runId: "r2", model: "alpha", cause: "continuation", userMessageIds: ["i2", "i3"], membership: [{ kind: "system", inputId: "system:1" }, { kind: "developer", inputId: "d1" }, { kind: "user", inputId: "i2" }, { kind: "user", inputId: "i3" }] },
+      { type: "RUN_STARTED", threadId: SESSION, runId: "r2", selection, settingsRevision: "s2", cause: "continuation", userMessageIds: ["i2", "i3"], membership: [{ kind: "system", inputId: "system:1" }, { kind: "developer", inputId: "d1" }, { kind: "user", inputId: "i2" }, { kind: "user", inputId: "i3" }] },
       { type: "RUN_FINISHED", threadId: SESSION, runId: "r2", outcome: { type: "success" } },
     )
     expect(pending()).toEqual([])
@@ -588,7 +857,7 @@ describe("session client", () => {
     expect(view(client).pending.map((input) => input.inputId)).toEqual(["i5"])
     push(
       { type: "INPUT_RECEIVED", inputId: "i5", text: "held two", mode: "steer", sender },
-      { type: "RUN_STARTED", threadId: SESSION, runId: "r3", model: "alpha", cause: "continuation", userMessageIds: ["i4", "i5"], membership: [{ kind: "system", inputId: "system:1" }, { kind: "user", inputId: "i4" }, { kind: "user", inputId: "i5" }] },
+      { type: "RUN_STARTED", threadId: SESSION, runId: "r3", selection, settingsRevision: "s3", cause: "continuation", userMessageIds: ["i4", "i5"], membership: [{ kind: "system", inputId: "system:1" }, { kind: "user", inputId: "i4" }, { kind: "user", inputId: "i5" }] },
       { type: "RUN_FINISHED", threadId: SESSION, runId: "r3", outcome: { type: "success" } },
     )
     expect(pending()).toEqual([])

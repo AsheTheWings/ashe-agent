@@ -13,6 +13,7 @@ import {
   type SessionEventBody,
   type SessionSummary,
   type TurnInput,
+  UNTITLED_AGENT_TITLE,
 } from "@ashe-agent/protocol"
 import type { ModelPort } from "../agent/model.ts"
 import { programCallsNote, unfinishedResult } from "../agent/notes.ts"
@@ -74,6 +75,8 @@ export interface TurnContext {
   readonly tools: () => ReadonlyArray<Tool>
   /** Records a model call's assistant message as an item, in one transaction with the events that end its streams. */
   readonly commitAssistant: (message: AIMessage, events: ReadonlyArray<SessionEventBody>) => void
+  /** Runs post-commit context work after the assistant commit becomes durable. */
+  readonly afterCommit: () => void
   /** Records a tool result as an item, in one transaction with its `TOOL_CALL_RESULT` event. */
   readonly commitResult: (
     result: { readonly callId: string; readonly name: string; readonly content: ToolContent; readonly outcome: ToolOutcome },
@@ -237,6 +240,11 @@ export const randomSessionId = (): string => {
 
 const wire = (component: Component) => ({ type: component.type, heading: component.heading, text: component.text })
 
+const effectiveSelection = (session: SessionRecord, model: string, reasoningEffort: string | null) => ({
+  agentTitle: session.agent ?? UNTITLED_AGENT_TITLE,
+  modelSettings: { modelId: model, reasoningEffort },
+})
+
 const isContinuation = (entry: WaitingEntry) => entry.kind === "notification" && entry.trigger === "continuation"
 const isForkAttach = (entry: WaitingEntry) => entry.kind === "notification" && entry.trigger === "fork"
 const takeCause = (taken: ReadonlyArray<WaitingEntry>) =>
@@ -311,29 +319,51 @@ export class SessionHub {
       this.store.db.transaction(() => {
         const turn = this.store.getTurn(sessionId, runId)!
         const window = this.conversation.currentWindow(sessionId)!
-        const items = this.conversation.turnItems(sessionId, runId)
-        const committed = new Map(
-          items.flatMap((item) => (item.kind === "assistant" ? (item.message.tool_calls ?? []).map((call) => [call.id!, call.name] as const) : [])),
-        )
         for (const requestId of this.openRequests(sessionId, runId)) {
           this.store.appendEvent(sessionId, { type: "PERMISSION_WITHDRAWN", requestId, reason: "restart" }, this.now())
         }
-        for (const { toolCallId, started, program } of this.unansweredCalls(sessionId, runId)) {
-          const unfinished = unfinishedResult("interrupted", started)
-          const content = program === null ? unfinished : `${unfinished} ${programCallsNote(program)}`
-          const name = committed.get(toolCallId)
-          if (name !== undefined) {
-            this.conversation.appendItem(sessionId, window.position, { runId, model: turn.model }, {
-              kind: "result",
-              callId: toolCallId,
-              name,
-              content,
-              outcome: "interrupted",
-            })
+        const openModelCalls = new Map<string, string>()
+        const startedCalls = new Map<string, string>()
+        const committedCalls = new Set<string>()
+        for (const { event } of this.turnEvents(sessionId, runId)) {
+          if (event.type === "MODEL_CALL_STARTED") openModelCalls.set(event.modelCallId, event.runId)
+          if (event.type === "TOOL_CALL_START") startedCalls.set(`${event.modelCallId}:${event.toolCallId}`, event.toolCallName)
+          if (event.type === "MODEL_CALL_COMMITTED") committedCalls.add(event.modelCallId)
+          if (event.type === "MODEL_CALL_COMMITTED" || event.type === "MODEL_CALL_DISCARDED") {
+            openModelCalls.delete(event.modelCallId)
           }
+        }
+        for (const modelCallId of openModelCalls.keys()) {
           this.store.appendEvent(
             sessionId,
-            { type: "TOOL_CALL_RESULT", messageId: crypto.randomUUID(), toolCallId, role: "tool", content, outcome: "interrupted" },
+            { type: "MODEL_CALL_DISCARDED", runId, modelCallId, reason: "interrupted" },
+            this.now(),
+          )
+        }
+        for (const { modelCallId, toolCallId, started, program } of this.unansweredCalls(sessionId, runId)) {
+          const unfinished = unfinishedResult("interrupted", started)
+          const content = program === null ? unfinished : `${unfinished} ${programCallsNote(program)}`
+          const key = `${modelCallId}:${toolCallId}`
+          const name = committedCalls.has(modelCallId) ? startedCalls.get(key) : undefined
+          if (name === undefined) continue
+          this.conversation.appendItem(sessionId, window.position, { runId, model: turn.model }, {
+            kind: "result",
+            callId: toolCallId,
+            name,
+            content,
+            outcome: "interrupted",
+          })
+          this.store.appendEvent(
+            sessionId,
+            {
+              type: "TOOL_CALL_RESULT",
+              modelCallId,
+              messageId: crypto.randomUUID(),
+              toolCallId,
+              role: "tool",
+              content,
+              outcome: "interrupted",
+            },
             this.now(),
           )
         }
@@ -528,18 +558,30 @@ export class SessionHub {
 
   /** The tool calls the turn `runId` started streaming that have no result, with whether each started running. */
   private unansweredCalls(sessionId: string, runId: string) {
-    type Call = { toolCallId: string; started: boolean; program: Array<{ tool: string; outcome: string }> | null }
+    type Call = {
+      modelCallId: string
+      toolCallId: string
+      started: boolean
+      program: Array<{ tool: string; outcome: string }> | null
+    }
     const calls = new Map<string, Call>()
     for (const { event } of this.turnEvents(sessionId, runId)) {
       if (event.type === "TOOL_CALL_START") {
-        calls.set(event.toolCallId, { toolCallId: event.toolCallId, started: false, program: event.toolCallName === "execute" ? [] : null })
+        calls.set(`${event.modelCallId}:${event.toolCallId}`, {
+          modelCallId: event.modelCallId,
+          toolCallId: event.toolCallId,
+          started: false,
+          program: event.toolCallName === "execute" ? [] : null,
+        })
       }
-      if (event.type === "PROGRAM_CALL_FINISHED") calls.get(event.toolCallId)?.program?.push({ tool: event.tool, outcome: event.outcome })
+      if (event.type === "PROGRAM_CALL_FINISHED") {
+        calls.get(`${event.modelCallId}:${event.toolCallId}`)?.program?.push({ tool: event.tool, outcome: event.outcome })
+      }
       if (event.type === "TOOL_EXECUTION_STARTED") {
-        const call = calls.get(event.toolCallId)
+        const call = calls.get(`${event.modelCallId}:${event.toolCallId}`)
         if (call !== undefined) call.started = true
       }
-      if (event.type === "TOOL_CALL_RESULT") calls.delete(event.toolCallId)
+      if (event.type === "TOOL_CALL_RESULT") calls.delete(`${event.modelCallId}:${event.toolCallId}`)
     }
     return [...calls.values()]
   }
@@ -803,11 +845,15 @@ export class SessionHub {
 
 
   list(): ReadonlyArray<SessionSummary> {
-    return this.store.listSessions((id) => this.isRunning(id))
+    return this.store.listSessions((id) => this.activeTurn(id))
   }
 
   summary(sessionId: string): SessionSummary {
-    return this.store.summary(this.session(sessionId), this.isRunning(sessionId))
+    return this.store.summary(this.session(sessionId), this.activeTurn(sessionId))
+  }
+
+  private activeTurn(sessionId: string): TurnRecord | null {
+    return this.states.get(sessionId)?.live?.turn ?? null
   }
 
 
@@ -977,18 +1023,19 @@ export class SessionHub {
     return this.options.setup.agents()
   }
 
-  /**
-   * Selects the session's model and reasoning effort, which the model must
-   * list; without an effort, the selection is cleared. A running turn keeps
-   * the model and effort it started with.
-   */
+  /** Applies a selection inside the harness; owner clients submit selections with input. */
   setModel(sessionId: string, model: string, reasoningEffort: string | undefined, sender: Sender) {
-    this.session(sessionId)
+    const session = this.session(sessionId)
     const configured = this.model(model)
     const effort = this.effort(configured, reasoningEffort)
     this.commit(sessionId, (append) => {
       this.store.setModel(sessionId, configured.id, effort)
-      append({ type: "MODEL_CHANGED", model: configured.id, reasoningEffort: effort, sender })
+      append({
+        type: "SELECTION_CHANGED",
+        selection: effectiveSelection(session, configured.id, effort),
+        settingsRevisionId: crypto.randomUUID(),
+        sender,
+      })
     })
   }
 
@@ -1283,7 +1330,16 @@ export class SessionHub {
       this.fileState.putFiles(snapshot.research)
       this.fileState.recordSnapshot(sessionId, turn.runId, snapshot.refs)
       this.deliverInto(sessionId, turn, delivered, errors, taken, append)
-      append({ type: "RUN_STARTED", threadId: sessionId, runId: turn.runId, model: turn.model, cause, userMessageIds, membership })
+      append({
+        type: "RUN_STARTED",
+        threadId: sessionId,
+        runId: turn.runId,
+        selection: effectiveSelection(session, turn.model, turn.reasoningEffort),
+        settingsRevision: turn.runId,
+        cause,
+        userMessageIds,
+        membership,
+      })
       this.context.turnStarted(turn)
       return { session, turn }
     })
@@ -1312,8 +1368,8 @@ export class SessionHub {
           this.conversation.appendItem(sessionId, window.position, owner, { kind: "assistant", message })
           for (const body of events) append(body)
         })
-        this.context.afterItems(sessionId, turn)
       },
+      afterCommit: () => this.context.afterItems(sessionId, turn),
       commitResult: (result, event) => {
         this.commit(sessionId, (append) => {
           const window = this.conversation.currentWindow(sessionId)!

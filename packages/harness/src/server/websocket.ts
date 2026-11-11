@@ -155,7 +155,9 @@ export const startWebSocketServer = (options: WebSocketServerOptions): WebSocket
     if (!(authMethods as ReadonlyArray<string>).includes(method)) {
       return refusing(error(ErrorCode.unauthenticated, "the first message must authenticate"))
     }
-    const params = Schema.decodeUnknownResult(methods[method].params as Schema.Codec<any, unknown>)(request.params)
+    const params = Schema.decodeUnknownResult(methods[method].params as Schema.Codec<any, unknown>)(request.params, {
+      onExcessProperty: "error",
+    })
     if (Result.isFailure(params)) {
       return refusing(error(ErrorCode.invalidParams, `invalid params for ${method}`))
     }
@@ -217,7 +219,9 @@ export const startWebSocketServer = (options: WebSocketServerOptions): WebSocket
     const name = request.method as Exclude<MethodName, (typeof authMethods)[number]>
     const handler = Object.hasOwn(methods, name) ? (options.handlers[name] as Handler<typeof name> | undefined) : undefined
     if (handler === undefined) return failWith(error(ErrorCode.methodNotFound, `unknown method ${request.method}`))
-    const params = Schema.decodeUnknownResult(methods[name].params as Schema.Codec<any, unknown>)(request.params ?? {})
+    const params = Schema.decodeUnknownResult(methods[name].params as Schema.Codec<any, unknown>)(request.params ?? {}, {
+      onExcessProperty: "error",
+    })
     if (Result.isFailure(params)) return failWith(error(ErrorCode.invalidParams, params.failure.message))
     try {
       const after: Array<() => void> = []

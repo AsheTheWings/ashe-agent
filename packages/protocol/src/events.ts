@@ -1,5 +1,14 @@
 import { Schema } from "effect"
-import { Count, Id, InputMode, PermissionAnswer, Sender, Seq, Timestamp } from "./shared.ts"
+import {
+  AgentProfile,
+  Count,
+  Id,
+  InputMode,
+  PermissionAnswer,
+  Sender,
+  Seq,
+  Timestamp,
+} from "./shared.ts"
 
 /*
  * Session events. Events for text, reasoning, tool calls, and run lifecycle
@@ -30,8 +39,10 @@ export const RunStarted = event("RUN_STARTED", {
   threadId: Id,
   /** The stable identifier of this UserTurn and its following AgentTurn. */
   runId: Id,
-  /** The model the run uses for all of its model calls. */
-  model: Id,
+  /** The full effective selection established at this UserTurn boundary. */
+  selection: AgentProfile,
+  /** The immutable applied-settings revision used for attribution. */
+  settingsRevision: Id,
   cause: TurnCause,
   /** The user messages the run's starting input holds, none or several, in order. */
   userMessageIds: Schema.Array(Id),
@@ -60,54 +71,82 @@ export const RunInterrupted = event("RUN_INTERRUPTED", {
   runId: Id,
 })
 
+/** A model call whose generated chunks remain provisional until commitment. */
+export const ModelCallStarted = event("MODEL_CALL_STARTED", {
+  runId: Id,
+  modelCallId: Id,
+  ordinal: Seq,
+})
+
+/** Successful whole-response commitment makes the completed request boundary retained content. */
+export const ModelCallCommitted = event("MODEL_CALL_COMMITTED", {
+  runId: Id,
+  modelCallId: Id,
+  inputBoundaryId: Id,
+})
+
+/** A failed, cancelled, or interrupted attempt whose provisional output clients must discard. */
+export const ModelCallDiscarded = event("MODEL_CALL_DISCARDED", {
+  runId: Id,
+  modelCallId: Id,
+  reason: Schema.Literals(["failed", "cancelled", "interrupted"]),
+})
+
 export const TextMessageStart = event("TEXT_MESSAGE_START", {
+  modelCallId: Id,
   messageId: Id,
   role: Schema.Literal("assistant"),
 })
 
 export const TextMessageContent = event("TEXT_MESSAGE_CONTENT", {
+  modelCallId: Id,
   messageId: Id,
   delta: Schema.String,
 })
 
-export const TextMessageEnd = event("TEXT_MESSAGE_END", { messageId: Id })
+export const TextMessageEnd = event("TEXT_MESSAGE_END", { modelCallId: Id, messageId: Id })
 
-export const ReasoningStart = event("REASONING_START", { messageId: Id })
+export const ReasoningStart = event("REASONING_START", { modelCallId: Id, messageId: Id })
 
 export const ReasoningMessageStart = event("REASONING_MESSAGE_START", {
+  modelCallId: Id,
   messageId: Id,
   role: Schema.Literal("reasoning"),
 })
 
 export const ReasoningMessageContent = event("REASONING_MESSAGE_CONTENT", {
+  modelCallId: Id,
   messageId: Id,
   delta: Schema.String,
 })
 
-export const ReasoningMessageEnd = event("REASONING_MESSAGE_END", { messageId: Id })
+export const ReasoningMessageEnd = event("REASONING_MESSAGE_END", { modelCallId: Id, messageId: Id })
 
-export const ReasoningEnd = event("REASONING_END", { messageId: Id })
+export const ReasoningEnd = event("REASONING_END", { modelCallId: Id, messageId: Id })
 
 export const ToolCallStart = event("TOOL_CALL_START", {
+  modelCallId: Id,
   toolCallId: Id,
   toolCallName: Schema.String,
   parentMessageId: Schema.optionalKey(Id),
 })
 
 export const ToolCallArgs = event("TOOL_CALL_ARGS", {
+  modelCallId: Id,
   toolCallId: Id,
   delta: Schema.String,
 })
 
-export const ToolCallEnd = event("TOOL_CALL_END", { toolCallId: Id })
+export const ToolCallEnd = event("TOOL_CALL_END", { modelCallId: Id, toolCallId: Id })
 
 /** The server started running a tool call; a call with no such event never ran. */
-export const ToolExecutionStarted = event("TOOL_EXECUTION_STARTED", { toolCallId: Id })
+export const ToolExecutionStarted = event("TOOL_EXECUTION_STARTED", { modelCallId: Id, toolCallId: Id })
 
 /** How a tool call ended; every outcome but success is a failed result. */
 export const ToolOutcome = Schema.Literals(["success", "failed", "canceled", "declined", "interrupted"])
 
 export const ToolCallResult = event("TOOL_CALL_RESULT", {
+  modelCallId: Id,
   messageId: Id,
   toolCallId: Id,
   role: Schema.Literal("tool"),
@@ -120,6 +159,7 @@ export const ToolCallResult = event("TOOL_CALL_RESULT", {
  * made ended, with the permission name of the tool it called.
  */
 export const ProgramCallFinished = event("PROGRAM_CALL_FINISHED", {
+  modelCallId: Id,
   toolCallId: Id,
   tool: Schema.String,
   outcome: ToolOutcome,
@@ -129,11 +169,7 @@ export const ProgramCallFinished = event("PROGRAM_CALL_FINISHED", {
 export const SessionCreated = event("SESSION_CREATED", {
   /** The session's own directory, its starting working directory. */
   sessionDir: Schema.String,
-  /** The title of the session's agent, or null for the implicit agent. */
-  agent: Schema.NullOr(Schema.String),
-  model: Id,
-  /** The reasoning effort selected for the model, or null for its default. */
-  reasoningEffort: Schema.NullOr(Schema.String),
+  selection: AgentProfile,
   forkedFrom: Schema.NullOr(
     Schema.Struct({
       sessionId: Id,
@@ -159,10 +195,10 @@ export const InputReceived = event("INPUT_RECEIVED", {
   sender: Sender,
 })
 
-/** The session's model and reasoning effort selection changed; a null effort is the model's default. */
-export const ModelChanged = event("MODEL_CHANGED", {
-  model: Id,
-  reasoningEffort: Schema.NullOr(Schema.String),
+/** The session's applied title, model, and effort selection changed. */
+export const SelectionChanged = event("SELECTION_CHANGED", {
+  selection: AgentProfile,
+  settingsRevisionId: Id,
   sender: Sender,
 })
 
@@ -341,6 +377,9 @@ export const SessionEventBody = Schema.Union([
   RunFinished,
   RunError,
   RunInterrupted,
+  ModelCallStarted,
+  ModelCallCommitted,
+  ModelCallDiscarded,
   TextMessageStart,
   TextMessageContent,
   TextMessageEnd,
@@ -358,7 +397,7 @@ export const SessionEventBody = Schema.Union([
   SessionCreated,
   InputWaiting,
   InputReceived,
-  ModelChanged,
+  SelectionChanged,
   SessionRewound,
   DeveloperMessage,
   CheckpointWindowSeeded,

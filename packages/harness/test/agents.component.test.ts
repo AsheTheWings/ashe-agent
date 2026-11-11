@@ -105,7 +105,9 @@ describe("agents", () => {
       { "AGENTS.md": "GLOBAL", "titles/helper.md": title("Helps", "HELPER BODY") },
       async (h, config) => {
         const id = h.create({ agent: "helper" })
-        expect(h.hub.summary(id)).toMatchObject({ agent: "helper", model: warm.id })
+        expect(h.hub.summary(id)).toMatchObject({
+          identity: { agentTitle: "helper", modelId: warm.id },
+        })
         writeFileSync(join(config, "titles", "helper.md"), title("Helps", "EDITED BODY"))
         h.model.next(callTools([{ name: "touch", args: { paths: ["x"] } }]), say("done"))
         h.input(id, "go")
@@ -128,7 +130,7 @@ describe("agents", () => {
       { "AGENTS.md": "GLOBAL", "titles/writer.md": title("Writes", "WRITER BODY") },
       async (h) => {
         const id = h.create()
-        expect(h.hub.summary(id).agent).toBe("writer")
+        expect(h.hub.summary(id).identity.agentTitle).toBe("writer")
         h.model.next(say("ok"))
         h.input(id, "hi")
         await h.turnsEnded(id, 1)
@@ -139,7 +141,9 @@ describe("agents", () => {
     )
     await withConfig({ "AGENTS.md": "GLOBAL" }, async (h) => {
       const id = h.create()
-      expect(h.hub.summary(id)).toMatchObject({ agent: null, model: agentModels[0]!.id })
+      expect(h.hub.summary(id)).toMatchObject({
+        identity: { agentTitle: "untitled", modelId: agentModels[0]!.id },
+      })
       h.model.next(say("ok"))
       h.input(id, "hi")
       await h.turnsEnded(id, 1)
@@ -221,7 +225,7 @@ describe("agents", () => {
         writeFileSync(join(config, "AGENTS.md"), "GLOBAL RULE, LONGER NOW")
 
         const implicit = h.create()
-        expect(h.hub.summary(implicit).agent).toBeNull()
+        expect(h.hub.summary(implicit).identity.agentTitle).toBe("untitled")
         h.model.next(say("plain"))
         h.input(implicit, "hi")
         await h.turnsEnded(implicit, 1)

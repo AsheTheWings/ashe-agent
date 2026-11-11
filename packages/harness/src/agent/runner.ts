@@ -21,6 +21,7 @@ export interface AgentOptions {
 
 interface Call {
   readonly name: string
+  readonly modelCallId: string
   started: boolean
   answered: boolean
   /** Whether a committed assistant item holds the call, so its result is an item too. */
@@ -37,8 +38,10 @@ class TurnEvents {
   private text: string | null = null
   private reasoning: string | null = null
   private readonly streaming = new Map<number, string>()
-  /** The turn's tool calls, by id. */
+  /** The turn's tool calls, keyed by model call and provider call id. */
   readonly calls = new Map<string, Call>()
+  private modelCallId: string | null = null
+  private committed = false
   private closed = false
 
   constructor(private readonly context: TurnContext) {}
@@ -48,14 +51,16 @@ class TurnEvents {
   }
 
   private endText(into: Array<SessionEventBody>) {
-    if (this.text !== null) into.push({ type: "TEXT_MESSAGE_END", messageId: this.text })
+    if (this.text !== null && this.modelCallId !== null) {
+      into.push({ type: "TEXT_MESSAGE_END", modelCallId: this.modelCallId, messageId: this.text })
+    }
     this.text = null
   }
 
   private endReasoning(into: Array<SessionEventBody>) {
-    if (this.reasoning === null) return
-    into.push({ type: "REASONING_MESSAGE_END", messageId: this.reasoning })
-    into.push({ type: "REASONING_END", messageId: this.reasoning })
+    if (this.reasoning === null || this.modelCallId === null) return
+    into.push({ type: "REASONING_MESSAGE_END", modelCallId: this.modelCallId, messageId: this.reasoning })
+    into.push({ type: "REASONING_END", modelCallId: this.modelCallId, messageId: this.reasoning })
     this.reasoning = null
   }
 
@@ -63,7 +68,19 @@ class TurnEvents {
     for (const body of bodies) this.emit(body)
   }
 
+  startCall(modelCallId: string, ordinal: number) {
+    this.modelCallId = modelCallId
+    this.committed = false
+    this.streaming.clear()
+    this.emit({ type: "MODEL_CALL_STARTED", runId: this.context.turn.runId, modelCallId, ordinal })
+  }
+
+  private callKey(id: string) {
+    return `${this.modelCallId}:${id}`
+  }
+
   chunk(chunk: AIMessageChunk) {
+    if (this.modelCallId === null) throw new IntegrityFailure("a model chunk arrived outside a model call")
     const parts = typeof chunk.content === "string" ? [{ type: "text", text: chunk.content }] : chunk.content
     for (const part of parts) {
       if (part.type === "reasoning" && typeof part.reasoning === "string" && part.reasoning !== "") {
@@ -72,19 +89,19 @@ class TurnEvents {
         this.emitAll(ended)
         if (this.reasoning === null) {
           this.reasoning = crypto.randomUUID()
-          this.emit({ type: "REASONING_START", messageId: this.reasoning })
-          this.emit({ type: "REASONING_MESSAGE_START", messageId: this.reasoning, role: "reasoning" })
+          this.emit({ type: "REASONING_START", modelCallId: this.modelCallId, messageId: this.reasoning })
+          this.emit({ type: "REASONING_MESSAGE_START", modelCallId: this.modelCallId, messageId: this.reasoning, role: "reasoning" })
         }
-        this.emit({ type: "REASONING_MESSAGE_CONTENT", messageId: this.reasoning, delta: part.reasoning })
+        this.emit({ type: "REASONING_MESSAGE_CONTENT", modelCallId: this.modelCallId, messageId: this.reasoning, delta: part.reasoning })
       } else if (part.type === "text" && typeof part.text === "string" && part.text !== "") {
         const ended: Array<SessionEventBody> = []
         this.endReasoning(ended)
         this.emitAll(ended)
         if (this.text === null) {
           this.text = crypto.randomUUID()
-          this.emit({ type: "TEXT_MESSAGE_START", messageId: this.text, role: "assistant" })
+          this.emit({ type: "TEXT_MESSAGE_START", modelCallId: this.modelCallId, messageId: this.text, role: "assistant" })
         }
-        this.emit({ type: "TEXT_MESSAGE_CONTENT", messageId: this.text, delta: part.text })
+        this.emit({ type: "TEXT_MESSAGE_CONTENT", modelCallId: this.modelCallId, messageId: this.text, delta: part.text })
       }
     }
     for (const call of chunk.tool_call_chunks ?? []) {
@@ -97,10 +114,18 @@ class TurnEvents {
         this.emitAll(ended)
         id = call.id
         this.streaming.set(index, id)
-        this.calls.set(id, { name: call.name, started: false, answered: false, committed: false })
-        this.emit({ type: "TOOL_CALL_START", toolCallId: id, toolCallName: call.name })
+        this.calls.set(this.callKey(id), {
+          name: call.name,
+          modelCallId: this.modelCallId,
+          started: false,
+          answered: false,
+          committed: false,
+        })
+        this.emit({ type: "TOOL_CALL_START", modelCallId: this.modelCallId, toolCallId: id, toolCallName: call.name })
       }
-      if (id !== undefined && call.args !== undefined && call.args !== "") this.emit({ type: "TOOL_CALL_ARGS", toolCallId: id, delta: call.args })
+      if (id !== undefined && call.args !== undefined && call.args !== "") {
+        this.emit({ type: "TOOL_CALL_ARGS", modelCallId: this.modelCallId, toolCallId: id, delta: call.args })
+      }
     }
   }
 
@@ -109,7 +134,9 @@ class TurnEvents {
     const ended: Array<SessionEventBody> = []
     this.endText(ended)
     this.endReasoning(ended)
-    for (const id of this.streaming.values()) ended.push({ type: "TOOL_CALL_END", toolCallId: id })
+    for (const id of this.streaming.values()) {
+      ended.push({ type: "TOOL_CALL_END", modelCallId: this.modelCallId!, toolCallId: id })
+    }
     this.streaming.clear()
     return ended
   }
@@ -124,44 +151,59 @@ class TurnEvents {
    * its streams, and the start of each call the message holds that
    * streamed none, such as one with unparsable arguments.
    */
-  commitMessage(message: AIMessage) {
+  commitMessage(message: AIMessage, inputBoundaryId: string) {
     const events = this.endEvents()
     for (const call of message.tool_calls ?? []) {
-      const known = this.calls.get(call.id!)
+      const known = this.calls.get(this.callKey(call.id!))
       if (known !== undefined) {
         known.committed = true
         continue
       }
-      this.calls.set(call.id!, { name: call.name, started: false, answered: false, committed: true })
-      events.push({ type: "TOOL_CALL_START", toolCallId: call.id!, toolCallName: call.name }, { type: "TOOL_CALL_END", toolCallId: call.id! })
+      this.calls.set(this.callKey(call.id!), {
+        name: call.name,
+        modelCallId: this.modelCallId!,
+        started: false,
+        answered: false,
+        committed: true,
+      })
+      events.push(
+        { type: "TOOL_CALL_START", modelCallId: this.modelCallId!, toolCallId: call.id!, toolCallName: call.name },
+        { type: "TOOL_CALL_END", modelCallId: this.modelCallId!, toolCallId: call.id! },
+      )
     }
-    if (!this.closed) this.context.commitAssistant(message, events)
+    events.push({ type: "MODEL_CALL_COMMITTED", runId: this.context.turn.runId, modelCallId: this.modelCallId!, inputBoundaryId })
+    if (!this.closed) {
+      this.context.commitAssistant(message, events)
+      this.committed = true
+      this.context.afterCommit()
+    }
   }
 
   started(id: string) {
-    const call = this.calls.get(id)
+    const call = this.calls.get(this.callKey(id))
     if (call === undefined || call.started) return
     call.started = true
-    this.emit({ type: "TOOL_EXECUTION_STARTED", toolCallId: id })
+    this.emit({ type: "TOOL_EXECUTION_STARTED", modelCallId: call.modelCallId, toolCallId: id })
   }
 
   /** Sets the note a canceled result of the call carries. */
   cancelNote(id: string, note: string) {
-    const call = this.calls.get(id)
+    const call = this.calls.get(this.callKey(id))
     if (call !== undefined) call.cancelNote = note
   }
 
   note(id: string): string | undefined {
-    return this.calls.get(id)?.cancelNote
+    return this.calls.get(this.callKey(id))?.cancelNote
   }
 
   /** Records the call's result: an item with its event for a committed call, else the event alone. */
   result(id: string, content: ToolContent, outcome: ToolOutcome) {
-    const call = this.calls.get(id)
+    const call = this.calls.get(this.callKey(id))
     if (call === undefined || this.closed) return
     call.answered = true
     const event: SessionEventBody = {
       type: "TOOL_CALL_RESULT",
+      modelCallId: call.modelCallId,
       messageId: crypto.randomUUID(),
       toolCallId: id,
       role: "tool",
@@ -175,8 +217,9 @@ class TurnEvents {
   /** Ends open streams and gives each of the turn's calls without a result a failed result of `outcome`. */
   settle(outcome: "canceled" | "failed") {
     this.endCall()
-    for (const [id, call] of this.calls) {
+    for (const [key, call] of this.calls) {
       if (call.answered) continue
+      const id = key.slice(key.indexOf(":") + 1)
       const content = unfinishedResult(outcome, call.started)
       this.result(id, outcome === "canceled" && call.cancelNote !== undefined ? `${content} ${call.cancelNote}` : content, outcome)
     }
@@ -186,7 +229,33 @@ class TurnEvents {
   close(cancelled: boolean) {
     if (cancelled) this.settle("canceled")
     else this.endCall()
+    if (this.modelCallId !== null && !this.committed) {
+      this.emit({ type: "MODEL_CALL_DISCARDED", runId: this.context.turn.runId, modelCallId: this.modelCallId, reason: cancelled ? "cancelled" : "interrupted" })
+    }
     this.closed = true
+  }
+
+  discard(reason: "failed" | "cancelled" | "interrupted") {
+    if (this.modelCallId !== null) {
+      this.emit({ type: "MODEL_CALL_DISCARDED", runId: this.context.turn.runId, modelCallId: this.modelCallId, reason })
+    }
+    this.text = null
+    this.reasoning = null
+    this.streaming.clear()
+    const modelCallId = this.modelCallId
+    for (const [key, call] of this.calls) if (call.modelCallId === modelCallId) this.calls.delete(key)
+    this.modelCallId = null
+    this.committed = false
+  }
+
+  /** A terminal failure: discard the uncommitted current call, then settle committed calls. */
+  fail() {
+    if (this.modelCallId !== null && !this.committed) this.discard("failed")
+    this.settle("failed")
+  }
+
+  currentModelCallId() {
+    return this.modelCallId
   }
 }
 
@@ -238,7 +307,7 @@ const runTurn = async (options: AgentOptions, context: TurnContext, events: Turn
     return await loop(options, context, events, signal)
   } catch (error) {
     if (signal.aborted) throw error
-    events.settle("failed")
+    events.fail()
     if (error instanceof TurnFailure) return { status: "failed", message: error.message, code: error.code }
     return { status: "failed", message: error instanceof Error ? error.message : String(error), code: "internal" }
   }
@@ -272,6 +341,7 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
   if (model === undefined) throw new TurnFailure(`the model ${turn.model} is not configured`, "model_unavailable")
   const settings = callSettings(model, session.modelOverrides[model.id], turn.reasoningEffort)
   const port = tracedPort(options.port, context)
+  let modelCallOrdinal = 1
 
   for (;;) {
     signal.throwIfAborted()
@@ -295,6 +365,8 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
       return { status: "finished" }
     }
     const chunks: Array<AIMessageChunk> = []
+    const modelCallId = crypto.randomUUID()
+    events.startCall(modelCallId, modelCallOrdinal++)
     try {
       const call = { model: turn.model, instructions: REQUEST_INSTRUCTIONS, messages, tools: specs, ...settings }
       for await (const chunk of port.stream(call, signal)) {
@@ -305,14 +377,15 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
       if (signal.aborted) throw error
       if (error instanceof ModelCallError && error.overflow) {
         // A provider failing the call as over its context window is the context limit too.
-        events.settle("failed")
+        events.discard("failed")
         if ((await context.limitReached(signal)) !== "retry") return { status: "finished" }
         continue
       }
+      events.discard("failed")
       throw new TurnFailure(`the model call failed: ${error instanceof Error ? error.message : String(error)}`, "model_failed")
     }
     const { message, invalid } = finalMessage(chunks)
-    events.commitMessage(message)
+    events.commitMessage(message, crypto.randomUUID())
     for (const [id, raw] of invalid) events.result(id, `The arguments were not valid JSON: ${raw}`, "failed")
 
     const calls = (message.tool_calls ?? []).filter((call) => !invalid.has(call.id!))
@@ -330,7 +403,18 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
         events.result(callId, unfinishedResult("canceled", false), "canceled")
         continue
       }
-      const result = await runTool(tools.get(call.name), call.name, call.args, callId, context, events, signal, model.imageInput, specs)
+      const result = await runTool(
+        tools.get(call.name),
+        call.name,
+        call.args,
+        callId,
+        modelCallId,
+        context,
+        events,
+        signal,
+        model.imageInput,
+        specs,
+      )
       signal.throwIfAborted()
       if (result.outcome === "declined" && result.endTurn) stopped = true
       events.result(callId, result.content, result.outcome)
@@ -346,6 +430,7 @@ const runTool = async (
   name: string,
   args: unknown,
   callId: string,
+  modelCallId: string,
   context: TurnContext,
   events: TurnEvents,
   signal: AbortSignal,
@@ -391,7 +476,13 @@ const runTool = async (
           started: () => events.started(callId),
           onCancel: (note) => events.cancelNote(callId, note),
           note: () => events.note(callId),
-          programCall: (program, outcome) => events.emit({ type: "PROGRAM_CALL_FINISHED", toolCallId: callId, tool: program, outcome }),
+          programCall: (program, outcome) => events.emit({
+            type: "PROGRAM_CALL_FINISHED",
+            modelCallId,
+            toolCallId: callId,
+            tool: program,
+            outcome,
+          }),
           offered: context.offered,
         }, context.toolPolicy),
       )

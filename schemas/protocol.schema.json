@@ -416,15 +416,42 @@
                 "cwd": {
                   "not": {}
                 },
-                "model": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "agent": {
-                  "type": "string"
-                },
-                "reasoningEffort": {
-                  "type": "string"
+                "selection": {
+                  "type": "object",
+                  "properties": {
+                    "agentTitle": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "modelSettings": {
+                      "type": "object",
+                      "properties": {
+                        "modelId": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "reasoningEffort": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  },
+                  "additionalProperties": true
                 }
               },
               "additionalProperties": true
@@ -577,6 +604,81 @@
                 },
                 "text": {
                   "type": "string"
+                },
+                "attachments": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "attachmentId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "contentId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "representationId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "mediaType": {
+                        "type": "string"
+                      },
+                      "digest": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "attachmentId",
+                      "contentId",
+                      "representationId",
+                      "name",
+                      "mediaType",
+                      "digest"
+                    ],
+                    "additionalProperties": true
+                  }
+                },
+                "selection": {
+                  "type": "object",
+                  "properties": {
+                    "agentTitle": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "modelSettings": {
+                      "type": "object",
+                      "properties": {
+                        "modelId": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "reasoningEffort": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  },
+                  "additionalProperties": true
                 },
                 "mode": {
                   "type": "string",
@@ -779,7 +881,56 @@
             "method": {
               "type": "string",
               "enum": [
-                "session.setModel"
+                "session.grants.list"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "sessionId"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "session.grants.clear"
               ]
             },
             "params": {
@@ -789,17 +940,14 @@
                   "type": "string",
                   "minLength": 1
                 },
-                "model": {
+                "agentTitle": {
                   "type": "string",
                   "minLength": 1
-                },
-                "reasoningEffort": {
-                  "type": "string"
                 }
               },
               "required": [
                 "sessionId",
-                "model"
+                "agentTitle"
               ],
               "additionalProperties": true
             }
@@ -905,11 +1053,337 @@
                 },
                 "text": {
                   "type": "string"
+                },
+                "selection": {
+                  "type": "object",
+                  "properties": {
+                    "agentTitle": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "modelSettings": {
+                      "type": "object",
+                      "properties": {
+                        "modelId": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "reasoningEffort": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  },
+                  "additionalProperties": true
                 }
               },
               "required": [
                 "sessionId",
                 "runId"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "content.get"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "contentId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "referenceId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "sessionId",
+                "contentId",
+                "referenceId"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "upload.create"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "draftId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string"
+                },
+                "mediaType": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "draftId",
+                "name",
+                "mediaType",
+                "size"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "upload.status"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "uploadId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "uploadId"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "upload.append"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "uploadId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "offset": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "data": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "uploadId",
+                "offset",
+                "data"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method",
+            "params"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "enum": [
+                "2.0"
+              ]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "upload.finalize"
+              ]
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "uploadId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "size": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "digest": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "uploadId",
+                "size",
+                "digest"
               ],
               "additionalProperties": true
             }
@@ -1077,7 +1551,52 @@
                           "type": "string",
                           "minLength": 1
                         },
-                        "model": {
+                        "selection": {
+                          "type": "object",
+                          "properties": {
+                            "agentTitle": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "modelSettings": {
+                              "type": "object",
+                              "properties": {
+                                "modelId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "reasoningEffort": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "modelId",
+                                "reasoningEffort"
+                              ],
+                              "additionalProperties": true
+                            }
+                          },
+                          "required": [
+                            "agentTitle",
+                            "modelSettings"
+                          ],
+                          "additionalProperties": true
+                        },
+                        "settingsRevision": {
                           "type": "string",
                           "minLength": 1
                         },
@@ -1168,7 +1687,8 @@
                         "type",
                         "threadId",
                         "runId",
-                        "model",
+                        "selection",
+                        "settingsRevision",
                         "cause",
                         "userMessageIds",
                         "membership"
@@ -1293,8 +1813,107 @@
                         "type": {
                           "type": "string",
                           "enum": [
+                            "MODEL_CALL_STARTED"
+                          ]
+                        },
+                        "runId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "modelCallId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "ordinal": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "runId",
+                        "modelCallId",
+                        "ordinal"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "MODEL_CALL_COMMITTED"
+                          ]
+                        },
+                        "runId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "modelCallId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "inputBoundaryId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "runId",
+                        "modelCallId",
+                        "inputBoundaryId"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "MODEL_CALL_DISCARDED"
+                          ]
+                        },
+                        "runId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "modelCallId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": [
+                            "failed",
+                            "cancelled",
+                            "interrupted"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "runId",
+                        "modelCallId",
+                        "reason"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
                             "TEXT_MESSAGE_START"
                           ]
+                        },
+                        "modelCallId": {
+                          "type": "string",
+                          "minLength": 1
                         },
                         "messageId": {
                           "type": "string",
@@ -1309,6 +1928,7 @@
                       },
                       "required": [
                         "type",
+                        "modelCallId",
                         "messageId",
                         "role"
                       ],
@@ -1323,6 +1943,10 @@
                             "TEXT_MESSAGE_CONTENT"
                           ]
                         },
+                        "modelCallId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
                         "messageId": {
                           "type": "string",
                           "minLength": 1
@@ -1333,6 +1957,7 @@
                       },
                       "required": [
                         "type",
+                        "modelCallId",
                         "messageId",
                         "delta"
                       ],
@@ -1347,6 +1972,10 @@
                             "TEXT_MESSAGE_END"
                           ]
                         },
+                        "modelCallId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
                         "messageId": {
                           "type": "string",
                           "minLength": 1
@@ -1354,6 +1983,7 @@
                       },
                       "required": [
                         "type",
+                        "modelCallId",
                         "messageId"
                       ],
                       "additionalProperties": true
@@ -1367,6 +1997,10 @@
                             "REASONING_START"
                           ]
                         },
+                        "modelCallId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
                         "messageId": {
                           "type": "string",
                           "minLength": 1
@@ -1374,6 +2008,7 @@
                       },
                       "required": [
                         "type",
+                        "modelCallId",
                         "messageId"
                       ],
                       "additionalProperties": true
@@ -1386,6 +2021,10 @@
                           "enum": [
                             "REASONING_MESSAGE_START"
                           ]
+                        },
+                        "modelCallId": {
+                          "type": "string",
+                          "minLength": 1
                         },
                         "messageId": {
                           "type": "string",
@@ -1400,6 +2039,7 @@
                       },
                       "required": [
                         "type",
+                        "modelCallId",
                         "messageId",
                         "role"
                       ],
@@ -1414,6 +2054,10 @@
                             "REASONING_MESSAGE_CONTENT"
                           ]
                         },
+                        "modelCallId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
                         "messageId": {
                           "type": "string",
                           "minLength": 1
@@ -1424,6 +2068,7 @@
                       },
                       "required": [
                         "type",
+                        "modelCallId",
                         "messageId",
                         "delta"
                       ],
@@ -1438,6 +2083,10 @@
                             "REASONING_MESSAGE_END"
                           ]
                         },
+                        "modelCallId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
                         "messageId": {
                           "type": "string",
                           "minLength": 1
@@ -1445,6 +2094,7 @@
                       },
                       "required": [
                         "type",
+                        "modelCallId",
                         "messageId"
                       ],
                       "additionalProperties": true
@@ -1458,6 +2108,10 @@
                             "REASONING_END"
                           ]
                         },
+                        "modelCallId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
                         "messageId": {
                           "type": "string",
                           "minLength": 1
@@ -1465,6 +2119,7 @@
                       },
                       "required": [
                         "type",
+                        "modelCallId",
                         "messageId"
                       ],
                       "additionalProperties": true
@@ -1477,6 +2132,10 @@
                           "enum": [
                             "TOOL_CALL_START"
                           ]
+                        },
+                        "modelCallId": {
+                          "type": "string",
+                          "minLength": 1
                         },
                         "toolCallId": {
                           "type": "string",
@@ -1492,6 +2151,7 @@
                       },
                       "required": [
                         "type",
+                        "modelCallId",
                         "toolCallId",
                         "toolCallName"
                       ],
@@ -1506,6 +2166,10 @@
                             "TOOL_CALL_ARGS"
                           ]
                         },
+                        "modelCallId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
                         "toolCallId": {
                           "type": "string",
                           "minLength": 1
@@ -1516,6 +2180,7 @@
                       },
                       "required": [
                         "type",
+                        "modelCallId",
                         "toolCallId",
                         "delta"
                       ],
@@ -1530,6 +2195,10 @@
                             "TOOL_CALL_END"
                           ]
                         },
+                        "modelCallId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
                         "toolCallId": {
                           "type": "string",
                           "minLength": 1
@@ -1537,6 +2206,7 @@
                       },
                       "required": [
                         "type",
+                        "modelCallId",
                         "toolCallId"
                       ],
                       "additionalProperties": true
@@ -1550,6 +2220,10 @@
                             "TOOL_EXECUTION_STARTED"
                           ]
                         },
+                        "modelCallId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
                         "toolCallId": {
                           "type": "string",
                           "minLength": 1
@@ -1557,6 +2231,7 @@
                       },
                       "required": [
                         "type",
+                        "modelCallId",
                         "toolCallId"
                       ],
                       "additionalProperties": true
@@ -1569,6 +2244,10 @@
                           "enum": [
                             "TOOL_CALL_RESULT"
                           ]
+                        },
+                        "modelCallId": {
+                          "type": "string",
+                          "minLength": 1
                         },
                         "messageId": {
                           "type": "string",
@@ -1600,6 +2279,7 @@
                       },
                       "required": [
                         "type",
+                        "modelCallId",
                         "messageId",
                         "toolCallId",
                         "role",
@@ -1616,6 +2296,10 @@
                           "enum": [
                             "PROGRAM_CALL_FINISHED"
                           ]
+                        },
+                        "modelCallId": {
+                          "type": "string",
+                          "minLength": 1
                         },
                         "toolCallId": {
                           "type": "string",
@@ -1637,6 +2321,7 @@
                       },
                       "required": [
                         "type",
+                        "modelCallId",
                         "toolCallId",
                         "tool",
                         "outcome"
@@ -1655,29 +2340,50 @@
                         "sessionDir": {
                           "type": "string"
                         },
-                        "agent": {
-                          "anyOf": [
-                            {
-                              "type": "string"
+                        "selection": {
+                          "type": "object",
+                          "properties": {
+                            "agentTitle": {
+                              "type": "string",
+                              "minLength": 1
                             },
-                            {
-                              "type": "null"
+                            "modelSettings": {
+                              "type": "object",
+                              "properties": {
+                                "modelId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "reasoningEffort": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "modelId",
+                                "reasoningEffort"
+                              ],
+                              "additionalProperties": true
                             }
-                          ]
-                        },
-                        "model": {
-                          "type": "string",
-                          "minLength": 1
-                        },
-                        "reasoningEffort": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
+                          },
+                          "required": [
+                            "agentTitle",
+                            "modelSettings"
+                          ],
+                          "additionalProperties": true
                         },
                         "forkedFrom": {
                           "anyOf": [
@@ -1715,9 +2421,7 @@
                       "required": [
                         "type",
                         "sessionDir",
-                        "agent",
-                        "model",
-                        "reasoningEffort",
+                        "selection",
                         "forkedFrom"
                       ],
                       "additionalProperties": true
@@ -1890,22 +2594,57 @@
                         "type": {
                           "type": "string",
                           "enum": [
-                            "MODEL_CHANGED"
+                            "SELECTION_CHANGED"
                           ]
                         },
-                        "model": {
+                        "selection": {
+                          "type": "object",
+                          "properties": {
+                            "agentTitle": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "modelSettings": {
+                              "type": "object",
+                              "properties": {
+                                "modelId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "reasoningEffort": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "modelId",
+                                "reasoningEffort"
+                              ],
+                              "additionalProperties": true
+                            }
+                          },
+                          "required": [
+                            "agentTitle",
+                            "modelSettings"
+                          ],
+                          "additionalProperties": true
+                        },
+                        "settingsRevisionId": {
                           "type": "string",
                           "minLength": 1
-                        },
-                        "reasoningEffort": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
                         },
                         "sender": {
                           "anyOf": [
@@ -1958,8 +2697,8 @@
                       },
                       "required": [
                         "type",
-                        "model",
-                        "reasoningEffort",
+                        "selection",
+                        "settingsRevisionId",
                         "sender"
                       ],
                       "additionalProperties": true
@@ -2875,7 +3614,52 @@
               "type": "string",
               "minLength": 1
             },
-            "model": {
+            "selection": {
+              "type": "object",
+              "properties": {
+                "agentTitle": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "modelSettings": {
+                  "type": "object",
+                  "properties": {
+                    "modelId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reasoningEffort": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "modelId",
+                    "reasoningEffort"
+                  ],
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "agentTitle",
+                "modelSettings"
+              ],
+              "additionalProperties": true
+            },
+            "settingsRevision": {
               "type": "string",
               "minLength": 1
             },
@@ -2966,7 +3750,8 @@
             "type",
             "threadId",
             "runId",
-            "model",
+            "selection",
+            "settingsRevision",
             "cause",
             "userMessageIds",
             "membership"
@@ -3091,8 +3876,107 @@
             "type": {
               "type": "string",
               "enum": [
+                "MODEL_CALL_STARTED"
+              ]
+            },
+            "runId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "modelCallId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "ordinal": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "type",
+            "runId",
+            "modelCallId",
+            "ordinal"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "MODEL_CALL_COMMITTED"
+              ]
+            },
+            "runId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "modelCallId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "inputBoundaryId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "runId",
+            "modelCallId",
+            "inputBoundaryId"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "MODEL_CALL_DISCARDED"
+              ]
+            },
+            "runId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "modelCallId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "failed",
+                "cancelled",
+                "interrupted"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "runId",
+            "modelCallId",
+            "reason"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
                 "TEXT_MESSAGE_START"
               ]
+            },
+            "modelCallId": {
+              "type": "string",
+              "minLength": 1
             },
             "messageId": {
               "type": "string",
@@ -3107,6 +3991,7 @@
           },
           "required": [
             "type",
+            "modelCallId",
             "messageId",
             "role"
           ],
@@ -3121,6 +4006,10 @@
                 "TEXT_MESSAGE_CONTENT"
               ]
             },
+            "modelCallId": {
+              "type": "string",
+              "minLength": 1
+            },
             "messageId": {
               "type": "string",
               "minLength": 1
@@ -3131,6 +4020,7 @@
           },
           "required": [
             "type",
+            "modelCallId",
             "messageId",
             "delta"
           ],
@@ -3145,6 +4035,10 @@
                 "TEXT_MESSAGE_END"
               ]
             },
+            "modelCallId": {
+              "type": "string",
+              "minLength": 1
+            },
             "messageId": {
               "type": "string",
               "minLength": 1
@@ -3152,6 +4046,7 @@
           },
           "required": [
             "type",
+            "modelCallId",
             "messageId"
           ],
           "additionalProperties": true
@@ -3165,6 +4060,10 @@
                 "REASONING_START"
               ]
             },
+            "modelCallId": {
+              "type": "string",
+              "minLength": 1
+            },
             "messageId": {
               "type": "string",
               "minLength": 1
@@ -3172,6 +4071,7 @@
           },
           "required": [
             "type",
+            "modelCallId",
             "messageId"
           ],
           "additionalProperties": true
@@ -3184,6 +4084,10 @@
               "enum": [
                 "REASONING_MESSAGE_START"
               ]
+            },
+            "modelCallId": {
+              "type": "string",
+              "minLength": 1
             },
             "messageId": {
               "type": "string",
@@ -3198,6 +4102,7 @@
           },
           "required": [
             "type",
+            "modelCallId",
             "messageId",
             "role"
           ],
@@ -3212,6 +4117,10 @@
                 "REASONING_MESSAGE_CONTENT"
               ]
             },
+            "modelCallId": {
+              "type": "string",
+              "minLength": 1
+            },
             "messageId": {
               "type": "string",
               "minLength": 1
@@ -3222,6 +4131,7 @@
           },
           "required": [
             "type",
+            "modelCallId",
             "messageId",
             "delta"
           ],
@@ -3236,6 +4146,10 @@
                 "REASONING_MESSAGE_END"
               ]
             },
+            "modelCallId": {
+              "type": "string",
+              "minLength": 1
+            },
             "messageId": {
               "type": "string",
               "minLength": 1
@@ -3243,6 +4157,7 @@
           },
           "required": [
             "type",
+            "modelCallId",
             "messageId"
           ],
           "additionalProperties": true
@@ -3256,6 +4171,10 @@
                 "REASONING_END"
               ]
             },
+            "modelCallId": {
+              "type": "string",
+              "minLength": 1
+            },
             "messageId": {
               "type": "string",
               "minLength": 1
@@ -3263,6 +4182,7 @@
           },
           "required": [
             "type",
+            "modelCallId",
             "messageId"
           ],
           "additionalProperties": true
@@ -3275,6 +4195,10 @@
               "enum": [
                 "TOOL_CALL_START"
               ]
+            },
+            "modelCallId": {
+              "type": "string",
+              "minLength": 1
             },
             "toolCallId": {
               "type": "string",
@@ -3290,6 +4214,7 @@
           },
           "required": [
             "type",
+            "modelCallId",
             "toolCallId",
             "toolCallName"
           ],
@@ -3304,6 +4229,10 @@
                 "TOOL_CALL_ARGS"
               ]
             },
+            "modelCallId": {
+              "type": "string",
+              "minLength": 1
+            },
             "toolCallId": {
               "type": "string",
               "minLength": 1
@@ -3314,6 +4243,7 @@
           },
           "required": [
             "type",
+            "modelCallId",
             "toolCallId",
             "delta"
           ],
@@ -3328,6 +4258,10 @@
                 "TOOL_CALL_END"
               ]
             },
+            "modelCallId": {
+              "type": "string",
+              "minLength": 1
+            },
             "toolCallId": {
               "type": "string",
               "minLength": 1
@@ -3335,6 +4269,7 @@
           },
           "required": [
             "type",
+            "modelCallId",
             "toolCallId"
           ],
           "additionalProperties": true
@@ -3348,6 +4283,10 @@
                 "TOOL_EXECUTION_STARTED"
               ]
             },
+            "modelCallId": {
+              "type": "string",
+              "minLength": 1
+            },
             "toolCallId": {
               "type": "string",
               "minLength": 1
@@ -3355,6 +4294,7 @@
           },
           "required": [
             "type",
+            "modelCallId",
             "toolCallId"
           ],
           "additionalProperties": true
@@ -3367,6 +4307,10 @@
               "enum": [
                 "TOOL_CALL_RESULT"
               ]
+            },
+            "modelCallId": {
+              "type": "string",
+              "minLength": 1
             },
             "messageId": {
               "type": "string",
@@ -3398,6 +4342,7 @@
           },
           "required": [
             "type",
+            "modelCallId",
             "messageId",
             "toolCallId",
             "role",
@@ -3414,6 +4359,10 @@
               "enum": [
                 "PROGRAM_CALL_FINISHED"
               ]
+            },
+            "modelCallId": {
+              "type": "string",
+              "minLength": 1
             },
             "toolCallId": {
               "type": "string",
@@ -3435,6 +4384,7 @@
           },
           "required": [
             "type",
+            "modelCallId",
             "toolCallId",
             "tool",
             "outcome"
@@ -3453,29 +4403,50 @@
             "sessionDir": {
               "type": "string"
             },
-            "agent": {
-              "anyOf": [
-                {
-                  "type": "string"
+            "selection": {
+              "type": "object",
+              "properties": {
+                "agentTitle": {
+                  "type": "string",
+                  "minLength": 1
                 },
-                {
-                  "type": "null"
+                "modelSettings": {
+                  "type": "object",
+                  "properties": {
+                    "modelId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reasoningEffort": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "modelId",
+                    "reasoningEffort"
+                  ],
+                  "additionalProperties": true
                 }
-              ]
-            },
-            "model": {
-              "type": "string",
-              "minLength": 1
-            },
-            "reasoningEffort": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              },
+              "required": [
+                "agentTitle",
+                "modelSettings"
+              ],
+              "additionalProperties": true
             },
             "forkedFrom": {
               "anyOf": [
@@ -3513,9 +4484,7 @@
           "required": [
             "type",
             "sessionDir",
-            "agent",
-            "model",
-            "reasoningEffort",
+            "selection",
             "forkedFrom"
           ],
           "additionalProperties": true
@@ -3688,22 +4657,57 @@
             "type": {
               "type": "string",
               "enum": [
-                "MODEL_CHANGED"
+                "SELECTION_CHANGED"
               ]
             },
-            "model": {
+            "selection": {
+              "type": "object",
+              "properties": {
+                "agentTitle": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "modelSettings": {
+                  "type": "object",
+                  "properties": {
+                    "modelId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reasoningEffort": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "modelId",
+                    "reasoningEffort"
+                  ],
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "agentTitle",
+                "modelSettings"
+              ],
+              "additionalProperties": true
+            },
+            "settingsRevisionId": {
               "type": "string",
               "minLength": 1
-            },
-            "reasoningEffort": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "sender": {
               "anyOf": [
@@ -3756,8 +4760,8 @@
           },
           "required": [
             "type",
-            "model",
-            "reasoningEffort",
+            "selection",
+            "settingsRevisionId",
             "sender"
           ],
           "additionalProperties": true
@@ -5076,37 +6080,144 @@
               "sessionDir": {
                 "type": "string"
               },
-              "agent": {
+              "identity": {
+                "type": "object",
+                "properties": {
+                  "sessionId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "agentTitle": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "modelId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "sessionId",
+                  "agentTitle",
+                  "modelId"
+                ],
+                "additionalProperties": true
+              },
+              "selection": {
+                "type": "object",
+                "properties": {
+                  "agentTitle": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "modelSettings": {
+                    "type": "object",
+                    "properties": {
+                      "modelId": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "reasoningEffort": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "modelId",
+                      "reasoningEffort"
+                    ],
+                    "additionalProperties": true
+                  }
+                },
+                "required": [
+                  "agentTitle",
+                  "modelSettings"
+                ],
+                "additionalProperties": true
+              },
+              "activeSelection": {
                 "anyOf": [
                   {
-                    "type": "string"
+                    "type": "object",
+                    "properties": {
+                      "agentTitle": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "modelSettings": {
+                        "type": "object",
+                        "properties": {
+                          "modelId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "reasoningEffort": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "modelId",
+                          "reasoningEffort"
+                        ],
+                        "additionalProperties": true
+                      }
+                    },
+                    "required": [
+                      "agentTitle",
+                      "modelSettings"
+                    ],
+                    "additionalProperties": true
                   },
                   {
                     "type": "null"
                   }
                 ]
               },
-              "model": {
+              "activity": {
                 "type": "string",
-                "minLength": 1
-              },
-              "reasoningEffort": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
+                "enum": [
+                  "working",
+                  "idle"
                 ]
               },
               "createdAt": {
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 9007199254740991
-              },
-              "running": {
-                "type": "boolean"
               },
               "lastSeq": {
                 "type": "integer",
@@ -5117,11 +6228,11 @@
             "required": [
               "id",
               "sessionDir",
-              "agent",
-              "model",
-              "reasoningEffort",
+              "identity",
+              "selection",
+              "activeSelection",
+              "activity",
               "createdAt",
-              "running",
               "lastSeq"
             ],
             "additionalProperties": true
@@ -5139,15 +6250,42 @@
         "cwd": {
           "not": {}
         },
-        "model": {
-          "type": "string",
-          "minLength": 1
-        },
-        "agent": {
-          "type": "string"
-        },
-        "reasoningEffort": {
-          "type": "string"
+        "selection": {
+          "type": "object",
+          "properties": {
+            "agentTitle": {
+              "type": "string",
+              "minLength": 1
+            },
+            "modelSettings": {
+              "type": "object",
+              "properties": {
+                "modelId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "reasoningEffort": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
         }
       },
       "additionalProperties": true
@@ -5165,37 +6303,144 @@
             "sessionDir": {
               "type": "string"
             },
-            "agent": {
+            "identity": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "agentTitle": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "modelId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "sessionId",
+                "agentTitle",
+                "modelId"
+              ],
+              "additionalProperties": true
+            },
+            "selection": {
+              "type": "object",
+              "properties": {
+                "agentTitle": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "modelSettings": {
+                  "type": "object",
+                  "properties": {
+                    "modelId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reasoningEffort": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "modelId",
+                    "reasoningEffort"
+                  ],
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "agentTitle",
+                "modelSettings"
+              ],
+              "additionalProperties": true
+            },
+            "activeSelection": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "object",
+                  "properties": {
+                    "agentTitle": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "modelSettings": {
+                      "type": "object",
+                      "properties": {
+                        "modelId": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "reasoningEffort": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "modelId",
+                        "reasoningEffort"
+                      ],
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "agentTitle",
+                    "modelSettings"
+                  ],
+                  "additionalProperties": true
                 },
                 {
                   "type": "null"
                 }
               ]
             },
-            "model": {
+            "activity": {
               "type": "string",
-              "minLength": 1
-            },
-            "reasoningEffort": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
+              "enum": [
+                "working",
+                "idle"
               ]
             },
             "createdAt": {
               "type": "integer",
               "minimum": 0,
               "maximum": 9007199254740991
-            },
-            "running": {
-              "type": "boolean"
             },
             "lastSeq": {
               "type": "integer",
@@ -5206,11 +6451,11 @@
           "required": [
             "id",
             "sessionDir",
-            "agent",
-            "model",
-            "reasoningEffort",
+            "identity",
+            "selection",
+            "activeSelection",
+            "activity",
             "createdAt",
-            "running",
             "lastSeq"
           ],
           "additionalProperties": true
@@ -5252,37 +6497,144 @@
             "sessionDir": {
               "type": "string"
             },
-            "agent": {
+            "identity": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "agentTitle": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "modelId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "sessionId",
+                "agentTitle",
+                "modelId"
+              ],
+              "additionalProperties": true
+            },
+            "selection": {
+              "type": "object",
+              "properties": {
+                "agentTitle": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "modelSettings": {
+                  "type": "object",
+                  "properties": {
+                    "modelId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reasoningEffort": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "modelId",
+                    "reasoningEffort"
+                  ],
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "agentTitle",
+                "modelSettings"
+              ],
+              "additionalProperties": true
+            },
+            "activeSelection": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "object",
+                  "properties": {
+                    "agentTitle": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "modelSettings": {
+                      "type": "object",
+                      "properties": {
+                        "modelId": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "reasoningEffort": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "modelId",
+                        "reasoningEffort"
+                      ],
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "agentTitle",
+                    "modelSettings"
+                  ],
+                  "additionalProperties": true
                 },
                 {
                   "type": "null"
                 }
               ]
             },
-            "model": {
+            "activity": {
               "type": "string",
-              "minLength": 1
-            },
-            "reasoningEffort": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
+              "enum": [
+                "working",
+                "idle"
               ]
             },
             "createdAt": {
               "type": "integer",
               "minimum": 0,
               "maximum": 9007199254740991
-            },
-            "running": {
-              "type": "boolean"
             },
             "lastSeq": {
               "type": "integer",
@@ -5293,11 +6645,11 @@
           "required": [
             "id",
             "sessionDir",
-            "agent",
-            "model",
-            "reasoningEffort",
+            "identity",
+            "selection",
+            "activeSelection",
+            "activity",
             "createdAt",
-            "running",
             "lastSeq"
           ],
           "additionalProperties": true
@@ -5333,6 +6685,81 @@
         },
         "text": {
           "type": "string"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "attachmentId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "contentId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "representationId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string"
+              },
+              "mediaType": {
+                "type": "string"
+              },
+              "digest": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "attachmentId",
+              "contentId",
+              "representationId",
+              "name",
+              "mediaType",
+              "digest"
+            ],
+            "additionalProperties": true
+          }
+        },
+        "selection": {
+          "type": "object",
+          "properties": {
+            "agentTitle": {
+              "type": "string",
+              "minLength": 1
+            },
+            "modelSettings": {
+              "type": "object",
+              "properties": {
+                "modelId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "reasoningEffort": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
         },
         "mode": {
           "type": "string",
@@ -5416,29 +6843,94 @@
     "session.cancel.result": {
       "type": "object"
     },
-    "session.setModel.params": {
+    "session.grants.list.params": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "additionalProperties": true
+    },
+    "session.grants.list.result": {
+      "type": "object",
+      "properties": {
+        "grants": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "agentTitle": {
+                "type": "string",
+                "minLength": 1
+              },
+              "position": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "permission": {
+                "type": "string"
+              },
+              "pattern": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "sessionId",
+              "agentTitle",
+              "position",
+              "permission",
+              "pattern"
+            ],
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": [
+        "grants"
+      ],
+      "additionalProperties": true
+    },
+    "session.grants.clear.params": {
       "type": "object",
       "properties": {
         "sessionId": {
           "type": "string",
           "minLength": 1
         },
-        "model": {
+        "agentTitle": {
           "type": "string",
           "minLength": 1
-        },
-        "reasoningEffort": {
-          "type": "string"
         }
       },
       "required": [
         "sessionId",
-        "model"
+        "agentTitle"
       ],
       "additionalProperties": true
     },
-    "session.setModel.result": {
-      "type": "object"
+    "session.grants.clear.result": {
+      "type": "object",
+      "properties": {
+        "cleared": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "cleared"
+      ],
+      "additionalProperties": true
     },
     "session.fork.params": {
       "type": "object",
@@ -5470,37 +6962,144 @@
             "sessionDir": {
               "type": "string"
             },
-            "agent": {
+            "identity": {
+              "type": "object",
+              "properties": {
+                "sessionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "agentTitle": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "modelId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "sessionId",
+                "agentTitle",
+                "modelId"
+              ],
+              "additionalProperties": true
+            },
+            "selection": {
+              "type": "object",
+              "properties": {
+                "agentTitle": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "modelSettings": {
+                  "type": "object",
+                  "properties": {
+                    "modelId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reasoningEffort": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "modelId",
+                    "reasoningEffort"
+                  ],
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "agentTitle",
+                "modelSettings"
+              ],
+              "additionalProperties": true
+            },
+            "activeSelection": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "object",
+                  "properties": {
+                    "agentTitle": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "modelSettings": {
+                      "type": "object",
+                      "properties": {
+                        "modelId": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "reasoningEffort": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "modelId",
+                        "reasoningEffort"
+                      ],
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "agentTitle",
+                    "modelSettings"
+                  ],
+                  "additionalProperties": true
                 },
                 {
                   "type": "null"
                 }
               ]
             },
-            "model": {
+            "activity": {
               "type": "string",
-              "minLength": 1
-            },
-            "reasoningEffort": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
+              "enum": [
+                "working",
+                "idle"
               ]
             },
             "createdAt": {
               "type": "integer",
               "minimum": 0,
               "maximum": 9007199254740991
-            },
-            "running": {
-              "type": "boolean"
             },
             "lastSeq": {
               "type": "integer",
@@ -5511,11 +7110,11 @@
           "required": [
             "id",
             "sessionDir",
-            "agent",
-            "model",
-            "reasoningEffort",
+            "identity",
+            "selection",
+            "activeSelection",
+            "activity",
             "createdAt",
-            "running",
             "lastSeq"
           ],
           "additionalProperties": true
@@ -5539,6 +7138,43 @@
         },
         "text": {
           "type": "string"
+        },
+        "selection": {
+          "type": "object",
+          "properties": {
+            "agentTitle": {
+              "type": "string",
+              "minLength": 1
+            },
+            "modelSettings": {
+              "type": "object",
+              "properties": {
+                "modelId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "reasoningEffort": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
         }
       },
       "required": [
@@ -5549,6 +7185,545 @@
     },
     "session.rewind.result": {
       "type": "object"
+    },
+    "content.get.params": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contentId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "referenceId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "sessionId",
+        "contentId",
+        "referenceId"
+      ],
+      "additionalProperties": true
+    },
+    "content.get.result": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "object",
+          "properties": {
+            "contentId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "referenceId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sessionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "available": {
+              "type": "boolean"
+            },
+            "representations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "representationId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "original",
+                      "text",
+                      "image",
+                      "pdf-page",
+                      "converted-text"
+                    ]
+                  },
+                  "mediaType": {
+                    "type": "string"
+                  },
+                  "digest": {
+                    "type": "string"
+                  },
+                  "byteLength": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "filename": {
+                    "type": "string"
+                  },
+                  "page": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "transformation": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "representationId",
+                  "kind",
+                  "mediaType",
+                  "digest",
+                  "byteLength",
+                  "filename",
+                  "page",
+                  "transformation"
+                ],
+                "additionalProperties": true
+              }
+            }
+          },
+          "required": [
+            "contentId",
+            "referenceId",
+            "sessionId",
+            "available",
+            "representations"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "additionalProperties": true
+    },
+    "upload.create.params": {
+      "type": "object",
+      "properties": {
+        "draftId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "mediaType": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "draftId",
+        "name",
+        "mediaType",
+        "size"
+      ],
+      "additionalProperties": true
+    },
+    "upload.create.result": {
+      "type": "object",
+      "properties": {
+        "upload": {
+          "type": "object",
+          "properties": {
+            "uploadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "draftId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "filename": {
+              "type": "string"
+            },
+            "mediaType": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "size": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "digest": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "createdAt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "expiresAt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "claimed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "uploadId",
+            "draftId",
+            "filename",
+            "mediaType",
+            "offset",
+            "size",
+            "digest",
+            "createdAt",
+            "expiresAt",
+            "claimed"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "upload"
+      ],
+      "additionalProperties": true
+    },
+    "upload.status.params": {
+      "type": "object",
+      "properties": {
+        "uploadId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "uploadId"
+      ],
+      "additionalProperties": true
+    },
+    "upload.status.result": {
+      "type": "object",
+      "properties": {
+        "upload": {
+          "type": "object",
+          "properties": {
+            "uploadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "draftId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "filename": {
+              "type": "string"
+            },
+            "mediaType": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "size": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "digest": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "createdAt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "expiresAt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "claimed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "uploadId",
+            "draftId",
+            "filename",
+            "mediaType",
+            "offset",
+            "size",
+            "digest",
+            "createdAt",
+            "expiresAt",
+            "claimed"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "upload"
+      ],
+      "additionalProperties": true
+    },
+    "upload.append.params": {
+      "type": "object",
+      "properties": {
+        "uploadId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "data": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "uploadId",
+        "offset",
+        "data"
+      ],
+      "additionalProperties": true
+    },
+    "upload.append.result": {
+      "type": "object",
+      "properties": {
+        "upload": {
+          "type": "object",
+          "properties": {
+            "uploadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "draftId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "filename": {
+              "type": "string"
+            },
+            "mediaType": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "size": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "digest": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "createdAt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "expiresAt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "claimed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "uploadId",
+            "draftId",
+            "filename",
+            "mediaType",
+            "offset",
+            "size",
+            "digest",
+            "createdAt",
+            "expiresAt",
+            "claimed"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "upload"
+      ],
+      "additionalProperties": true
+    },
+    "upload.finalize.params": {
+      "type": "object",
+      "properties": {
+        "uploadId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "digest": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "uploadId",
+        "size",
+        "digest"
+      ],
+      "additionalProperties": true
+    },
+    "upload.finalize.result": {
+      "type": "object",
+      "properties": {
+        "upload": {
+          "type": "object",
+          "properties": {
+            "uploadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "draftId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "filename": {
+              "type": "string"
+            },
+            "mediaType": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "size": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "digest": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "createdAt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "expiresAt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "claimed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "uploadId",
+            "draftId",
+            "filename",
+            "mediaType",
+            "offset",
+            "size",
+            "digest",
+            "createdAt",
+            "expiresAt",
+            "claimed"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "upload"
+      ],
+      "additionalProperties": true
     }
   }
 }
