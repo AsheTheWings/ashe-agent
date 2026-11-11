@@ -75,7 +75,8 @@ allowlist from the versioned catalog: `web.sync`, `web.interaction`,
 `web.render_failure`, `web.draft`, and `web.auth`, with only the attributes
 the catalog assigns each name. It rejects message bodies, unknown fields,
 oversized records, excess batches and disallowed origins. Accepted records
-are emitted as log records through the backend's OTLP exporters; the
+are emitted with their catalog name as both event name and fixed log body,
+and their catalog INFO or WARN severity, through the backend's OTLP exporters; the
 backend holds the only OTLP credentials, and no console or file sink is a
 fallback. Browser drafts, messages, attachments, tokens and tool payloads
 never enter this path.
