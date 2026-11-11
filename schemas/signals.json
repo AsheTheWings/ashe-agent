@@ -1,5 +1,5 @@
 {
-  "version": 6,
+  "version": 7,
   "scope": "ashe-agent",
   "attributes": {
     "rpc.method": {
@@ -172,6 +172,13 @@
         "unknown_state"
       ],
       "description": "How a GitHub sign-in callback ended: the owner signed in, the user denied access, another GitHub user, a GitHub failure, or an unknown state."
+    },
+    "ashe_agent.subscription.suppression_reason": {
+      "type": "string",
+      "values": [
+        "reentry"
+      ],
+      "description": "Why an automatic subscription delivery was suppressed."
     }
   },
   "errorClasses": [
@@ -261,7 +268,8 @@
       "description": "One context turn, from its context turn component to the end of its turn.",
       "attributes": [
         "ashe_agent.context_turn.trigger",
-        "ashe_agent.context_turn.constructed"
+        "ashe_agent.context_turn.constructed",
+        "error.type"
       ]
     },
     "ashe_agent.clearing": {
@@ -445,6 +453,13 @@
       "description": "Revoking the GitHub token of a sign-in failed; the sign-in's outcome is unchanged.",
       "attributes": [
         "error.type"
+      ]
+    },
+    "ashe_agent.subscription.suppressed": {
+      "severity": "WARN",
+      "description": "An automatic subscription delivery would reenter a session already visited by its causal root.",
+      "attributes": [
+        "ashe_agent.subscription.suppression_reason"
       ]
     }
   }

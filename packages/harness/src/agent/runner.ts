@@ -45,6 +45,7 @@ class TurnEvents {
   /** Committed calls, keyed by their owned invocation id. */
   private readonly ownedCalls = new Map<string, Call>()
   private invocationIds: ReadonlyArray<string> = []
+  private assistantEntryId: string | null = null
   private committedCalls: NonNullable<AIMessage["tool_calls"]> = []
   private modelCallId: string | null = null
   private committed = false
@@ -81,6 +82,7 @@ class TurnEvents {
     this.streamingCalls.clear()
     this.ownedCalls.clear()
     this.invocationIds = []
+    this.assistantEntryId = null
     this.committedCalls = []
     this.emit({ type: "MODEL_CALL_STARTED", runId: this.context.turn.runId, modelCallId, ordinal })
   }
@@ -174,7 +176,9 @@ class TurnEvents {
     events.push({ type: "MODEL_CALL_COMMITTED", runId: this.context.turn.runId, modelCallId: this.modelCallId!, inputBoundaryId })
     if (!this.closed) {
       this.committedCalls = message.tool_calls ?? []
-      this.invocationIds = this.context.commitAssistant(message, events, this.modelCallId!)
+      const committed = this.context.commitAssistant(message, events, this.modelCallId!)
+      this.assistantEntryId = committed.entryId
+      this.invocationIds = committed.invocationIds
       for (const [index, call] of this.committedCalls.entries()) {
         const invocationId = this.invocationIds[index]
         if (invocationId === undefined) continue
@@ -296,6 +300,7 @@ class TurnEvents {
     for (const [key, call] of this.ownedCalls) if (call.modelCallId === modelCallId) this.ownedCalls.delete(key)
     this.modelCallId = null
     this.committed = false
+    this.assistantEntryId = null
   }
 
   /** A terminal failure: discard the uncommitted current call, then settle committed calls. */
@@ -306,6 +311,10 @@ class TurnEvents {
 
   currentModelCallId() {
     return this.modelCallId
+  }
+
+  assistantEntry() {
+    return this.assistantEntryId
   }
 }
 
@@ -411,7 +420,7 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
   }
   const settings = callSettings(model, session.modelOverrides[model.id], turn.reasoningEffort)
   const port = tracedPort(options.port, context)
-  let modelCallOrdinal = 1
+  let modelCallOrdinal = context.nextModelCallOrdinal
 
   for (;;) {
     signal.throwIfAborted()
@@ -581,12 +590,21 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
     const calls = (message.tool_calls ?? []).filter((call) => !invalid.has(call.id!))
     if (calls.length === 0 && invalid.size === 0) {
       // A step boundary after a reply without tool calls: eligible input ends the turn; a context turn's idle may go on.
-      if (context.deliver()) return { status: "finished" }
+      const continues = context.deliver()
+      const text = typeof message.content === "string"
+        ? message.content
+        : message.content.flatMap((part) => (typeof part === "object" && part.type === "text" ? [part.text] : [])).join("")
+      const entryId = events.assistantEntry()
+      if (!context.isContextTurn() && entryId !== null && text !== "") {
+        context.publishAssistant(entryId, text, continues ? "agent_intermediate" : "agent_final")
+      }
+      if (continues) return { status: "finished" }
       if (!context.isContextTurn()) return { status: "finished" }
       await context.idle(signal)
       return { status: "finished" }
     }
     let stopped = false
+    let deferredFork: { readonly call: NonNullable<AIMessage["tool_calls"]>[number]; readonly invocationId: string } | null = null
     for (const call of calls) {
       const callId = call.id!
       const invocationId = events.invocationFor(call)
@@ -595,8 +613,17 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
         events.result(invocationId, call.name, unfinishedResult("canceled", false), "canceled")
         continue
       }
+      const selected = tools.get(call.name)
+      if (selected?.defer === "fork") {
+        if (deferredFork === null) {
+          deferredFork = { call, invocationId }
+        } else {
+          events.result(invocationId, call.name, "Only the first agent fork request in a response is accepted.", "failed")
+        }
+        continue
+      }
       const result = await runTool(
-        tools.get(call.name),
+        selected,
         call.name,
         call.args,
         callId,
@@ -611,6 +638,30 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
       signal.throwIfAborted()
       if (result.outcome === "declined" && result.endTurn) stopped = true
       events.result(invocationId, call.name, result.content, result.outcome)
+    }
+    if (deferredFork !== null) {
+      if (stopped || signal.aborted) {
+        events.result(deferredFork.invocationId, deferredFork.call.name, unfinishedResult("canceled", false), "canceled")
+      } else {
+        const forkTool = tools.get(deferredFork.call.name)
+        const result = await runTool(
+          forkTool,
+          deferredFork.call.name,
+          deferredFork.call.args,
+          deferredFork.call.id!,
+          modelCallId,
+          deferredFork.invocationId,
+          context,
+          events,
+          signal,
+          model.imageInput,
+          specs,
+        )
+        // The fork host commits its source receipt with the branch transaction.
+        if (!(forkTool?.defer === "fork" && result.outcome === "success")) {
+          events.result(deferredFork.invocationId, deferredFork.call.name, result.content, result.outcome)
+        }
+      }
     }
     if (stopped) return { status: "cancelled" }
     // A step boundary after the tool results: eligible input ends this AgentTurn.
@@ -660,6 +711,11 @@ const runTool = async (
         invokeTool(tool, args, {
           sessionId: context.session.id,
           runId: context.turn.runId,
+          agentTitle: context.turn.agentTitle,
+          modelId: context.turn.model,
+          reasoningEffort: context.turn.reasoningEffort,
+          modelCallId,
+          ...(invocationId === undefined ? {} : { invocationId }),
           toolCallId: callId,
           cwd: context.session.sessionDir,
           imageInput,

@@ -121,6 +121,8 @@ describe("semantic history migrations", () => {
       expect(applyMigrations(db, migrations).map((migration) => migration.name)).toEqual([
         "0028_semantic_history.sql",
         "0029_tool_ownership.sql",
+        "0030_communication.sql",
+        "0031_subscription_operation_ownership.sql",
       ])
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([])
       const store = new SessionStore(db, runDir)
@@ -182,13 +184,17 @@ describe("semantic history migrations", () => {
     }
   })
 
-  test("a database at the reviewed migration 28 upgrades through migration 29", () => {
+  test("a database at the reviewed migration 28 upgrades through migration 31", () => {
     const db = legacyDatabase()
     try {
       expect(applyMigrations(db, migrations.slice(0, 28)).map((migration) => migration.name)).toEqual([
         "0028_semantic_history.sql",
       ])
-      expect(applyMigrations(db, migrations).map((migration) => migration.name)).toEqual(["0029_tool_ownership.sql"])
+      expect(applyMigrations(db, migrations).map((migration) => migration.name)).toEqual([
+        "0029_tool_ownership.sql",
+        "0030_communication.sql",
+        "0031_subscription_operation_ownership.sql",
+      ])
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([])
       const columns = db.query<{ name: string }, []>("PRAGMA table_info(agent_tools)").all().map((column) => column.name)
       expect(columns).toContain("model_call_unavailable")

@@ -6,6 +6,7 @@ import { createApiToken } from "../../src/auth/credentials.ts"
 import type { AuxiliaryModels, Permission } from "../../src/inputs/shapes.ts"
 import { ProtocolServer } from "../../src/server/serve.ts"
 import type { ModelPort } from "../../src/agent/model.ts"
+import type { Tool } from "../../src/agent/tools.ts"
 import type { ConfiguredModel } from "../../src/models/registry.ts"
 import { Sessions, type SessionSetup, type TurnRunner } from "../../src/sessions/hub.ts"
 import { noAgents } from "../../src/sessions/setup.ts"
@@ -36,6 +37,11 @@ export type TestServerOptions = {
   readonly runner?: TurnRunner
   readonly modelPort?: ModelPort
   readonly auxiliaryModels?: AuxiliaryModels
+  readonly tools?: () => ReadonlyArray<Tool>
+  readonly communicationWaitMinMs?: number
+  readonly communicationWaitDefaultMs?: number
+  readonly communicationWaitMaxMs?: number
+  readonly sqlite3Path?: string
 }
 
 /**
@@ -167,6 +173,12 @@ export class TestServer {
           port: this.options.modelPort ?? noAuxiliaryModel,
           setup: this.options.setup ?? noAgents,
           ...(this.options.auxiliaryModels === undefined ? {} : { auxiliaryModels: this.options.auxiliaryModels }),
+          databasePath: this.databasePath,
+          sqlite3Path: this.options.sqlite3Path ?? "/usr/bin/sqlite3",
+          ...(this.options.tools === undefined ? {} : { tools: this.options.tools }),
+          ...(this.options.communicationWaitMinMs === undefined ? {} : { communicationWaitMinMs: this.options.communicationWaitMinMs }),
+          ...(this.options.communicationWaitDefaultMs === undefined ? {} : { communicationWaitDefaultMs: this.options.communicationWaitDefaultMs }),
+          ...(this.options.communicationWaitMaxMs === undefined ? {} : { communicationWaitMaxMs: this.options.communicationWaitMaxMs }),
           permission: this.permission,
           home: this.dir,
           sessionsDir: this.sessionsDir,

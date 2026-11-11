@@ -695,9 +695,9 @@ export class SessionStore {
       this.db
         .query(
           `INSERT INTO turns
-            (session_id, run_id, position, cause, settings_revision, status, first_seq, started_at, ended_at,
+            (session_id, run_id, position, cause, settings_revision, user_message_ids, status, first_seq, started_at, ended_at,
              context_workflow_id, context_start_item)
-            SELECT ?, run_id, position, cause, settings_revision, status, first_seq, started_at, ended_at,
+            SELECT ?, run_id, position, cause, settings_revision, user_message_ids, status, first_seq, started_at, ended_at,
               NULL, context_start_item
             FROM turns WHERE session_id = ? AND first_seq < ?`,
         )
@@ -710,6 +710,13 @@ export class SessionStore {
             WHERE i.session_id = ? AND t.first_seq < ?`,
         )
         .run(target.id, source.id, cutoff)
+      this.db
+        .query(
+          `INSERT INTO turn_reactions (session_id, run_id, root_id, visited, automatic)
+            SELECT ?, run_id, root_id, visited, automatic FROM turn_reactions
+            WHERE session_id = ? AND run_id IN (SELECT value FROM json_each(?))`,
+        )
+        .run(target.id, source.id, JSON.stringify(keptTurns.map((turn) => turn.runId)))
       const kept = keptTurns.map((turn) => turn.runId)
       this.conversation.copy(source.id, target.id, kept)
       this.timeline.copy(source.id, target.id, kept)

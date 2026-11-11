@@ -6,7 +6,7 @@ import { logs, SeverityNumber } from "@opentelemetry/api-logs"
  * with its attributes, units, and error classes. Bump the version whenever
  * a name, attribute, unit, or error class changes.
  */
-export const SIGNAL_CATALOG_VERSION = 6
+export const SIGNAL_CATALOG_VERSION = 7
 
 /** The instrumentation scope of every signal. */
 export const SCOPE = "ashe-agent"
@@ -60,6 +60,7 @@ export const QUESTION_OUTCOMES = ["answered", "message", "canceled"] as const
 export const ACTION_OUTCOMES = ["completed", "canceled", "timedOut", "disconnected", "failed"] as const
 export const CHECKPOINT_WINDOW_CAUSES = ["creation", "context_turn"] as const
 export const SIGN_IN_OUTCOMES = ["signed_in", "denied", "not_owner", "github_failed", "unknown_state"] as const
+export const SUBSCRIPTION_SUPPRESSION_REASONS = ["reentry"] as const
 
 /** Every attribute a signal may carry, with its type and, when bounded by a list, its values. */
 export const ATTRIBUTES = {
@@ -109,6 +110,11 @@ export const ATTRIBUTES = {
     description:
       "How a GitHub sign-in callback ended: the owner signed in, the user denied access, another GitHub user, a GitHub failure, or an unknown state.",
   },
+  "ashe_agent.subscription.suppression_reason": {
+    type: "string",
+    values: SUBSCRIPTION_SUPPRESSION_REASONS,
+    description: "Why an automatic subscription delivery was suppressed.",
+  },
 } as const
 
 export type AttributeName = keyof typeof ATTRIBUTES
@@ -142,7 +148,7 @@ export const SPANS = {
   },
   "ashe_agent.context_turn": {
     description: "One context turn, from its context turn component to the end of its turn.",
-    attributes: ["ashe_agent.context_turn.trigger", "ashe_agent.context_turn.constructed"],
+    attributes: ["ashe_agent.context_turn.trigger", "ashe_agent.context_turn.constructed", "error.type"],
   },
   "ashe_agent.clearing": { description: "One tool result clearing of a context turn.", attributes: ["ashe_agent.clearing.attempt"] },
   "ashe_agent.compaction_call": { description: "One compaction call for a chat boundary.", attributes: ["ashe_agent.model", "error.type"] },
@@ -221,6 +227,11 @@ export const LOGS = {
     severity: "WARN",
     description: "Revoking the GitHub token of a sign-in failed; the sign-in's outcome is unchanged.",
     attributes: ["error.type"],
+  },
+  "ashe_agent.subscription.suppressed": {
+    severity: "WARN",
+    description: "An automatic subscription delivery would reenter a session already visited by its causal root.",
+    attributes: ["ashe_agent.subscription.suppression_reason"],
   },
 } as const satisfies Record<string, { severity: "ERROR" | "WARN"; description: string; attributes: ReadonlyArray<AttributeName> }>
 

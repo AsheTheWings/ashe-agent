@@ -188,6 +188,11 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
           userTimeZone: inputs.userTimeZone,
           port,
           auxiliaryModels: inputs.auxiliaryModels,
+          databasePath: databasePath(inputs.stateDir),
+          sqlite3Path: inputs.sqlite3Path,
+          communicationWaitMinMs: inputs.communicationWaitMinMs,
+          communicationWaitDefaultMs: inputs.communicationWaitDefaultMs,
+          communicationWaitMaxMs: inputs.communicationWaitMaxMs,
           toolPolicy: toolTimePolicy,
           uploadLimits: {
             maxFileBytes: inputs.contentMaxOriginalBytes,

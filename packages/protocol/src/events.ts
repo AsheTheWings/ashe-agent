@@ -4,6 +4,7 @@ import {
   Count,
   Id,
   InputMode,
+  MessageSender,
   PermissionAnswer,
   Sender,
   Seq,
@@ -190,7 +191,7 @@ export const InputWaiting = event("INPUT_WAITING", {
   inputId: Id,
   text: Schema.String,
   mode: InputMode,
-  sender: Sender,
+  sender: MessageSender,
 })
 
 /** A user message entering an admitted UserTurn. Inputs of each mode enter in arrival order. */
@@ -198,7 +199,7 @@ export const InputReceived = event("INPUT_RECEIVED", {
   inputId: Id,
   text: Schema.String,
   mode: InputMode,
-  sender: Sender,
+  sender: MessageSender,
 })
 
 /** The session's applied title, model, and effort selection changed. */

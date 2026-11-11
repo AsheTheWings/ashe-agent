@@ -11,8 +11,11 @@ v2.2.1 under its MIT licence.
 The code mode inventory holds the tools of every MCP server whose entry
 does not set `codemode: false`. Built-in tools and the tools of servers
 that opt out are offered to the model directly and are not callable from
-programs. A program calls a tool as `tools.<server>.<tool>(input)`, with
-every character outside `A-Z`, `a-z`, `0-9`, `_`, and `-` in either name
+programs. The session and context namespaces are always excluded from the
+inventory, its catalog, search results, and executable tool table. The
+model uses their tools directly. A program calls a tool as
+`tools.<server>.<tool>(input)`, with every character outside `A-Z`, `a-z`,
+`0-9`, `_`, and `-` in either name
 replaced by `_`, as in the tool's registered name.
 
 The `execute` tool runs one program, `{ code }`. It is offered while the

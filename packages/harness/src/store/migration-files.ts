@@ -27,6 +27,8 @@ import m0026 from "../../migrations/0026_turn_membership.sql" with { type: "text
 import m0027 from "../../migrations/0027_context_workflows.sql" with { type: "text" }
 import m0028 from "../../migrations/0028_semantic_history.sql" with { type: "text" }
 import m0029 from "../../migrations/0029_tool_ownership.sql" with { type: "text" }
+import m0030 from "../../migrations/0030_communication.sql" with { type: "text" }
+import m0031 from "../../migrations/0031_subscription_operation_ownership.sql" with { type: "text" }
 
 /**
  * The migration directory `packages/harness/migrations`, embedded so a
@@ -63,4 +65,6 @@ export const migrationFiles: ReadonlyArray<{ readonly file: string; readonly sql
   { file: "0027_context_workflows.sql", sql: m0027 },
   { file: "0028_semantic_history.sql", sql: m0028 },
   { file: "0029_tool_ownership.sql", sql: m0029 },
+  { file: "0030_communication.sql", sql: m0030 },
+  { file: "0031_subscription_operation_ownership.sql", sql: m0031 },
 ]

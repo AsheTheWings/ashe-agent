@@ -2510,6 +2510,43 @@
                                 "loginId"
                               ],
                               "additionalProperties": true
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "session"
+                                  ]
+                                },
+                                "sessionId": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "agentTitle": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "modelId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "sessionId",
+                                "agentTitle",
+                                "modelId"
+                              ],
+                              "additionalProperties": true
                             }
                           ]
                         }
@@ -2589,6 +2626,43 @@
                               "required": [
                                 "kind",
                                 "loginId"
+                              ],
+                              "additionalProperties": true
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "session"
+                                  ]
+                                },
+                                "sessionId": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "agentTitle": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "modelId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "sessionId",
+                                "agentTitle",
+                                "modelId"
                               ],
                               "additionalProperties": true
                             }
@@ -4589,6 +4663,43 @@
                     "loginId"
                   ],
                   "additionalProperties": true
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "session"
+                      ]
+                    },
+                    "sessionId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "agentTitle": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "modelId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "sessionId",
+                    "agentTitle",
+                    "modelId"
+                  ],
+                  "additionalProperties": true
                 }
               ]
             }
@@ -4668,6 +4779,43 @@
                   "required": [
                     "kind",
                     "loginId"
+                  ],
+                  "additionalProperties": true
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "session"
+                      ]
+                    },
+                    "sessionId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "agentTitle": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "modelId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "sessionId",
+                    "agentTitle",
+                    "modelId"
                   ],
                   "additionalProperties": true
                 }

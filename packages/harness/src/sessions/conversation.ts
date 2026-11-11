@@ -1,10 +1,11 @@
 import type { Database } from "bun:sqlite"
 import { AIMessage, mapChatMessagesToStoredMessages, mapStoredMessagesToChatMessages, type StoredMessage } from "@langchain/core/messages"
-import type { InputMode, SelectionPatch, Sender } from "@ashe-agent/protocol"
+import type { InputMode, MessageSender, SelectionPatch } from "@ashe-agent/protocol"
 import type { RetainedAttachmentRef, RetainedContent } from "@ashe-agent/protocol"
 import { UNTITLED_AGENT_TITLE } from "@ashe-agent/protocol"
 import type { ToolContent, ToolOutcome } from "../agent/window.ts"
 import type { Component, SourceName, SourceStates } from "../context/components.ts"
+import type { Reaction } from "./communication.ts"
 
 export type ItemBody =
   | { readonly kind: "component"; readonly component: Component }
@@ -12,7 +13,7 @@ export type ItemBody =
       readonly kind: "user"
       readonly inputId: string
       readonly text: string
-      readonly sender: Sender
+      readonly sender: MessageSender
       readonly attachments?: ReadonlyArray<RetainedAttachmentRef>
     }
   | { readonly kind: "assistant"; readonly message: AIMessage }
@@ -54,7 +55,7 @@ export type WaitingEntry =
       readonly inputId: string
       readonly text: string
       readonly mode: InputMode
-      readonly sender: Sender
+      readonly sender: MessageSender
       readonly attachments?: ReadonlyArray<RetainedAttachmentRef>
       readonly selection?: SelectionPatch
     }
@@ -65,6 +66,8 @@ export type WaitingEntry =
       readonly component: Component
       readonly trigger: "notification" | "continuation" | "fork" | "context"
       readonly workflowId?: string
+      /** The publication cause an automatic notification carries through the recipient turn. */
+      readonly reaction?: Reaction
     }
 
 export type NewWaitingEntry =
@@ -405,6 +408,17 @@ export class Conversation {
       "INSERT OR IGNORE INTO request_manifest_rendered (session_id, manifest_id, content_ref) VALUES (?, ?, ?)",
     )
     for (const contentRef of rendered) retain.run(sessionId, call.inputBoundaryId, contentRef)
+  }
+
+  /** The next ordinal for a model call of `runId`, including calls copied by an agent fork. */
+  nextTurnModelCallOrdinal(sessionId: string, runId: string): number {
+    return (
+      this.db
+        .query<{ ordinal: number | null }, [string, string]>(
+          "SELECT max(ordinal) AS ordinal FROM model_calls WHERE session_id = ? AND turn_id = ?",
+        )
+        .get(sessionId, runId)?.ordinal ?? 0
+    ) + 1
   }
 
   nextModelCallOrdinal(sessionId: string, windowPosition: number): number {

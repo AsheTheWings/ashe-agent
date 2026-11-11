@@ -139,6 +139,10 @@ const runCall = (
 export const catalogTools = (inventory: ReadonlyArray<Tool>): ReadonlyArray<CatalogTool> =>
   CodeMode.make({ tools: programTools(inventory, null) }).catalog
 
+/** The tools code mode may discover and execute: direct-only session and context tools are excluded. */
+export const codeModeInventory = (inventory: ReadonlyArray<Tool>): ReadonlyArray<Tool> =>
+  inventory.filter((tool) => tool.namespace !== "session" && tool.namespace !== "context")
+
 /**
  * The code mode catalog of a session with `rules`, over the tools
  * `inventory` gives: null when the rules wholly deny `execute`, and
@@ -149,7 +153,11 @@ export const sessionCodeModeCatalog =
   (rules: ReadonlyArray<Rule>): string | null =>
     whollyDenied(rules, "execute")
       ? null
-      : renderCatalog(catalogTools(inventory().filter((tool) => !whollyDenied(rules, withholdingName(tool)))))
+      : renderCatalog(
+          catalogTools(
+            codeModeInventory(inventory()).filter((tool) => !whollyDenied(rules, withholdingName(tool))),
+          ),
+        )
 
 /**
  * `execute`: runs a code mode program over the tools `inventory` gives at
@@ -172,7 +180,7 @@ export const executeTool = (
       const program = Effect.gen(function* () {
         const execution: Execution = { run, images: [], calls: 0, declined: yield* Deferred.make<string>(), trace, policy }
         const runtime = CodeMode.make({
-          tools: programTools(inventory().filter(run.offered), execution),
+          tools: programTools(codeModeInventory(inventory()).filter(run.offered), execution),
           limits: {
             ...(limits.toolCalls === undefined ? {} : { maxToolCalls: limits.toolCalls }),
             ...(limits.outputBytes === undefined ? {} : { maxOutputBytes: limits.outputBytes }),

@@ -565,4 +565,43 @@ describe("telemetry", () => {
       .map((span) => span.attributes["error.type"])
     expect(classes).toEqual(["user_instructions_unreadable", "checkpoint_window_failed"])
   })
+
+  test("a suppressed failure-cascade reentry is observable without its content", async () => {
+    const h = new AgentHarness()
+    try {
+      const first = h.create()
+      const second = h.create()
+      const third = h.create()
+      h.model.next(say("first ready"), say("second ready"), say("third ready"))
+      for (const id of [first, second, third]) {
+        h.input(id, "ready")
+        await h.turnsEnded(id, 1)
+      }
+      const run = (id: string) => h.hub.store.turns(id)[0]!.runId
+      h.hub.communication.subscribe(second, first, ["agent_final"], second, run(second), Date.now())
+      h.hub.communication.subscribe(third, second, ["agent_final"], third, run(third), Date.now())
+      h.hub.communication.subscribe(first, third, ["agent_final"], first, run(first), Date.now())
+      h.model.next(
+        failWith(new Error("CASCADE-CONTENT-MARKER")),
+        failWith(new Error("CASCADE-CONTENT-MARKER")),
+        failWith(new Error("CASCADE-CONTENT-MARKER")),
+      )
+      h.input(first, "fail first")
+      await waitFor("the cascade turns", () =>
+        h.hub.store.turns(first).length === 2 &&
+        h.hub.store.turns(second).length === 2 &&
+        h.hub.store.turns(third).length === 2 ? true : undefined,
+      )
+      const suppressed = await waitFor("the suppression log", () =>
+        telemetry.logs().find((record) => record.eventName === "ashe_agent.subscription.suppressed"),
+      )
+      expect(suppressed.attributes).toEqual({
+        "ashe_agent.subscription.suppression_reason": "reentry",
+      })
+      expect(await exportedText(telemetry)).not.toContain("CASCADE-CONTENT-MARKER")
+      expect(await offCatalog(telemetry)).toEqual([])
+    } finally {
+      await h.cleanup()
+    }
+  }, 20_000)
 })

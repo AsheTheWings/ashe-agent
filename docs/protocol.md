@@ -148,8 +148,8 @@ cover what AG-UI does not:
 | --- | --- |
 | `SESSION_CREATED` | The session's first event: its `sessionDir`, agent, model, reasoning effort, and fork source. |
 | `CHECKPOINT_WINDOW_SEEDED` | A checkpoint window's construction, with its number and each seed component's type, heading, and text; `runId` is null for the first window and names the context turn that built a later one. |
-| `INPUT_WAITING` | A user message stored as waiting input, with its id, text, mode, and sender. |
-| `INPUT_RECEIVED` | A user message entering the conversation, with its sender and mode. |
+| `INPUT_WAITING` | A message stored as waiting input, with its id, text, mode, and sender: the user or the session whose agent submitted it. |
+| `INPUT_RECEIVED` | A user message entering the conversation, with its sender and mode; a session sender records the source session identity and effective title and model. |
 | `DEVELOPER_MESSAGE` | A developer message delivered into a run, with each component's type, heading, and text. |
 | `SESSION_ERROR` | An error that ends nothing, such as unreadable user instructions, with a code, a message, and the run it arose in. |
 | `TIMELINE_ENTRY` | A timeline entry recorded in a run: its number, kind, fields, and for a `done` entry the entries it resolves. |
