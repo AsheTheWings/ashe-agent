@@ -18,7 +18,7 @@ while either file differs from what the schema gives.
 
 ## Profiles
 
-`ASHE_AGENT_PROFILE` selects `development` or `production` and has no
+The profile selector chooses `development` or `production` and has no
 default. Each input's default applies only to the profiles it is safe for.
 An input with no default in the selected profile is required, and a
 process refuses to start without it. Production has no defaults for values
@@ -48,25 +48,23 @@ no input is reported missing.
 
 ## The config file
 
-The config file is a JSON object whose keys are input names, such as
-`listenPort` or `providers`. `ASHE_AGENT_CONFIG_FILE` names it, by default
-`$XDG_CONFIG_HOME/ashe-agent/config.json`. A missing file is skipped. A key
-that is not an input or names a protected input makes the file invalid,
-and so does a value the input's shape refuses. The profile and the config
-file's own path come only from process input or their defaults, so the
-file cannot set them either.
+The config file is a JSON object whose keys are input names. The config-file
+input names its path, which lies under the XDG configuration directory by
+default. A missing file is skipped. A key that is not an input or names a
+protected input makes the file invalid, and so does a value the input's
+shape refuses. The profile and the config file's own path come only from
+process input or their defaults, so the file cannot set them either.
 
 Values that are structured, such as the providers or the permission
-rules, are JSON in process input too, for example
-`ASHE_AGENT_PERMISSION='{"edit":"ask"}'`.
+rules, are JSON in process input too.
 [Permissions](permissions.md) explains the rules.
 
 ## Protected inputs
 
 A protected input grants access or identity, such as a provider's API
 key. Its value is read only from a file that a configuration input names,
-for example `ASHE_AGENT_EXA_API_KEY_FILE` or a provider's `apiKeyFile`,
-never from the config file or the environment. The file must not be accessible to its group or others, and
+for example a provider's `apiKeyFile`, never from the config file or the
+environment. The file must not be accessible to its group or others, and
 its bytes are used exactly as stored, so a trailing newline becomes part
 of the value.
 
@@ -122,25 +120,41 @@ the providers must register at least one model.
 }
 ```
 
-Each model entry declares its capabilities: the input it takes, `text`
-alone or with `image`; whether it accepts a temperature; and the
-reasoning efforts it lists, if it reasons. Its settings, each optional,
-are the `checkpointWindowSize`, the `temperature`, and the
-`reasoningEffort`. A setting the capabilities do not allow is refused,
-such as an effort the model does not list or a temperature for a model
-that accepts none, and so is a `checkpointWindowSize` above
-`limit.context`. `name` is shown to clients; it defaults to the id.
+Each model entry declares its input kinds, any of `text`, `image`, and
+`pdf`; whether it accepts a temperature; and the reasoning efforts it
+lists, if it reasons. Native PDF support is declared explicitly and is
+never inferred from image support. Its settings, each optional, are the
+`checkpointWindowSize`, the `temperature`, and the `reasoningEffort`. A
+setting the capabilities do not allow is refused, such as an effort the
+model does not list or a temperature for a model that accepts none, and
+so is a `checkpointWindowSize` above `limit.context`. `name` is shown to
+clients; it defaults to the id.
 
 `defaultModel` is the model a session starts with when neither its agent
 nor the request names one. Every model id an input names, the default
 model's and each agent's included, must be registered.
 
-A model call's reasoning effort is the first that the model lists of the
-turn's selected effort and the model entry's setting. A title's effort
-preset becomes part of that selection when the title is selected. Its
-temperature is the active title's override, else the model entry's
-setting, and is sent only to a model that accepts one.
-[Model context](model-context.md) explains what each call sends.
+### Selected and derived settings
+
+A session's selection is its title, model id, and reasoning effort. A
+requested selection can explicitly clear its model or effort; omission
+preserves the applied value. Admission persists a new immutable selection
+revision only when those selected values change. Reselecting a title
+applies that title's model default and effort preset again. A model
+change clears inherited effort the new model does not list; an explicitly
+requested unsupported effort is admitted and fails execution.
+
+Temperature and checkpoint window size are derived execution settings,
+not persisted selections. At the next UserTurn, the active title's
+per-model override supplies each value before the model entry's setting
+and the default. A running AgentTurn keeps the values and title policy it
+started with. A model call's reasoning effort is the first that the model
+lists of the turn's selected effort and the model entry's setting.
+[Agents and skills](agents-and-skills.md#agents) owns title selection and
+[model context](model-context.md) explains what each call sends.
+
+The server loads titles, model entries, and permission policy once at
+startup. Changing them requires a restart.
 
 ### The working margin
 
@@ -164,9 +178,20 @@ uses its model's own settings, and the latest turn's effort selection
 only when it runs on that turn's model.
 [Model context](model-context.md) explains the tasks.
 
-The model and graph libraries' own process variables, such as
-`OPENAI_BASE_URL` or `LANGSMITH_TRACING`, configure nothing: `serve`
-removes them, as [model context](model-context.md) explains.
+The model and graph libraries' own process variables configure nothing:
+`serve` removes them, as [model context](model-context.md) explains.
+
+### Content conversion
+
+PDF page rendering and text extraction run in short-lived child processes
+launched through util-linux `prlimit`, never in the server process. The
+worker receives only the selected bytes, verifies its own data, stack, and
+CPU limits before opening them, and runs under a parent-enforced wall
+deadline and output ceiling. Active and queued work are bounded separately,
+and cancellation, failure, or overflow reaps the worker without an
+unrestricted fallback. [Content](content.md#pdf-conversion) owns the
+representation routes and [trust model](trust-model.md) states the limits
+of this isolation.
 
 ## Changing configuration
 
@@ -174,17 +199,19 @@ The server reads its inputs once, at start. Changing the providers, the
 agents, the default agent, or any other input takes a server restart.
 Title files, the global instructions file, and the skills are read when a
 session is created and again with each delivery into a turn, as
-[agents and skills](agents-and-skills.md) explains.
+[agents and skills](agents-and-skills.md#title-files-and-user-instructions)
+explains. Their changes reach a running session only at a UserTurn
+boundary; they do not replace the active AgentTurn's profile.
 
 ## Finite execution budgets
 
 The tool timeout inputs configure one elapsed-time policy for every tool
-invocation. `toolTimeoutMs` is a positive integer in milliseconds with a
-default of 300000. `toolTimeoutOverrides` is a JSON object keyed by exact
-registered tool name; each value is a positive integer or `null`. An exact
-override replaces the global limit, and `null` removes only that local
-limit, not an ancestor's deadline or cancellation. The schema owns the
-input names, shapes, and profile defaults.
+invocation. A global limit is a positive duration in milliseconds. Exact
+overrides are keyed by registered tool name, with each value a positive
+duration or `null`. An exact override replaces the global limit, and
+`null` removes only that local limit, not an ancestor's deadline or
+cancellation. The schema owns the input names, shapes, and profile
+defaults.
 
 The budget runs from before validation through permission collection,
 execution, and settlement. A code mode child inherits the earlier of its

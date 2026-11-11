@@ -15,6 +15,7 @@ import {
   type RepresentationRef,
   type RetainedAttachmentRef,
   type SelectionPatch,
+  type SemanticHistory,
   type Sender,
   type SessionEvent,
   type SessionEventBody,
@@ -1135,6 +1136,34 @@ export class SessionHub {
 
   summary(sessionId: string): SessionSummary {
     return this.store.summary(this.session(sessionId), this.activeTurn(sessionId))
+  }
+
+  /** Canonical semantic history and successful request boundaries for an owner client. */
+  semantics(sessionId: string): SemanticHistory {
+    this.session(sessionId)
+    return {
+      sessionId,
+      turns: this.store.turns(sessionId).map((turn) => ({
+        id: turn.runId,
+        position: turn.position,
+        admittedAt: turn.startedAt,
+        inputEntryIds: turn.membership.map((input) => input.inputId),
+        userMessageIds: [...turn.userMessageIds],
+        profile: {
+          agentTitle: turn.agentTitle,
+          modelSettings: { modelId: turn.model, reasoningEffort: turn.reasoningEffort },
+        },
+        settingsRevision: turn.settingsRevision,
+        outcome: turn.status === "running"
+          ? null
+          : turn.status === "finished"
+            ? "completed"
+            : turn.status,
+        contextMaintenance: turn.contextWorkflowId !== null,
+      })),
+      entries: this.store.conversation.semanticEntries(sessionId),
+      boundaries: this.store.conversation.semanticBoundaries(sessionId),
+    }
   }
 
   private activeTurn(sessionId: string): TurnRecord | null {
@@ -2844,7 +2873,7 @@ export class SessionHub {
         this.fileState.recordPendingRestore(sessionId, restore, this.now())
         for (const message of reconstructed) {
           if (message.attachments.length > 0) {
-            this.attachments.claim(senderOwner(sender), sessionId, message.inputId, message.attachments, this.now())
+            this.attachments.claimFromSession(sessionId, sessionId, message.inputId, message.attachments, this.now())
           }
         }
         this.store.removeFrom(sessionId, turn)

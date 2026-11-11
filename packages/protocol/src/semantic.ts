@@ -127,7 +127,7 @@ export type AgentToolOutcome = typeof AgentToolOutcome.Type
 export const AgentTool = Schema.Struct({
   id: Id,
   kind: Schema.Literal("agent-tool"),
-  modelCallId: Id,
+  modelCallId: Schema.NullOr(Id),
   providerCallId: Schema.NullOr(Id),
   parentInvocationId: Schema.NullOr(Id),
   name: Schema.String,
@@ -158,7 +158,7 @@ export type AgentTool = typeof AgentTool.Type
 const entryFields = {
   id: Id,
   position: Seq,
-  turnId: Id,
+  turnId: Schema.NullOr(Id),
   authorship: Authorship,
   ownership: HistoryOwnership,
   createdAt: Timestamp,
@@ -176,13 +176,13 @@ export const SemanticEntry = Schema.Union([
   Schema.Struct({
     ...entryFields,
     kind: Schema.Literal("agent"),
-    modelCallId: Id,
+    modelCallId: Schema.NullOr(Id),
     parts: Schema.Array(AgentContentPart),
   }),
   Schema.Struct({
     ...entryFields,
     kind: Schema.Literal("agent-thought"),
-    modelCallId: Id,
+    modelCallId: Schema.NullOr(Id),
     text: Schema.String,
   }),
   Schema.Struct({ ...entryFields, kind: Schema.Literal("agent-tool"), tool: AgentTool }),
@@ -201,24 +201,39 @@ export const ModelResponse = Schema.Struct({
 
 export type ModelResponse = typeof ModelResponse.Type
 
+/** A retained rendered representation of one contribution. */
+export const RenderedContribution = Schema.Struct({
+  representationId: Id,
+  contentId: Id,
+  mediaType: Schema.String,
+  digest: Schema.String,
+  byteLength: Count,
+  renderer: Schema.String,
+})
+
+export type RenderedContribution = typeof RenderedContribution.Type
+
 /** A successful request's ordered, immutable input contributions. */
 export const InputContribution = Schema.Union([
   Schema.Struct({
-    position: Seq,
+    position: Count,
     kind: Schema.Literals(["instruction", "message", "transcript"]),
     sourceEntryId: Schema.NullOr(Id),
+    sourceEntryIds: Schema.Array(Id),
     representation: RepresentationRef,
     transformation: Schema.NullOr(Schema.String),
+    rendered: RenderedContribution,
   }),
   Schema.Struct({
-    position: Seq,
+    position: Count,
     kind: Schema.Literal("tool-definition"),
     name: Schema.String,
     description: Schema.String,
     parameters: Schema.Unknown,
+    rendered: RenderedContribution,
   }),
   Schema.Struct({
-    position: Seq,
+    position: Count,
     kind: Schema.Literal("placeholder"),
     sourceEntryId: Schema.NullOr(Id),
     reason: Schema.String,
@@ -231,9 +246,11 @@ export type InputContribution = typeof InputContribution.Type
 export const ModelInputManifest = Schema.Struct({
   id: Id,
   modelCallId: Id,
-  windowId: Id,
+  turnId: Id,
+  windowPosition: Seq,
   committedAt: Timestamp,
   contributions: Schema.Array(InputContribution),
+  measurement: Schema.suspend(() => Measurement),
 })
 
 export type ModelInputManifest = typeof ModelInputManifest.Type
@@ -250,7 +267,7 @@ export type MeasurementBasis = typeof MeasurementBasis.Type
 
 /** One contribution's measured or allowed token count and its coverage. */
 export const ContributionMeasurement = Schema.Struct({
-  contributionPosition: Seq,
+  contributionPosition: Count,
   basis: MeasurementBasis,
   methodVersion: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
   tokens: Schema.NullOr(Count),
@@ -270,7 +287,7 @@ export const Measurement = Schema.Struct({
   contributions: Schema.Array(ContributionMeasurement),
   unavailable: Schema.Array(
     Schema.Struct({
-      contributionPosition: Seq,
+      contributionPosition: Count,
       reason: Schema.String,
     }),
   ),
@@ -321,6 +338,16 @@ export const Measurement = Schema.Struct({
 )
 
 export type Measurement = typeof Measurement.Type
+
+/** Canonical semantic history and every successful request boundary retained for a session. */
+export const SemanticHistory = Schema.Struct({
+  sessionId: Id,
+  turns: Schema.Array(Turn),
+  entries: Schema.Array(SemanticEntry),
+  boundaries: Schema.Array(ModelInputManifest),
+})
+
+export type SemanticHistory = typeof SemanticHistory.Type
 
 /** Provider usage is attributed separately from the recorded input estimate. */
 export const ProviderUsage = Schema.Struct({

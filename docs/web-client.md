@@ -14,15 +14,15 @@ bun run dev:web
 
 from the repository root selects the development profile, loads the `devWeb`
 process's inputs, and serves the client on `127.0.0.1`, on Vite's port.
-`devWebAllowedHosts` admits configured host names, and an occupied port
-fails the task. `devWebServerUrl` supplies the browser-accessible server
-endpoint for development, where the web client and server use separate
-ports. It is resolved through the input catalog and supplied to Vite as a
-public client constant; static builds use their own origin. The development
+The development host allowlist admits configured host names, and an
+occupied port fails the task. The development server endpoint supplies
+the browser-accessible server address, where the web client and server use
+separate ports. It is resolved through the input catalog and supplied to
+Vite as a public client constant; static builds use their own origin. The development
 process excludes inherited dependency environment overrides after resolving
 its inputs. The server accepts a browser connection only from an origin that
-`ASHE_AGENT_ORIGINS` lists, so that input must name the origin the client is
-served from; see [configuration](configuration.md).
+the configured browser origins list, so it must name the origin the client
+is served from; see [configuration](configuration.md).
 
 `bun run build:web`, from the repository root, builds the client into
 `packages/web/dist` and writes the commit it was built from to
@@ -58,7 +58,7 @@ podman tag <image id it prints> localhost/ashe-agent-web
 podman compose up -d
 ```
 
-Serve the image from an origin the server's `ASHE_AGENT_ORIGINS` lists,
+Serve the image from an origin the server's configured browser origins list,
 with `/v1/*` routed to that server. Run both from one commit, since the
 protocol may change at any revision.
 

@@ -2,10 +2,14 @@ import { describe, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import { statSync } from "node:fs"
 import { join } from "node:path"
-import { OWNER_IDENTITY_PATH, RETAINED_CONTENT_PATH } from "@ashe-agent/protocol"
+import { Schema } from "effect"
+import { OWNER_IDENTITY_PATH, RETAINED_CONTENT_PATH, SemanticHistory } from "@ashe-agent/protocol"
+import { agentRunner } from "../src/agent/runner.ts"
 import { createLogin } from "../src/auth/credentials.ts"
 import { tokenHash } from "../src/auth/tokens.ts"
+import { ModelCallError } from "../src/agent/model.ts"
 import { Client, waitFor } from "./support/cli.ts"
+import { callTools, failWith, FakeModel, say, testTools } from "./support/agent.ts"
 import { models, SessionView, TestServer } from "./support/server.ts"
 
 /** Runs `body` against a fresh in-process server and cleans up. */
@@ -82,6 +86,79 @@ const turnStatuses = (server: TestServer, id: string) => {
 }
 
 describe("sessions", () => {
+  test("a minimal client reads owner semantics across an intermediate request, fork, rewind, and restart", async () => {
+    const model = new FakeModel()
+    const server = new TestServer({ shell: "deny" }, {
+      models,
+      runner: agentRunner({ port: model, models }),
+      modelPort: model,
+      tools: testTools,
+    })
+    try {
+      const token = server.token("primary")
+      await server.start()
+      const client = await connect(server.url, token)
+      const id = await createSession(client)
+      const view = await SessionView.open(server.url, token, id)
+      model.next(callTools([{ name: "echo", args: { text: "semantic" } }]), say("finished"))
+      await client.request("session.input", { sessionId: id, text: "exercise semantics" })
+      await view.waitFor("the two-request turn", (value) => finishedRuns(value) === 1)
+
+      const first = await client.request("session.semantics", { sessionId: id })
+      expect(first.error).toBeUndefined()
+      const history = first.result
+      expect(Schema.decodeUnknownExit(SemanticHistory)(history)._tag).toBe("Success")
+      expect(history.boundaries).toHaveLength(2)
+      const runId = runIds(view)[0]!
+      const forked = await client.request("session.fork", { sessionId: id, runId })
+      expect(forked.error).toBeUndefined()
+      const forkId = forked.result.session.id as string
+
+      await server.restart()
+      const afterRestart = await connect(server.url, token)
+      const copied = await afterRestart.request("session.semantics", { sessionId: forkId })
+      expect(copied.error).toBeUndefined()
+      expect(Schema.decodeUnknownExit(SemanticHistory)(copied.result)._tag).toBe("Success")
+      expect(copied.result.boundaries.map((boundary: { modelCallId: string }) => boundary.modelCallId)).toEqual(
+        history.boundaries.map((boundary: { modelCallId: string }) => boundary.modelCallId),
+      )
+
+      const source = await SessionView.open(server.url, token, id)
+      model.next(say("rewound"))
+      const rewound = await afterRestart.request("session.rewind", { sessionId: id, runId })
+      expect(rewound.error).toBeUndefined()
+      await source.waitFor("the rewound turn", (value) =>
+        value.events.some((event) => event.event.type === "RUN_FINISHED" && event.event.runId !== runId))
+      const afterRewind = await afterRestart.request("session.semantics", { sessionId: id })
+      expect(afterRewind.result.boundaries).toHaveLength(1)
+      expect((await afterRestart.request("session.semantics", { sessionId: forkId })).result.boundaries).toHaveLength(2)
+
+      model.next(
+        failWith(new ModelCallError("context_length_exceeded", true)),
+        say("in order"),
+        say("continued"),
+      )
+      await afterRestart.request("session.input", { sessionId: id, text: "start a context request" })
+      await source.waitFor("the context turn", (value) => {
+        const context = value.events.filter((event) => event.event.type === "CONTEXT_TURN_STARTED").at(-1)
+        return context !== undefined && value.events.some((event) =>
+          event.event.type === "RUN_FINISHED" && event.event.runId === context.event.runId)
+      }, 15_000)
+      const withContext = await afterRestart.request("session.semantics", { sessionId: id })
+      expect(withContext.error).toBeUndefined()
+      expect(Schema.decodeUnknownExit(SemanticHistory)(withContext.result)._tag).toBe("Success")
+      const contextTurns = new Set<string>(
+        withContext.result.turns
+          .filter((turn: { contextMaintenance: boolean }) => turn.contextMaintenance)
+          .map((turn: { id: string }) => turn.id),
+      )
+      expect(contextTurns.size).toBeGreaterThan(0)
+      expect(withContext.result.boundaries.some((boundary: { turnId: string }) => contextTurns.has(boundary.turnId))).toBe(true)
+    } finally {
+      await server.cleanup()
+    }
+  }, 30_000)
+
   test("identity uses bearer validation, reports actual expiry, revocations, origins, and no-store caching", async () => {
     await withServer(async (server, token) => {
       const allowed = { Origin: "http://allowed.test" }
@@ -253,6 +330,7 @@ describe("sessions", () => {
         contentId: rendered.contentId,
         referenceId: rendered.manifestId,
       })
+      expect(renderedContent.error).toBeUndefined()
       expect(renderedContent.result.content).toMatchObject({
         contentId: rendered.contentId,
         referenceId: rendered.manifestId,
@@ -327,6 +405,13 @@ describe("sessions", () => {
       const view = await SessionView.open(server.url, token, id)
       await view.waitFor("the attached turn", (value) => finishedRuns(value) === 1)
       for (const ref of refs) {
+        const retained = await client.request("content.get", {
+          sessionId: id,
+          contentId: ref.contentId,
+          referenceId: sent.result.inputId,
+        })
+        expect(retained.error).toBeUndefined()
+        expect(retained.result.content).toMatchObject({ available: true })
         const response = await fetch(
           httpUrl(server, `${RETAINED_CONTENT_PATH}/${id}/${ref.contentId}/${sent.result.inputId}`),
           { headers: { Authorization: `Bearer ${token}` } },
@@ -369,7 +454,9 @@ describe("sessions", () => {
       const client = await connect(server.url, token)
       const invalidSelections = [
         { temperature: 0.2 },
+        { checkpointWindowSize: 200_000 },
         { modelSettings: { modelId: models[0]!.id, temperature: 0.2 } },
+        { modelSettings: { modelId: models[0]!.id, checkpointWindowSize: 200_000 } },
       ]
       for (const selection of invalidSelections) {
         expect((await client.request("session.create", { selection })).error.code).toBe(-32602)

@@ -132,7 +132,7 @@ export const protocolUrl = (hostname: string, port: number) => `ws://${formatHos
 
 const error = (code: number, message: string): ErrorObject => ({ code, message })
 
-const decodeRequest = Schema.decodeUnknownResult(AnyRequest)
+const decodeRequest = Schema.decodeUnknownResult(AnyRequest, { onExcessProperty: "error" })
 
 /**
  * Serves the protocol on one WebSocket path and the GitHub sign-in on its

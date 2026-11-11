@@ -17,6 +17,11 @@ classes, under a version that changes with any of them.
   admission, each turn, each model call, and each tool call. A tool call
   records whether its execution budget expired.
   A code mode program's tool calls are child spans of their `execute` call.
+- `ashe_agent.github_sign_in` covers the GitHub callback and records one
+  bounded sign-in outcome. WebSocket authentication is covered by its
+  protocol request span and error class. The owner identity and retained
+  content HTTP responses have no separate signal; their only output is the
+  authenticated product response.
 - Each assigned client action has a span from assignment to settlement,
   with its name and bounded outcome; its duration is a histogram. Action
   arguments and results, question text, answer text, and permission notes
@@ -24,9 +29,11 @@ classes, under a version that changes with any of them.
 - Content work has spans for upload staging, retained tool output, attachment
   projection, and each bounded PDF conversion job; conversion duration is a
   histogram. Outcomes, routes, capture-loss presence, and error classes are
-  bounded attributes. A failed retention also emits a warning log.
+  bounded attributes. Upload status is represented by success, invalid, or
+  quota outcome and never by bytes, filenames, or digests. A failed
+  retention also emits a warning log.
 - Session communication spans record the operation and error class for
-  message, fork, subscription, wait, and list calls.
+  message, fork, subscribe, unsubscribe, wait, and list calls.
 - Context work has spans of its own: each context turn, a child of its
   turn's span; each tool result clearing, compaction, research, and
   handoff call, validation, and checkpoint window construction; each
@@ -64,8 +71,8 @@ Every signal carries `service.namespace` `ashe-agent`, `service.name`
 
 ## Export
 
-Each signal's exporter is `otlp`, `console`, or `none`, selected by the
-standard `OTEL_*_EXPORTER` inputs. The `otlp` exporters send over HTTP,
+Each signal's exporter is `otlp`, `console`, or `none`, with one selection
+for traces, metrics, and logs in the input schema. The `otlp` exporters send over HTTP,
 as protobuf or JSON, to `<endpoint>/v1/traces`, `/v1/metrics`, and
 `/v1/logs`. Export headers, which may carry the endpoint's credentials,
 come only from a protected file of `name=value` lines; the server sends

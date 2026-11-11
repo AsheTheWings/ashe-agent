@@ -7,11 +7,10 @@ owner's way to require a look before chosen calls.
 
 ## Rules
 
-The `permission` input, in the config file or as JSON in
-`ASHE_AGENT_PERMISSION`, follows opencode's shape. It is either one action
-for every call, or an object mapping permission names to an action or to
-an object mapping patterns to actions. An action is `allow`, `ask`, or
-`deny`.
+The permission input, in the config file or as JSON in process input,
+follows opencode's shape. It is either one action for every call, or an
+object mapping permission names to an action or to an object mapping
+patterns to actions. An action is `allow`, `ask`, or `deny`.
 
 ```json
 {

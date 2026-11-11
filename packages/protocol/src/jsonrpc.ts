@@ -54,6 +54,9 @@ export const ClientRequest = Schema.Union(methodNames.map(requestOf))
 
 export type ClientRequest = typeof ClientRequest.Type
 
+/** Decodes one client request with closed request and params objects. */
+export const decodeClientRequest = Schema.decodeUnknownResult(ClientRequest, { onExcessProperty: "error" })
+
 /** Error codes: JSON-RPC 2.0's own, then this protocol's in the server-defined range. */
 export const ErrorCode = {
   parseError: -32700,

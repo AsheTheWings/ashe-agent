@@ -37,6 +37,11 @@ receipts, and lifecycle. Session and context tools are offered only
 directly to the model. They are omitted from code mode discovery, search,
 and program execution even though a program can call MCP tools.
 
+The namespaces `web`, `file`, `shell`, `session`, and `context` are
+reserved for built-in tools. Configuration refuses an MCP server with one
+of these names, so an MCP tool cannot shadow a built-in or bypass the
+direct-only inventory boundary.
+
 [Permissions](permissions.md) explains how subjects are resolved and
 decided. A tool resolves its paths once, when the call is checked, and
 reads, writes, and removes exactly those paths. When a path resolves
@@ -50,11 +55,10 @@ check and the read or write itself is not detected.
 Every direct call and every call made by a code mode program has one
 elapsed-time execution budget, measured from before argument validation
 through permission collection, execution, and settlement. It does not
-pause while a person decides a request. The global limit is 300,000 ms;
-`ASHE_AGENT_TOOL_TIMEOUT_OVERRIDES` maps exact registered tool names to a
-positive limit or to `null`, which removes only that tool's local limit.
-`ASHE_AGENT_TOOL_TIMEOUT_MS` changes the global default. The input schema
-owns the names, shapes, and profile defaults, as
+pause while a person decides a request. The configured tool-timeout
+overrides map exact registered tool names to a positive limit or to
+`null`, which removes only that tool's local limit. The schema owns the
+global timeout, override names, shapes, and profile defaults, as
 [configuration](configuration.md#finite-execution-budgets) explains.
 
 A code mode child is bounded by the earlier of its own deadline and its
@@ -78,8 +82,8 @@ read from and for its destination.
 ## Tool result observations
 
 A tool result whose captured output exceeds the configured preview enters the
-next model call as a bounded head-and-tail window with its line and byte
-totals. Full captured text is retained beside the session history under
+next model call as a bounded beginning of the captured text with its line
+and byte totals. Full captured text is retained beside the session history under
 `references/`, and the result names that path. `file_read` can page the file;
 its own result is not windowed again. A tool that cannot retain the capture
 keeps its actual outcome and records the loss explicitly. [Content](content.md)
@@ -185,8 +189,8 @@ shell is the one the user database gives the server's user, through
 `getent passwd`, or `/bin/sh` when it gives none; `SHELL` is not read. It
 runs on a pseudo-terminal when `tty` is true and on pipes otherwise, in
 `workdir` resolved against the session directory, else in the session
-directory. The script the `ASHE_AGENT_SHELL_ENV_FILE` input names, when
-set, is sourced in each command's own shell, after its login startup.
+directory. The script the shell-environment input names, when set, is
+sourced in each command's own shell, after its login startup.
 When the file is missing or unreadable, the command does not run and the
 result says why; when sourcing it returns a nonzero status, for example
 on a syntax error or because its last command failed, the command does
@@ -217,7 +221,7 @@ Output:
 
 An exited process gives `Process exited with code <n>` instead. A result
 holds at most `max_output_tokens` estimated tokens, at four bytes each,
-else the `ASHE_AGENT_SHELL_MAX_OUTPUT_TOKENS` default: its head and tail
+else the configured shell-output default: its head and tail
 around a `…<n> tokens truncated…` marker, after a warning and an
 `Original token count` line. Output no result has returned yet is kept up
 to 1 MiB per process the same way, with a `... <n> bytes omitted ...`
@@ -225,7 +229,7 @@ marker.
 
 Processes belong to their session. A command runs in its own process
 group, so interrupting or ending it reaches what it started. Starting a
-process when the session holds `ASHE_AGENT_SHELL_MAX_PROCESSES` ends the
+process when the session holds its configured process limit ends the
 least recently used one, an exited one first, sparing the eight most
 recently used, or all but one under a smaller limit. A cancel ends the
 waiting call, whose result gives the `process_id`, and leaves the process
@@ -250,7 +254,7 @@ whatever is written to it.
 ## `web_search` and `web_fetch`
 
 The web tools are offered exactly when an Exa API key is delivered
-through `ASHE_AGENT_EXA_API_KEY_FILE`. Both reach the web only through
+through its protected file input. Both reach the web only through
 Exa's API, so the server never connects to a URL the model names.
 
 `web_search` takes a `query` and an optional `numResults` of 1 to 100,

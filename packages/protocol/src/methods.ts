@@ -19,6 +19,7 @@ import {
   RetainedContent,
   UploadStatus,
 } from "./owner.ts"
+import { SemanticHistory } from "./semantic.ts"
 
 /** An object with no fields this protocol defines; unknown fields are ignored. */
 const Empty = Schema.Record(Schema.String, Schema.Unknown)
@@ -99,6 +100,8 @@ export const methods = {
   /** Starts an idle session with continuation input, alone or joined to its next eligible batch. */
   "session.resume": method(Schema.Struct({ sessionId: Id }), Empty),
   "session.cancel": method(Schema.Struct({ sessionId: Id }), Empty),
+  /** Canonical semantic content and successful request boundaries for owner analysis. */
+  "session.semantics": method(Schema.Struct({ sessionId: Id }), SemanticHistory),
   /** Owner-client access to persisted always approvals, independent of agent tools. */
   "session.grants.list": method(
     Schema.Struct({ sessionId: Id }),

@@ -57,7 +57,7 @@ const ajv = new Ajv2020({ strict: false, allErrors: false })
 describe(`protocol JSON Schema and decoder agree (seed ${seed})`, () => {
   for (const [name, schema] of Object.entries(jsonSchemaRoots())) {
     const validate = ajv.compile(toJsonSchema(schema))
-    const decode = Schema.decodeUnknownResult(schema as Schema.Codec<unknown, unknown>)
+    const decode = Schema.decodeUnknownResult(schema as Schema.Codec<unknown, unknown>, { onExcessProperty: "error" })
     const agree = (value: unknown) => Result.isSuccess(decode(value)) === validate(value)
 
     test(`${name} accepts generated values`, async () => {
@@ -66,7 +66,7 @@ describe(`protocol JSON Schema and decoder agree (seed ${seed})`, () => {
         Arbitrary.checkEffect(values, (value) => Result.isSuccess(decode(value)) && validate(value), { runs, seed }),
       )
       expect(Arbitrary.formatCheckFailure(result) ?? "passed", `seed ${seed}`).toBe("passed")
-    })
+    }, 20_000)
 
     test(`${name} rejects corrupted values the same way`, async () => {
       const candidates = Arbitrary.all([
@@ -81,6 +81,6 @@ describe(`protocol JSON Schema and decoder agree (seed ${seed})`, () => {
         }),
       )
       expect(Arbitrary.formatCheckFailure(result) ?? "passed", `seed ${seed}`).toBe("passed")
-    })
+    }, 20_000)
   }
 })

@@ -12,17 +12,30 @@ The terms these docs use, with the meaning they have in AsheAgent.
   affecting a session.
 - **Owner**: the one person a server serves, who signs in with GitHub
   or acts through API tokens.
-- **Session**: a durable conversation: its history of events, its session
-  directory, which is its starting working directory, its shell
-  processes, and its permission grants.
-- **UserTurn**: one admitted, ordered input bundle.
+- **Session**: a durable conversation: its canonical history, applied
+  selection, session directory, shell processes, and permission grants.
+- **Agent profile**: a session's applied selection: its title, nullable
+  model id, and nullable reasoning effort. The applied values are the only
+  persisted selection; temperature, checkpoint sizing, and permission
+  policy are derived from startup configuration.
+- **Agent identity**: the session id, applied title, and nullable model id
+  used to attribute work or address the agent. A null model means the model
+  is explicitly unconfigured; reasoning effort is not part of identity.
+- **Applied selection revision**: an immutable stored Agent profile,
+  written only when its title, model id, or reasoning effort changes. A
+  UserTurn and its AgentTurn can share one revision.
+- **UserTurn**: one immutable, admitted, ordered input bundle.
 - **AgentTurn**: the model and tool activity following a UserTurn until the
   next admitted UserTurn or settlement to idle.
 - **Turn**: one UserTurn and its following AgentTurn; see
   [session input](sessions.md#input).
-- **Identity**: the speaker a block stands for: system, developer, user,
-  or agent. It is distinct from a message's Responses role and from a
-  connection's authenticated sender.
+- **Content identity**: the speaker a content block stands for: system,
+  developer, user, or agent. It is independent of a message's provider
+  role and a connection's authenticated sender.
+- **Content ownership**: the original authorship and the local or inherited
+  history ownership of canonical session content. Copying content or
+  changing a session address does not by itself make inherited local work
+  foreign or replace its original author.
 - **User message**: the text of the user identity, in a `<user>` block.
 - **User input**: a Responses user-role message, holding any blocks.
 - **User turn**: a Turn whose UserTurn holds at least one user message,

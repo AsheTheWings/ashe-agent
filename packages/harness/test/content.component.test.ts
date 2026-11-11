@@ -4,12 +4,12 @@ import { join } from "node:path"
 import { Schema } from "effect"
 import { AIMessage, HumanMessage } from "@langchain/core/messages"
 import { convertMessagesToResponsesInput } from "@langchain/openai"
-import { analyzeContributions, canonicalJson, estimateContributions } from "@ashe-agent/protocol"
+import { analyzeContributions, canonicalJson, estimateContributions, Measurement } from "@ashe-agent/protocol"
 import { builtinTool } from "../src/agent/tools.ts"
 import { contentDigest, measureCall, renderedMessageEvidence } from "../src/agent/measurement.ts"
 import { renderToolResultMessage, renderWindow, type ToolContent } from "../src/agent/window.ts"
 import type { ConversionPort, PdfConversionJob } from "../src/content/conversion.ts"
-import { observeToolResult, type ContentPolicy } from "../src/content/retention.ts"
+import { boundedPreview, observeToolResult, type ContentPolicy } from "../src/content/retention.ts"
 import type { Item } from "../src/sessions/conversation.ts"
 import { fileReadTool } from "../src/tools/file/read-tool.ts"
 import { AgentHarness, callTools, configuredModel, say } from "./support/agent.ts"
@@ -48,6 +48,19 @@ class FakeConverter implements ConversionPort {
 }
 
 describe("content measurement and retention", () => {
+  test("bounded previews count a trailing newline once and empty output as zero lines", () => {
+    expect(boundedPreview("a\n", { previewLines: 10, previewBytes: 100 })).toMatchObject({
+      text: "a",
+      includedLines: 1,
+      totalLines: 1,
+    })
+    expect(boundedPreview("", { previewLines: 10, previewBytes: 100 })).toMatchObject({
+      text: "",
+      includedLines: 0,
+      totalLines: 0,
+    })
+  })
+
   test("the shared estimator measures text, structured definitions, media allowances, and unknown coverage", () => {
     const first = estimateContributions([
       { position: 0, kind: "text", text: "abcd" },
@@ -73,8 +86,9 @@ describe("content measurement and retention", () => {
       { contributionPosition: 4, reason: "opaque replay" },
     ]))
     expect(first.knownSubtotal).toBeGreaterThan(5_000)
-    expect(measureCall("instructions", [], [{ name: "z", description: "d", parameters: { type: "object" } }]))
-      .toMatchObject({ methodVersion: 1, coverage: "complete" })
+    const measured = measureCall("instructions", [], [{ name: "z", description: "d", parameters: { type: "object" } }])
+    expect(measured).toMatchObject({ methodVersion: 1, coverage: "complete" })
+    expect(Schema.decodeUnknownExit(Measurement)(measured)._tag).toBe("Success")
   })
 
   test("alternative analysis is labelled separately from the execution estimate", () => {
@@ -467,14 +481,28 @@ describe("content measurement and retention", () => {
     }
   })
 
-  test("an already-windowed shell observation keeps its metadata and requested cap", () => {
+  test("an already-windowed shell observation retains its captured source", () => {
     const result = {
       outcome: "success" as const,
       content: `Wall time: 1.0000 seconds\nProcess exited with code 0\nOriginal token count: 999\nOutput:\ntruncated`,
       capturedText: "x".repeat(10_000),
       alreadyBounded: true,
+      projectionTruncated: true,
     }
-    expect(observeToolResult(result, { collectionBytes: 10, previewLines: 1, previewBytes: 10 }, "shell")).toBe(result)
+    const observed = observeToolResult(result, { collectionBytes: 100_000, previewLines: 1, previewBytes: 10 }, "shell")
+    expect(observed.content).toContain("Original token count: 999")
+    expect(observed.content).toContain("Full captured text is available at references/")
+    expect(observed.retention).toMatchObject({ text: "x".repeat(10_000), captureLossBytes: 0 })
+  })
+
+  test("an already-windowed result without omitted captured text is unchanged", () => {
+    const result = {
+      outcome: "success" as const,
+      content: "small",
+      capturedText: "small",
+      alreadyBounded: true,
+    }
+    expect(observeToolResult(result, policy, "small")).toBe(result)
   })
 
   test("a tool result with text and an image reaches the next model bounded without losing the image", async () => {
@@ -581,7 +609,7 @@ describe("content measurement and retention", () => {
       const session = h.create()
       const ref = upload(h, "pdf", "report.pdf", "application/pdf", readFileSync("packages/harness/test/fixtures/documents/orchard.pdf"))
       h.model.next(say("read it"))
-      h.hub.input(session, "inspect", "steer", h.sender, { attachments: [ref] })
+      const inputId = h.hub.input(session, "inspect", "steer", h.sender, { attachments: [ref] })
       await h.turnsEnded(session, 1)
       expect(converter.calls).toHaveLength(1)
       const content = h.model.last().messages.flatMap((message) => typeof message.content === "string" ? [] : message.content)
@@ -596,6 +624,62 @@ describe("content measurement and retention", () => {
       expect(new Set(ids).size).toBe(9)
       expect(ids.some((id) => id.startsWith("pdf-text:1:"))).toBe(true)
       expect(ids.some((id) => id.startsWith("pdf-page-image:8:"))).toBe(true)
+
+      const original = h.hub.store.conversation.retainedContent(session, ref.contentId, inputId)!
+      expect(original.representations[0]).toMatchObject({
+        representationId: ref.contentId,
+        kind: "original",
+        filename: "report.pdf",
+        transformation: null,
+      })
+      const page = h.db.query<{
+        content_sha256: string
+        representation_id: string
+        metadata: string
+      }, [string]>(
+        `SELECT content_sha256, representation_id, metadata FROM attachment_representations
+          WHERE attachment_id = ? AND transformation = 'pdf-page-image' ORDER BY representation_id LIMIT 1`,
+      ).get(ref.attachmentId)!
+      const pageContent = h.hub.store.conversation.retainedContent(session, page.content_sha256, inputId)!
+      const pageMetadata = JSON.parse(page.metadata)
+      expect(pageContent.representations[0]).toMatchObject({
+        representationId: page.representation_id,
+        kind: "pdf-page",
+        mediaType: "image/png",
+        filename: "report.pdf",
+        page: pageMetadata.page,
+        transformation: "pdf-page-image",
+        metadata: { renderer: "pdfium-wasm" },
+      })
+      const text = h.db.query<{ content_sha256: string; representation_id: string }, [string]>(
+        `SELECT content_sha256, representation_id FROM attachment_representations
+          WHERE attachment_id = ? AND transformation = 'pdf-text' ORDER BY representation_id LIMIT 1`,
+      ).get(ref.attachmentId)!
+      expect(h.hub.store.conversation.retainedContent(session, text.content_sha256, inputId)!.representations[0])
+        .toMatchObject({
+          representationId: text.representation_id,
+          kind: "converted-text",
+          filename: "report.pdf",
+          transformation: "pdf-text",
+        })
+
+      const boundary = h.hub.semantics(session).boundaries[0]!
+      const provider = boundary.contributions.find((contribution) =>
+        "transformation" in contribution && contribution.transformation === "provider-message")
+      expect(provider).toBeDefined()
+      if (provider === undefined || !("rendered" in provider)) throw new Error("no rendered provider contribution")
+      const providerContent = h.hub.store.conversation.retainedContent(
+        session,
+        provider.rendered.contentId,
+        boundary.id,
+      )!
+      expect(providerContent.representations[0]).toMatchObject({
+        representationId: provider.rendered.representationId,
+        kind: "text",
+        filename: null,
+        transformation: "provider-message",
+        metadata: { renderer: "ashe-agent/provider-message@1" },
+      })
     } finally {
       await h.cleanup()
     }

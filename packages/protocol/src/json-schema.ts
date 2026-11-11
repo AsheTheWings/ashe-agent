@@ -22,7 +22,7 @@ export const jsonSchemaRoots = (): Record<string, Schema.Top> => {
 
 /** A draft 2020-12 JSON Schema of one root, standing alone. */
 export const toJsonSchema = (schema: Schema.Top): Record<string, unknown> => {
-  const document = Schema.toJsonSchemaDocument(schema)
+  const document = Schema.toJsonSchemaDocument(schema, { onExcessProperty: "error" })
   return {
     $schema: "https://json-schema.org/draft/2020-12/schema",
     ...document.schema,

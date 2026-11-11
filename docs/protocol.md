@@ -22,8 +22,9 @@ directed `action.execute` and `action.cancel` notifications, together
 `ServerMessage`. A response holds either `result` or `error`, and an
 error response to a request whose id could not be read has id `null`.
 
-Decoders ignore fields they do not know, so a message may carry fields a
-newer peer added.
+The generated schema and protocol decoder close request envelopes and method
+params that define fields. Unknown fields there are invalid. A method whose
+params define no fields accepts any object, including one with fields.
 
 ## Versions and authentication
 
@@ -53,10 +54,11 @@ A client connects to `/v1/ws`, authenticates with its first request as
 the next section explains, and then sends any of these:
 
 - `models.list` gives the configured models, each with its id, display
-  name, context limit, whether it takes image input, the reasoning
-  efforts it lists, and its configured effort, and the default model.
-  `agents.list` gives each agent with its title file's state and the
-  default agent, as [agents and skills](agents-and-skills.md) explains.
+  name, context limit, declared text, image, and native PDF input
+  capabilities, the reasoning efforts it lists, and its configured effort,
+  and the default model. `agents.list` gives each agent with its title
+  file's state and the default agent, as
+  [agents and skills](agents-and-skills.md) explains.
 - `session.list` gives every session's summary, and `session.create`
   starts one from an optional selection. An omitted model applies the
   title and configured defaults; an explicit `modelId: null` keeps the
@@ -87,6 +89,12 @@ the next section explains, and then sends any of these:
   removes the rewind point `runId` and every later turn, then reruns its
   user messages or the given `text`; an optional `selection` applies with
   that reconstructed input.
+- `session.semantics` returns the session's immutable turns, canonical
+  semantic entries, and every successful request boundary. A boundary
+  carries its ordered contribution representations and transformations,
+  offered tool definitions, rendered identities, attribution, and
+  measurement, so an owner client can build its own model-input view
+  without database access.
 - `session.grants.list` returns persisted always-approval rules for a
   session across title scopes, and `session.grants.clear` removes one
   title's rules.
@@ -108,6 +116,21 @@ and active-looking MIME types. Browser access follows the configured
 origin policy and is never cached.
 
 [Sessions](sessions.md) explains turns, input, fork, and rewind in full.
+
+## Uploads
+
+An authenticated owner stages an attachment with `upload.create`,
+`upload.status`, `upload.append`, and `upload.finalize`. Creation records
+a draft id, filename, media type, and declared size. Appends carry standard
+base64 chunks at explicit offsets; repeating an already stored offset
+returns the same progress, while gaps and conflicting chunks fail.
+Finalization verifies the declared size and SHA-256 digest.
+
+The upload id remains stable across disconnects. Unclaimed staging belongs
+to its draft and expires after its configured lifetime or owner quota.
+Passing a finalized retained-attachment reference to `session.input`,
+`session.message`, or rewind claims the original for that input's durable
+ownership before staging expiry can remove it.
 
 ## Client actions
 
@@ -147,6 +170,7 @@ cover what AG-UI does not:
 | Event | Meaning |
 | --- | --- |
 | `SESSION_CREATED` | The session's first event: its `sessionDir`, agent, model, reasoning effort, and fork source. |
+| `SELECTION_CHANGED` | A new immutable applied selection revision, with its title, nullable model and effort, and revision id. |
 | `CHECKPOINT_WINDOW_SEEDED` | A checkpoint window's construction, with its number and each seed component's type, heading, and text; `runId` is null for the first window and names the context turn that built a later one. |
 | `INPUT_WAITING` | A message stored as waiting input, with its id, text, mode, and sender: the user or the session whose agent submitted it. |
 | `INPUT_RECEIVED` | A user message entering the conversation, with its sender and mode; a session sender records the source session identity and effective title and model. |
@@ -163,18 +187,22 @@ cover what AG-UI does not:
 | `QUESTIONS_ASKED` | A `context_ask_question` call's question set, with its id, the tool call, the questions, and `feedback` on the session's previous set. |
 | `QUESTIONS_ANSWERED` | The first answer to a question set, with its sender. |
 | `RUN_INTERRUPTED` | A run the server was still running when it stopped. |
+| `MODEL_CALL_STARTED` | A model-call attempt whose streamed content remains provisional. |
+| `MODEL_CALL_COMMITTED` | Whole-response success made the attempt's content and successful input boundary durable. |
+| `MODEL_CALL_DISCARDED` | A failed, cancelled, or interrupted attempt whose provisional output clients must discard. |
 | `SESSION_REWOUND` | A rewind removed every event from `firstRemovedSeq` on. |
 | `TOOL_EXECUTION_STARTED` | The server started running a tool call. |
 | `PROGRAM_CALL_FINISHED` | A tool call made by the code mode program of an `execute` call ended. |
 | `PERMISSION_REQUESTED`, `PERMISSION_RESOLVED`, `PERMISSION_WITHDRAWN` | A tool call waiting for an answer, and its end. |
 
-`RUN_STARTED` adds to AG-UI's fields the run's `model`, its `cause`,
-`membership`, the immutable ordered content identities admitted with the
-turn, and `userMessageIds`, the user messages its starting input holds. The cause
-is `continuation` for the run that starts a checkpoint window after a
-context turn, `user` for one whose starting input holds a user message,
-and `notification` for one a developer message started on its own, such
-as a memory restored component.
+`RUN_STARTED` adds to AG-UI's fields the run's immutable `selection`,
+`settingsRevision`, `cause`, `membership`, and `userMessageIds`.
+`membership` is the ordered content identities admitted with the UserTurn,
+and `userMessageIds` holds the user messages its starting input carries.
+The cause is `continuation` for the run that starts a checkpoint window
+after a context turn, `user` for one whose starting input holds a user
+message, and `notification` for one a developer message started on its own,
+such as a memory restored component.
 
 A user message is waiting from its `INPUT_WAITING` until its
 `INPUT_RECEIVED`. A context workflow holds the messages that arrive during

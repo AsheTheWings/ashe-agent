@@ -125,6 +125,7 @@ export const sessionHandlers = (hub: SessionHub) => {
       hub.cancel(params.sessionId)
       return {}
     },
+    "session.semantics": async (params) => hub.semantics(params.sessionId),
     "session.grants.list": async (params) => ({ grants: [...hub.store.grantsForSession(params.sessionId)] }),
     "session.grants.clear": async (params) => ({
       cleared: hub.store.clearGrants(params.sessionId, params.agentTitle),

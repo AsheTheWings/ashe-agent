@@ -1,9 +1,18 @@
 import type { Database } from "bun:sqlite"
 import { AIMessage, mapChatMessagesToStoredMessages, mapStoredMessagesToChatMessages, type StoredMessage } from "@langchain/core/messages"
-import type { InputMode, MessageSender, SelectionPatch } from "@ashe-agent/protocol"
+import type {
+  AgentTool,
+  InputMode,
+  MessageSender,
+  ModelInputManifest,
+  RepresentationRef,
+  SemanticEntry,
+  SelectionPatch,
+} from "@ashe-agent/protocol"
 import type { RetainedAttachmentRef, RetainedContent } from "@ashe-agent/protocol"
 import { UNTITLED_AGENT_TITLE } from "@ashe-agent/protocol"
 import type { ToolContent, ToolOutcome } from "../agent/window.ts"
+import { IntegrityFailure } from "../agent/failure.ts"
 import type { Component, SourceName, SourceStates } from "../context/components.ts"
 import type { Reaction } from "./communication.ts"
 
@@ -92,15 +101,27 @@ interface EntryRow {
   authorship_session_id: string
   ownership_kind: "local" | "inherited"
   source_session_id: string | null
+  source_entry_id: string | null
   provider_call_id: string | null
   tool_name: string | null
   result_ref: string | null
   outcome: ToolOutcome | null
 }
 
+interface SemanticRow extends EntryRow {
+  created_at: number
+  parent_invocation_id: string | null
+  arguments_ref: string | null
+  arguments: Uint8Array | null
+  started_at: number | null
+  settled_at: number | null
+  result_ref: string | null
+  result: Uint8Array | null
+}
+
 const entryColumns = `e.entry_id, e.position, e.owner_turn_id, e.kind, e.content_sha256,
   c.data AS content, c.format, e.agent_title, e.model_id, e.model_call_id,
-  e.authorship_session_id, e.ownership_kind, e.source_session_id,
+  e.authorship_session_id, e.ownership_kind, e.source_session_id, e.source_entry_id,
   (SELECT count(*) FROM context_result_replacements r WHERE r.session_id = e.session_id AND r.entry_id = e.entry_id) AS cleared,
   (SELECT r.replacement_ref FROM context_result_replacements r WHERE r.session_id = e.session_id AND r.entry_id = e.entry_id ORDER BY r.attempt DESC LIMIT 1) AS cleared_ref,
   a.provider_call_id, a.name AS tool_name, a.result_ref, a.outcome`
@@ -189,6 +210,162 @@ const itemFromRow = (row: EntryRow, cleared: boolean): Item | null => {
   }
   return null
 }
+
+const representation = (
+  representationId: string,
+  contentId: string,
+  mediaType: string,
+  digest: string,
+  transformation: string | null,
+): RepresentationRef => ({ representationId, contentId, mediaType, digest, transformation })
+
+const semanticEntryFromRow = (row: SemanticRow): SemanticEntry | null => {
+  const base = {
+    id: row.entry_id,
+    position: row.position,
+    turnId: row.owner_turn_id,
+    authorship: {
+      sessionId: row.authorship_session_id,
+      agentTitle: row.agent_title,
+      modelId: row.model_id,
+    },
+    ownership: row.ownership_kind === "local"
+      ? { kind: "local" as const }
+      : {
+          kind: "inherited" as const,
+          sourceSessionId: row.source_session_id ?? row.authorship_session_id,
+          sourceEntryId: row.source_entry_id ?? row.entry_id,
+        },
+    createdAt: row.created_at,
+  }
+  if (row.kind === "developer") {
+    const component = (decodeContent(row) as { readonly component?: Component }).component
+    if (component === undefined) return null
+    return {
+      ...base,
+      kind: "developer",
+      components: [{
+        id: row.entry_id,
+        type: component.type,
+        heading: component.heading,
+        text: component.text,
+        source: component.name,
+      }],
+    }
+  }
+  if (row.kind === "user") {
+    const content = decodeContent(row) as {
+      readonly text?: string
+      readonly attachments?: ReadonlyArray<{
+        readonly attachmentId: string
+        readonly contentId: string
+        readonly representationId: string
+        readonly name: string
+        readonly mediaType: string
+        readonly digest: string
+      }>
+    }
+    return {
+      ...base,
+      kind: "user",
+      parts: [
+        ...(content.text === undefined || content.text === "" ? [] : [{ kind: "text" as const, text: content.text }]),
+        ...(content.attachments ?? []).map((attachment) => ({
+          kind: "attachment" as const,
+          attachmentId: attachment.attachmentId,
+          name: attachment.name,
+          content: representation(
+            attachment.representationId,
+            attachment.contentId,
+            attachment.mediaType,
+            attachment.digest,
+            "attachment-original",
+          ),
+        })),
+      ],
+    }
+  }
+  if (row.kind === "agent") {
+    const content = decodeContent(row) as AssistantContent
+    const parts = typeof content.content === "string" || content.content === undefined
+      ? [{ kind: "text" as const, text: content.content ?? content.text }]
+      : content.content.flatMap((part) =>
+          part.type === "text" && typeof part.text === "string"
+            ? [{ kind: "text" as const, text: part.text }]
+            : [],
+        )
+    return { ...base, kind: "agent", modelCallId: row.model_call_id, parts }
+  }
+  if (row.kind === "thought") {
+    const content = decodeContent(row) as { readonly text?: string }
+    return { ...base, kind: "agent-thought", modelCallId: row.model_call_id, text: content.text ?? "" }
+  }
+  if (row.kind === "tool") {
+    const argumentsValue = row.arguments === null
+      ? null
+      : (JSON.parse(Buffer.from(row.arguments).toString("utf8")) as { readonly arguments?: unknown }).arguments ?? null
+    const envelope = row.result === null
+      ? null
+      : JSON.parse(Buffer.from(row.result).toString("utf8")) as {
+          readonly name?: string
+          readonly content?: ToolContent
+          readonly outcome?: ToolOutcome
+        }
+    type ToolResultPart = NonNullable<AgentTool["result"]>["content"][number]
+    const resultParts: Array<ToolResultPart> = []
+    if (typeof envelope?.content === "string") {
+      resultParts.push({ id: `${row.entry_id}:result:text`, kind: "text", text: envelope.content })
+    } else if (Array.isArray(envelope?.content)) {
+      envelope.content.forEach((part, index) => {
+        if (part.type === "text") {
+          resultParts.push({ id: `${row.entry_id}:result:${index}`, kind: "text", text: part.text })
+          return
+        }
+        const encoded = Buffer.from(part.data, "base64")
+        const digest = new Bun.CryptoHasher("sha256").update(encoded).digest("hex")
+        resultParts.push({
+          id: `${row.entry_id}:result:${index}`,
+          kind: "media",
+          name: part.type === "pdf" ? part.filename : part.path,
+          content: part.representation ?? representation(digest, digest, part.mimeType, digest, null),
+        })
+      })
+    }
+    const tool: AgentTool = {
+      id: row.entry_id,
+      kind: "agent-tool",
+      modelCallId: row.model_call_id,
+      providerCallId: row.provider_call_id,
+      parentInvocationId: row.parent_invocation_id,
+      name: row.tool_name ?? envelope?.name ?? "unknown",
+      arguments: {
+        id: row.arguments_ref ?? `${row.entry_id}:arguments`,
+        kind: "structured",
+        value: argumentsValue,
+      },
+      startedAt: row.started_at,
+      settledAt: row.settled_at,
+      outcome: row.outcome,
+      result: row.result_ref === null
+        ? null
+        : {
+            content: resultParts,
+            structured: null,
+          },
+    }
+    return { ...base, kind: "agent-tool", tool }
+  }
+  if (row.kind === "system") {
+    return {
+      ...base,
+      kind: "system",
+      content: { id: row.entry_id, kind: "text", text: thisText(row.content) },
+    }
+  }
+  return null
+}
+
+const thisText = (bytes: Uint8Array) => Buffer.from(bytes).toString("utf8")
 
 export class Conversation {
   constructor(readonly db: Database) {}
@@ -484,6 +661,142 @@ export class Conversation {
     return this.successfulManifests(sessionId).at(-1) ?? null
   }
 
+  /** Canonical entries in retained order, with calls and results correlated by invocation identity. */
+  semanticEntries(sessionId: string): ReadonlyArray<SemanticEntry> {
+    return this.db
+      .query<SemanticRow, [string]>(
+        `SELECT e.entry_id, e.position, e.owner_turn_id, e.kind, e.content_sha256,
+           c.data AS content, c.format, e.agent_title, e.model_id, e.model_call_id,
+           e.authorship_session_id, e.ownership_kind, e.source_session_id, e.source_entry_id,
+           e.created_at, 0 AS cleared, NULL AS cleared_ref,
+           a.provider_call_id, a.parent_invocation_id, a.name AS tool_name, a.arguments_ref,
+           a.started_at, a.settled_at, a.outcome, a.result_ref, ac.data AS arguments, rc.data AS result
+         FROM session_entries e
+         JOIN contents c ON c.sha256 = e.content_sha256
+         LEFT JOIN agent_tools a ON a.session_id = e.session_id AND a.entry_id = e.entry_id
+         LEFT JOIN contents ac ON ac.sha256 = a.arguments_ref
+         LEFT JOIN contents rc ON rc.sha256 = a.result_ref
+         WHERE e.session_id = ? ORDER BY e.position`,
+      )
+      .all(sessionId)
+      .flatMap((row) => {
+        const entry = semanticEntryFromRow(row)
+        return entry === null ? [] : [entry]
+      })
+  }
+
+  /** Successful request boundaries with their ordered contributions and attribution. */
+  semanticBoundaries(sessionId: string): ReadonlyArray<ModelInputManifest> {
+    return this.db
+      .query<{
+        manifest_id: string
+        model_call_id: string
+        turn_id: string
+        window_position: number
+        committed_at: number
+        body: Uint8Array
+      }, [string]>(
+        `SELECT r.manifest_id, m.model_call_id, m.turn_id, m.window_position,
+           coalesce(m.ended_at, m.started_at, r.created_at) AS committed_at, c.data AS body
+         FROM model_calls m
+         JOIN request_manifests r ON r.session_id = m.session_id AND r.model_call_id = m.model_call_id
+         JOIN contents c ON c.sha256 = r.body_ref
+         WHERE m.session_id = ? AND m.outcome = 'success'
+         ORDER BY m.started_at, m.rowid`,
+      )
+      .all(sessionId)
+      .flatMap((row) => {
+        const request = JSON.parse(Buffer.from(row.body).toString("utf8")) as {
+          readonly measurement?: ModelInputManifest["measurement"]
+          readonly contributions?: ReadonlyArray<{
+            readonly position: number
+            readonly kind: string
+            readonly sourceEntryId?: string | null
+            readonly sourceEntryIds?: ReadonlyArray<string>
+            readonly representation?: RepresentationRef
+            readonly transformation?: string | null
+            readonly name?: string
+            readonly description?: string
+            readonly parameters?: unknown
+            readonly reason?: string
+            readonly rendered?: {
+              readonly representationId: string
+              readonly contentId: string
+              readonly mediaType?: string
+              readonly digest: string
+              readonly byteLength?: number
+              readonly renderer: string
+            }
+          }>
+        }
+        if (request.measurement === undefined || request.contributions === undefined) return []
+        const contributions = request.contributions.flatMap((contribution): ModelInputManifest["contributions"] => {
+          if (contribution.kind === "tool-definition") {
+            if (contribution.rendered === undefined) return []
+            const rendered = this.renderedContribution(contribution.rendered)
+            return [{
+              position: contribution.position,
+              kind: "tool-definition",
+              name: contribution.name ?? "unknown",
+              description: contribution.description ?? "",
+              parameters: contribution.parameters ?? null,
+              rendered,
+            }]
+          }
+          if (contribution.kind === "placeholder") {
+            return [{
+              position: contribution.position,
+              kind: "placeholder",
+              sourceEntryId: contribution.sourceEntryId ?? null,
+              reason: contribution.reason ?? "unavailable",
+            }]
+          }
+          if (contribution.representation === undefined || contribution.rendered === undefined) return []
+          return [{
+            position: contribution.position,
+            kind: contribution.kind as "instruction" | "message" | "transcript",
+            sourceEntryId: contribution.sourceEntryId ?? null,
+            sourceEntryIds: [...(contribution.sourceEntryIds ?? [])],
+            representation: contribution.representation,
+            transformation: contribution.transformation ?? null,
+            rendered: this.renderedContribution(contribution.rendered),
+          }]
+        })
+        return [{
+          id: row.manifest_id,
+          modelCallId: row.model_call_id,
+          turnId: row.turn_id,
+          windowPosition: row.window_position,
+          committedAt: row.committed_at,
+          contributions,
+          measurement: request.measurement,
+        }]
+      })
+  }
+
+  private renderedContribution(rendered: {
+    readonly representationId: string
+    readonly contentId: string
+    readonly mediaType?: string
+    readonly digest: string
+    readonly byteLength?: number
+    readonly renderer: string
+  }) {
+    const format = this.db
+      .query<{ format: string }, [string]>("SELECT format FROM contents WHERE sha256 = ?")
+      .get(rendered.contentId)?.format
+    const byteLength = rendered.byteLength ?? this.contentBytes(rendered.contentId)?.byteLength
+    if (byteLength === undefined) throw new IntegrityFailure(`rendered contribution ${rendered.contentId} has no retained bytes`)
+    return {
+      representationId: rendered.representationId,
+      contentId: rendered.contentId,
+      mediaType: rendered.mediaType ?? format ?? "application/octet-stream",
+      digest: rendered.digest,
+      byteLength,
+      renderer: rendered.renderer,
+    }
+  }
+
   clear(sessionId: string, runId: string, attempt: number, positions: ReadonlyArray<number>) {
     const replacement = this.putContent(
       "cleared-result",
@@ -743,16 +1056,16 @@ export class Conversation {
   }
 
   retainedContent(sessionId: string, contentId: string, referenceId: string): RetainedContent | null {
-    const attachment = this.db
-      .query<{ name: string; format: string; mime_type: string; size: number }, [string, string, string]>(
-        `SELECT u.name, a.format, a.mime_type, a.size
+    const attachments = this.db
+      .query<{ id: string; name: string; format: string; mime_type: string; size: number; content_sha256: string }, [string, string]>(
+        `SELECT a.id, u.name, a.format, a.mime_type, a.size, a.content_sha256
           FROM attachment_references r
           JOIN attachments a ON a.id = r.attachment_id
           JOIN uploads u ON u.attachment_id = a.id
-          WHERE r.session_id = ? AND r.reference_id = ? AND a.content_sha256 = ?
-          ORDER BY r.created_at LIMIT 1`,
+          WHERE r.session_id = ? AND r.reference_id = ?
+          ORDER BY r.created_at, a.id`,
       )
-      .get(sessionId, referenceId, contentId)
+      .all(sessionId, referenceId)
     const entry = this.db
       .query<{ format: string }, [string, string, string]>(
         `SELECT c.format FROM session_entries e JOIN contents c ON c.sha256 = e.content_sha256
@@ -765,7 +1078,47 @@ export class Conversation {
           WHERE session_id = ? AND manifest_id = ? AND content_ref = ?`,
       )
       .get(sessionId, referenceId, contentId)
-    if (attachment === null && entry === null && rendered === null) return null
+    let proof: {
+      readonly representationId: string
+      readonly mediaType: string
+      readonly transformation: string | null
+      readonly metadata: unknown
+    } | null = null
+    let attachment: (typeof attachments)[number] | null = null
+    for (const candidate of attachments) {
+      if (candidate.content_sha256 === contentId) {
+        attachment = candidate
+        proof = {
+          representationId: contentId,
+          mediaType: candidate.mime_type,
+          transformation: null,
+          metadata: {},
+        }
+        break
+      }
+      const derived = this.db.query<{
+        representation_id: string
+        media_type: string
+        transformation: string
+        metadata: string
+      }, [string, string]>(
+        `SELECT representation_id, media_type, transformation, metadata
+          FROM attachment_representations
+          WHERE attachment_id = ? AND content_sha256 = ?`,
+      ).get(candidate.id, contentId)
+      if (derived !== undefined && derived !== null) {
+        attachment = candidate
+        proof = {
+          representationId: derived.representation_id,
+          mediaType: derived.media_type,
+          transformation: derived.transformation,
+          metadata: derived.metadata,
+        }
+        break
+      }
+    }
+    if (attachments.length > 0 && proof === null) return null
+    if (attachments.length === 0 && entry === null && rendered === null) return null
     const content = this.db
       .query<{ format: string; size: number }, [string]>(
         "SELECT format, length(data) AS size FROM contents WHERE sha256 = ?",
@@ -774,14 +1127,31 @@ export class Conversation {
     if (content === null) {
       return { contentId, referenceId, sessionId, available: false, representations: [] }
     }
-    const format = attachment?.format ?? entry?.format ?? content.format
-    const kind = format.startsWith("image/")
-      ? "image"
-      : format === "application/pdf"
-        ? "pdf-page"
-        : format === "text/plain"
-          ? "text"
-          : "original"
+    const renderedRepresentation = rendered === null ? null : this.renderedRepresentation(
+      sessionId,
+      referenceId,
+      contentId,
+      content.format,
+      content.size,
+    )
+    const format = proof?.mediaType ?? entry?.format ?? content.format
+    const transformation = proof?.transformation ?? renderedRepresentation?.transformation ?? null
+    const metadata = proof?.metadata ?? renderedRepresentation?.metadata ?? {}
+    const parsedMetadata = (typeof metadata === "string"
+      ? JSON.parse(metadata) as Record<string, unknown>
+      : metadata) as Record<string, unknown>
+    const page = typeof parsedMetadata.page === "number" && parsedMetadata.page >= 1 ? parsedMetadata.page : null
+    const kind = transformation === "pdf-page-image"
+      ? "pdf-page"
+      : transformation !== null && transformation.startsWith("pdf-")
+        ? "converted-text"
+        : format.startsWith("image/")
+          ? "image"
+          : format === "application/pdf"
+            ? "original"
+            : format === "text/plain"
+              ? "text"
+              : "original"
     return {
       contentId,
       referenceId,
@@ -789,17 +1159,78 @@ export class Conversation {
       available: true,
       representations: [
         {
-          representationId: contentId,
+          representationId: proof?.representationId ?? renderedRepresentation?.representationId ?? contentId,
           kind,
-          mediaType: attachment?.mime_type ?? format,
+          mediaType: format,
           digest: contentId,
-          byteLength: attachment?.size ?? content.size,
-          filename: attachment?.name ?? referenceId,
-          page: null,
-          transformation: null,
+          byteLength: content.size,
+          filename: attachment?.name ?? null,
+          page,
+          transformation,
+          metadata: parsedMetadata,
         },
       ],
     }
+  }
+
+  private renderedRepresentation(
+    sessionId: string,
+    manifestId: string,
+    contentId: string,
+    format: string,
+    byteLength: number,
+  ) {
+    const body = this.db
+      .query<{ body: Uint8Array }, [string, string]>(
+        `SELECT c.data AS body FROM request_manifests r
+          JOIN contents c ON c.sha256 = r.body_ref
+          WHERE r.session_id = ? AND r.manifest_id = ?`,
+      )
+      .get(sessionId, manifestId)
+    if (body === null) return null
+    let request: {
+      readonly providerInput?: {
+        readonly contentId?: string
+        readonly representationId?: string
+        readonly renderer?: string
+        readonly messageCount?: number
+      }
+      readonly contributions?: ReadonlyArray<{
+        readonly transformation?: string | null
+        readonly rendered?: {
+          readonly contentId?: string
+          readonly representationId?: string
+          readonly renderer?: string
+          readonly byteLength?: number
+        }
+      }>
+    }
+    try {
+      request = JSON.parse(Buffer.from(body.body).toString("utf8")) as typeof request
+    } catch {
+      return null
+    }
+    if (request.providerInput?.contentId === contentId) {
+      return {
+        representationId: request.providerInput.representationId ?? contentId,
+        transformation: "provider-message",
+        metadata: {
+          renderer: request.providerInput.renderer ?? null,
+          messageCount: request.providerInput.messageCount ?? null,
+          byteLength,
+          format,
+        },
+      }
+    }
+    for (const contribution of request.contributions ?? []) {
+      if (contribution.rendered?.contentId !== contentId) continue
+      return {
+        representationId: contribution.rendered.representationId ?? contentId,
+        transformation: contribution.transformation ?? null,
+        metadata: { renderer: contribution.rendered.renderer ?? null, byteLength, format },
+      }
+    }
+    return null
   }
 
   addWaiting(sessionId: string, entry: NewWaitingEntry, createdAt: number): WaitingEntry {
