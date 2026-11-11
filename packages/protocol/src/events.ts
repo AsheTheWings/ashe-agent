@@ -129,6 +129,7 @@ export const ToolCallStart = event("TOOL_CALL_START", {
   toolCallId: Id,
   toolCallName: Schema.String,
   parentMessageId: Schema.optionalKey(Id),
+  invocationId: Schema.optionalKey(Id),
 })
 
 export const ToolCallArgs = event("TOOL_CALL_ARGS", {
@@ -137,10 +138,14 @@ export const ToolCallArgs = event("TOOL_CALL_ARGS", {
   delta: Schema.String,
 })
 
-export const ToolCallEnd = event("TOOL_CALL_END", { modelCallId: Id, toolCallId: Id })
+export const ToolCallEnd = event("TOOL_CALL_END", { modelCallId: Id, toolCallId: Id, invocationId: Schema.optionalKey(Id) })
 
 /** The server started running a tool call; a call with no such event never ran. */
-export const ToolExecutionStarted = event("TOOL_EXECUTION_STARTED", { modelCallId: Id, toolCallId: Id })
+export const ToolExecutionStarted = event("TOOL_EXECUTION_STARTED", {
+  modelCallId: Id,
+  toolCallId: Id,
+  invocationId: Schema.optionalKey(Id),
+})
 
 /** How a tool call ended; every outcome but success is a failed result. */
 export const ToolOutcome = Schema.Literals(["success", "failed", "canceled", "declined", "interrupted"])
@@ -152,6 +157,7 @@ export const ToolCallResult = event("TOOL_CALL_RESULT", {
   role: Schema.Literal("tool"),
   content: Schema.String,
   outcome: ToolOutcome,
+  invocationId: Schema.optionalKey(Id),
 })
 
 /**

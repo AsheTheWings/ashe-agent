@@ -2147,6 +2147,10 @@
                         "parentMessageId": {
                           "type": "string",
                           "minLength": 1
+                        },
+                        "invocationId": {
+                          "type": "string",
+                          "minLength": 1
                         }
                       },
                       "required": [
@@ -2202,6 +2206,10 @@
                         "toolCallId": {
                           "type": "string",
                           "minLength": 1
+                        },
+                        "invocationId": {
+                          "type": "string",
+                          "minLength": 1
                         }
                       },
                       "required": [
@@ -2225,6 +2233,10 @@
                           "minLength": 1
                         },
                         "toolCallId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "invocationId": {
                           "type": "string",
                           "minLength": 1
                         }
@@ -2275,6 +2287,10 @@
                             "declined",
                             "interrupted"
                           ]
+                        },
+                        "invocationId": {
+                          "type": "string",
+                          "minLength": 1
                         }
                       },
                       "required": [
@@ -4210,6 +4226,10 @@
             "parentMessageId": {
               "type": "string",
               "minLength": 1
+            },
+            "invocationId": {
+              "type": "string",
+              "minLength": 1
             }
           },
           "required": [
@@ -4265,6 +4285,10 @@
             "toolCallId": {
               "type": "string",
               "minLength": 1
+            },
+            "invocationId": {
+              "type": "string",
+              "minLength": 1
             }
           },
           "required": [
@@ -4288,6 +4312,10 @@
               "minLength": 1
             },
             "toolCallId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "invocationId": {
               "type": "string",
               "minLength": 1
             }
@@ -4338,6 +4366,10 @@
                 "declined",
                 "interrupted"
               ]
+            },
+            "invocationId": {
+              "type": "string",
+              "minLength": 1
             }
           },
           "required": [

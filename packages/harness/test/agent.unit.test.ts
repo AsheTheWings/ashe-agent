@@ -12,7 +12,21 @@ import type { Item, ItemBody } from "../src/sessions/conversation.ts"
 
 let position = 0
 const item = (model: string | null, body: ItemBody, runId: string | null = model === null ? null : "r1"): Item =>
-  ({ ...body, position: ++position, runId, model }) as Item
+  ({
+    ...body,
+    entryId: `entry-${position + 1}`,
+    position: ++position,
+    runId,
+    model,
+    agentTitle: "untitled",
+    contentId: `content-${position}`,
+    contentFormat: "application/json",
+    representationId: `content-${position}`,
+    modelCallId: null,
+    authorshipSessionId: "unit-session",
+    ownershipKind: "local",
+    sourceSessionId: null,
+  }) as Item
 const component = (heading: string): Component => ({ type: "state", name: heading, heading, text: `# ${heading}\n\nabout ${heading}`, sources: {} })
 const call = (id: string) => new AIMessage({ content: "", tool_calls: [{ id, name: "echo", args: { text: id }, type: "tool_call" }] })
 const user = (text: string) => ({ kind: "user" as const, inputId: text, text, sender: { kind: "login" as const, loginId: "u" } })
@@ -67,6 +81,31 @@ describe("windows", () => {
     expect(asB.map((message) => message.constructor)).toEqual([HumanMessage, AIMessage, HumanMessage])
     expect(asB[0]!.content).toContain('<tool_call name="echo" id="c1">')
     expect(asB[0]!.content).toEndWith("<user>\ntwo\n</user>")
+  })
+
+  test("an unconfigured model selection is distinct from a configured one", () => {
+    const items = [item(null, user("before selection"), "unconfigured-run"), item("a", user("after selection"))]
+    const rendered = renderWindow("HARNESS", items, "a", false)
+    expect(rendered[0]!.content).toContain("Source session: `unit-session`; title: `untitled`; model: none.")
+    expect(rendered[0]!.content).toContain("<user>\nbefore selection\n</user>")
+    expect(rendered[0]!.content).toContain("<user>\nafter selection\n</user>")
+  })
+
+  test("rendered observations group every source in one provider block", () => {
+    const items = [
+      item("a", { kind: "component", component: component("A") }),
+      item("a", { kind: "component", component: component("B") }),
+      item("b", user("foreign"), "foreign-run"),
+      item("b", { kind: "assistant", message: new AIMessage("foreign reply") }, "foreign-run"),
+    ]
+    const groups: Array<{ ids: ReadonlyArray<string>; rendered: string }> = []
+    renderWindow("HARNESS", items, "a", false, "untitled", (ids, rendered) => groups.push({ ids, rendered }))
+    expect(groups).toHaveLength(1)
+    expect(groups[0]!.ids).toEqual(items.map((value) => value.entryId))
+    expect(groups[0]!.rendered).toStartWith("<developer>\n# A")
+    expect(groups[0]!.rendered).toContain("# Transcript")
+    expect(groups[0]!.rendered).toContain("<user>\nforeign\n</user>")
+    expect(groups[0]!.rendered).toContain('<agent model="b">\nforeign reply\n</agent>')
   })
 
   test("transcripts escape content and turn images into placeholders, which models with image input receive as images", () => {

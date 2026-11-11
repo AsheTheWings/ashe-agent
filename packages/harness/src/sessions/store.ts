@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite"
 import { join } from "node:path"
-import type { AgentProfile, SessionEvent, SessionEventBody, SessionSummary, TurnInput } from "@ashe-agent/protocol"
+import type { AgentProfile, ApprovalGrant, SessionEvent, SessionEventBody, SessionSummary, TurnInput } from "@ashe-agent/protocol"
 import { UNTITLED_AGENT_TITLE } from "@ashe-agent/protocol"
 import type { ModelOverrides, Permission } from "../inputs/shapes.ts"
 import { Conversation } from "./conversation.ts"
@@ -21,7 +21,7 @@ export interface SessionRecord {
   readonly sessionDir: string
   /** The title of the session's agent, or null for the implicit agent. */
   readonly agent: string | null
-  readonly model: string
+  readonly model: string | null
   /** The reasoning effort selected for the model, or null for its default. */
   readonly reasoningEffort: string | null
   /** The agent's model setting overrides, by model id, as recorded at creation. */
@@ -30,6 +30,8 @@ export interface SessionRecord {
   readonly permission: Permission | null
   readonly createdAt: number
   readonly nextSeq: number
+  /** The immutable applied-settings revision the session currently references. */
+  readonly settingsRevision: string
 }
 
 /** What started a turn: an input holding a user message, a continuation, or another notification component. */
@@ -43,9 +45,12 @@ export interface TurnRecord {
   readonly membership: ReadonlyArray<TurnInput>
   /** The user messages the turn's starting input holds, in order; a turn holding any is a rewind and fork point. */
   readonly userMessageIds: ReadonlyArray<string>
-  readonly model: string
+  readonly agentTitle: string
+  readonly model: string | null
   /** The session's reasoning effort selection when the turn started. */
   readonly reasoningEffort: string | null
+  /** The immutable applied-settings revision this turn references. */
+  readonly settingsRevision: string
   readonly status: TurnStatus
   /** The number of the turn's first event, where a rewind of it starts removing. */
   readonly firstSeq: number
@@ -75,8 +80,9 @@ export interface ContextWorkflowRecord {
 
 interface SessionRow {
   id: string
-  agent_key: string | null
-  model: string
+  current_settings_revision: string
+  agent_title: string
+  model_id: string | null
   reasoning_effort: string | null
   model_overrides: string
   permission: string | null
@@ -87,13 +93,14 @@ interface SessionRow {
 const toSession = (row: SessionRow, sessionsDir: string): SessionRecord => ({
   id: row.id,
   sessionDir: join(sessionsDir, row.id),
-  agent: row.agent_key,
-  model: row.model,
+  agent: row.agent_title === UNTITLED_AGENT_TITLE ? null : row.agent_title,
+  model: row.model_id,
   reasoningEffort: row.reasoning_effort,
   modelOverrides: JSON.parse(row.model_overrides),
   permission: row.permission === null ? null : JSON.parse(row.permission),
   createdAt: row.created_at,
   nextSeq: row.next_seq,
+  settingsRevision: row.current_settings_revision,
 })
 
 const profile = (session: SessionRecord): AgentProfile => ({
@@ -110,8 +117,10 @@ interface TurnRow {
   cause: TurnCause
   input_membership: string
   user_message_ids: string
-  model: string
+  agent_title: string
+  model_id: string | null
   reasoning_effort: string | null
+  settings_revision: string
   status: TurnStatus
   first_seq: number
   context_workflow_id: string | null
@@ -141,8 +150,10 @@ const toTurn = (row: TurnRow): TurnRecord => ({
   cause: row.cause,
   membership: JSON.parse(row.input_membership),
   userMessageIds: JSON.parse(row.user_message_ids),
-  model: row.model,
+  agentTitle: row.agent_title,
+  model: row.model_id,
   reasoningEffort: row.reasoning_effort,
+  settingsRevision: row.settings_revision,
   status: row.status,
   firstSeq: row.first_seq,
   contextWorkflowId: row.context_workflow_id,
@@ -167,7 +178,17 @@ const toContextWorkflow = (row: ContextWorkflowRow): ContextWorkflowRecord => ({
 })
 
 const turnColumns =
-  "run_id, position, cause, input_membership, user_message_ids, model, reasoning_effort, status, first_seq, context_workflow_id, context_start_item"
+  "t.run_id, t.position, t.cause, t.user_message_ids, t.status, t.first_seq, t.context_workflow_id, t.context_start_item, " +
+  "t.settings_revision, s.agent_title, s.model_id, s.reasoning_effort, " +
+  "(SELECT coalesce(json_group_array(json_object('kind', substr(i.entry_ref, 1, instr(i.entry_ref, ':') - 1), " +
+  "'inputId', i.input_id)), '[]') FROM turn_inputs i WHERE i.session_id = t.session_id AND i.run_id = t.run_id) AS input_membership"
+const turnTables = "turns t JOIN session_settings s ON s.session_id = t.session_id AND s.revision = t.settings_revision"
+
+const sessionColumns =
+  "s.id, s.current_settings_revision, s.model_overrides, s.permission, s.forked_from_session, s.forked_from_run, " +
+  "s.created_at, s.next_seq, s.memory_generation, s.scratch_generation, s.memory_restore_generation, s.fork_skipped, " +
+  "ss.agent_title, ss.model_id, ss.reasoning_effort"
+const sessionTables = "sessions s JOIN session_settings ss ON ss.session_id = s.id AND ss.revision = s.current_settings_revision"
 
 /** Session, event, and turn persistence. Every write that numbers an event takes the session's counter. */
 export class SessionStore {
@@ -188,7 +209,7 @@ export class SessionStore {
   /** Every session, oldest first. */
   sessions(): ReadonlyArray<SessionRecord> {
     return this.db
-      .query<SessionRow, []>("SELECT * FROM sessions ORDER BY created_at, id")
+      .query<SessionRow, []>(`SELECT ${sessionColumns} FROM ${sessionTables} ORDER BY s.created_at, s.id`)
       .all()
       .map((row) => toSession(row, this.sessionsDir))
   }
@@ -199,13 +220,13 @@ export class SessionStore {
   }
 
   getSession(id: string): SessionRecord | null {
-    const row = this.db.query<SessionRow, [string]>("SELECT * FROM sessions WHERE id = ?").get(id)
+    const row = this.db.query<SessionRow, [string]>(`SELECT ${sessionColumns} FROM ${sessionTables} WHERE s.id = ?`).get(id)
     return row === null ? null : toSession(row, this.sessionsDir)
   }
 
   listSessions(activeTurn: (id: string) => TurnRecord | null): ReadonlyArray<SessionSummary> {
     return this.db
-      .query<SessionRow, []>("SELECT * FROM sessions ORDER BY created_at DESC, id")
+      .query<SessionRow, []>(`SELECT ${sessionColumns} FROM ${sessionTables} ORDER BY s.created_at DESC, s.id`)
       .all()
       .map((row) => this.summary(toSession(row, this.sessionsDir), activeTurn(row.id)))
   }
@@ -227,7 +248,7 @@ export class SessionStore {
         activeTurn === null
           ? null
           : (this.startedSelection(session.id, activeTurn.runId) ?? {
-              agentTitle: session.agent ?? UNTITLED_AGENT_TITLE,
+              agentTitle: activeTurn.agentTitle,
               modelSettings: { modelId: activeTurn.model, reasoningEffort: activeTurn.reasoningEffort },
             }),
       activity: activeTurn === null ? "idle" : "working",
@@ -248,24 +269,37 @@ export class SessionStore {
   }
 
   /** Creates a session with its `SESSION_CREATED` event as event 1. */
-  createSession(session: Omit<SessionRecord, "sessionDir" | "nextSeq">, forkedFrom: { sessionId: string; runId: string | null } | null) {
+  createSession(
+    session: Omit<SessionRecord, "sessionDir" | "nextSeq" | "settingsRevision">,
+    forkedFrom: { sessionId: string; runId: string | null } | null,
+  ) {
     this.db.transaction(() => {
+      this.db.run("PRAGMA defer_foreign_keys = ON")
       this.db
         .query(
           `INSERT INTO sessions
-            (id, agent_key, model, reasoning_effort, model_overrides, permission, forked_from_session, forked_from_run,
+            (id, current_settings_revision, model_overrides, permission, forked_from_session, forked_from_run,
              created_at, next_seq)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+            VALUES (?, 'settings:1', ?, ?, ?, ?, ?, 1)`,
         )
         .run(
           session.id,
-          session.agent,
-          session.model,
-          session.reasoningEffort,
           JSON.stringify(session.modelOverrides),
           session.permission === null ? null : JSON.stringify(session.permission),
           forkedFrom?.sessionId ?? null,
           forkedFrom?.runId ?? null,
+          session.createdAt,
+        )
+      this.db
+        .query(
+          `INSERT INTO session_settings (session_id, revision, agent_title, model_id, reasoning_effort, applied_at)
+            VALUES (?, 'settings:1', ?, ?, ?, ?)`,
+        )
+        .run(
+          session.id,
+          session.agent ?? UNTITLED_AGENT_TITLE,
+          session.model,
+          session.reasoningEffort,
           session.createdAt,
         )
       this.appendEvent(
@@ -273,7 +307,12 @@ export class SessionStore {
         {
           type: "SESSION_CREATED",
           sessionDir: this.sessionDir(session.id),
-          selection: profile({ ...session, sessionDir: this.sessionDir(session.id), nextSeq: 1 }),
+          selection: profile({
+            ...session,
+            sessionDir: this.sessionDir(session.id),
+            nextSeq: 1,
+            settingsRevision: "settings:1",
+          }),
           forkedFrom,
         },
         session.createdAt,
@@ -281,26 +320,88 @@ export class SessionStore {
     })()
   }
 
+  /** Applies a changed title/model/effort selection as one immutable revision and returns it. */
+  setSettings(sessionId: string, profile: AgentProfile): string {
+    const session = this.getSession(sessionId)
+    if (session === null) throw new Error(`no session ${sessionId}`)
+    const current = this.profile(session.id)
+    if (
+      current !== null &&
+      current.agentTitle === profile.agentTitle &&
+      current.modelSettings.modelId === profile.modelSettings.modelId &&
+      current.modelSettings.reasoningEffort === profile.modelSettings.reasoningEffort
+    ) {
+      return session.settingsRevision
+    }
+    const revision = crypto.randomUUID()
+    this.db
+      .query(
+        `INSERT INTO session_settings (session_id, revision, agent_title, model_id, reasoning_effort, applied_at)
+          VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        sessionId,
+        revision,
+        profile.agentTitle,
+        profile.modelSettings.modelId,
+        profile.modelSettings.reasoningEffort,
+        Date.now(),
+      )
+    this.db.query("UPDATE sessions SET current_settings_revision = ? WHERE id = ?").run(revision, sessionId)
+    return revision
+  }
+
+  /** The profile of the session's current applied settings revision. */
+  profile(sessionId: string): AgentProfile | null {
+    const session = this.getSession(sessionId)
+    return session === null ? null : profile(session)
+  }
+
   setModel(sessionId: string, model: string, reasoningEffort: string | null) {
-    this.db.query("UPDATE sessions SET model = ?, reasoning_effort = ? WHERE id = ?").run(model, reasoningEffort, sessionId)
+    const current = this.profile(sessionId)
+    if (current === null) throw new Error(`no session ${sessionId}`)
+    return this.setSettings(sessionId, { ...current, modelSettings: { modelId: model, reasoningEffort } })
+  }
+
+  setInputSettingsRevision(sessionId: string, runId: string, inputId: string, revision: string) {
+    this.db
+      .query("UPDATE turn_inputs SET applied_settings_revision = ? WHERE session_id = ? AND run_id = ? AND input_id = ?")
+      .run(revision, sessionId, runId, inputId)
   }
 
   /** The session's grants, as allow rules in the order they were added. */
-  grants(sessionId: string): ReadonlyArray<{ readonly permission: string; readonly pattern: string }> {
+  grants(sessionId: string, titleKey?: string): ReadonlyArray<{ readonly permission: string; readonly pattern: string }> {
+    const title = titleKey ?? this.profile(sessionId)?.agentTitle ?? UNTITLED_AGENT_TITLE
     return this.db
-      .query<{ permission: string; pattern: string }, [string]>(
-        "SELECT permission, pattern FROM session_grants WHERE session_id = ? ORDER BY position",
+      .query<{ permission: string; pattern: string }, [string, string]>(
+        "SELECT permission, pattern FROM session_grants WHERE session_id = ? AND title_key = ? ORDER BY position",
+      )
+      .all(sessionId, title)
+  }
+
+  grantsForSession(sessionId: string): ReadonlyArray<ApprovalGrant> {
+    return this.db
+      .query<ApprovalGrant, [string]>(
+        `SELECT session_id AS sessionId, title_key AS agentTitle, position, permission, pattern
+          FROM session_grants WHERE session_id = ? ORDER BY title_key, position`,
       )
       .all(sessionId)
   }
 
+  clearGrants(sessionId: string, agentTitle: string): number {
+    return this.db
+      .query("DELETE FROM session_grants WHERE session_id = ? AND title_key = ?")
+      .run(sessionId, agentTitle).changes
+  }
+
   addGrants(sessionId: string, permission: string, patterns: ReadonlyArray<string>) {
+    const title = this.profile(sessionId)?.agentTitle ?? UNTITLED_AGENT_TITLE
     const insert = this.db.query(
-      `INSERT INTO session_grants (session_id, position, permission, pattern)
-        VALUES (?, (SELECT coalesce(max(position), 0) + 1 FROM session_grants WHERE session_id = ?), ?, ?)`,
+      `INSERT INTO session_grants (session_id, title_key, position, permission, pattern)
+        VALUES (?, ?, (SELECT coalesce(max(position), 0) + 1 FROM session_grants WHERE session_id = ? AND title_key = ?), ?, ?)`,
     )
     this.db.transaction(() => {
-      for (const pattern of patterns) insert.run(sessionId, sessionId, permission, pattern)
+      for (const pattern of patterns) insert.run(sessionId, title, sessionId, title, permission, pattern)
     })()
   }
 
@@ -330,21 +431,30 @@ export class SessionStore {
 
   turns(sessionId: string): ReadonlyArray<TurnRecord> {
     return this.db
-      .query<TurnRow, [string]>(`SELECT ${turnColumns} FROM turns WHERE session_id = ? ORDER BY position`)
+      .query<TurnRow, [string]>(`SELECT ${turnColumns} FROM ${turnTables} WHERE t.session_id = ? ORDER BY t.position`)
       .all(sessionId)
       .map(toTurn)
   }
 
   getTurn(sessionId: string, runId: string): TurnRecord | null {
     const row = this.db
-      .query<TurnRow, [string, string]>(`SELECT ${turnColumns} FROM turns WHERE session_id = ? AND run_id = ?`)
+      .query<TurnRow, [string, string]>(`SELECT ${turnColumns} FROM ${turnTables} WHERE t.session_id = ? AND t.run_id = ?`)
       .get(sessionId, runId)
     return row === null ? null : toTurn(row)
   }
 
   insertTurn(
     sessionId: string,
-    turn: Omit<TurnRecord, "position" | "status">,
+    turn: {
+      readonly runId: string
+      readonly cause: TurnCause
+      readonly membership: ReadonlyArray<TurnInput>
+      readonly userMessageIds: ReadonlyArray<string>
+      readonly settingsRevision: string
+      readonly firstSeq: number
+      readonly contextWorkflowId: string | null
+      readonly contextStartItem: number | null
+    },
     startedAt: number,
   ): TurnRecord {
     const position =
@@ -353,25 +463,30 @@ export class SessionStore {
     this.db
       .query(
         `INSERT INTO turns
-          (session_id, run_id, position, cause, input_membership, user_message_ids, model, reasoning_effort, status, first_seq,
+          (session_id, run_id, position, settings_revision, cause, user_message_ids, status, first_seq,
            context_workflow_id, context_start_item, started_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)`,
       )
       .run(
         sessionId,
         turn.runId,
         position,
+        turn.settingsRevision,
         turn.cause,
-        JSON.stringify(turn.membership),
         JSON.stringify(turn.userMessageIds),
-        turn.model,
-        turn.reasoningEffort,
         turn.firstSeq,
         turn.contextWorkflowId,
         turn.contextStartItem,
         startedAt,
       )
-    return { ...turn, position, status: "running" }
+    const insertInput = this.db.query(
+      `INSERT INTO turn_inputs (session_id, run_id, ordinal, input_id, entry_ref, applied_settings_revision)
+        VALUES (?, ?, ?, ?, ?, NULL)`,
+    )
+    for (const [index, input] of turn.membership.entries()) {
+      insertInput.run(sessionId, turn.runId, index + 1, input.inputId, `${input.kind}:${input.inputId}`)
+    }
+    return this.getTurn(sessionId, turn.runId)!
   }
 
   /** Records that the turn `runId` participates in a context workflow from the session item `startItem`. */
@@ -505,6 +620,13 @@ export class SessionStore {
       )
       .run(sessionId, removedIds, removedIds)
     this.db.query("DELETE FROM turns WHERE session_id = ? AND position >= ?").run(sessionId, turn.position)
+    this.db
+      .query(
+        `DELETE FROM attachment_references
+          WHERE session_id = ? AND reference_id IN (SELECT value FROM json_each(?))
+            AND NOT EXISTS (SELECT 1 FROM turn_inputs i WHERE i.session_id = ? AND i.input_id = attachment_references.reference_id)`,
+      )
+      .run(sessionId, taken, sessionId)
   }
 
   /**
@@ -517,23 +639,42 @@ export class SessionStore {
    */
   fork(source: SessionRecord, target: { id: string; createdAt: number }, throughRunId: string | null): SessionRecord {
     return this.db.transaction(() => {
+      this.db.run("PRAGMA defer_foreign_keys = ON")
       const turns = this.turns(source.id)
       const through = throughRunId === null ? null : turns.find((turn) => turn.runId === throughRunId)
       if (through === undefined) throw new Error(`no turn ${throughRunId}`)
       const next = through === null ? undefined : turns.find((turn) => turn.position > through.position)
       const cutoff = next === undefined ? source.nextSeq : next.firstSeq
+      const keptTurns = turns.filter((turn) => turn.firstSeq < cutoff)
+      const appliedRevisions = this.db
+        .query<{ revision: string | null }, [string, number]>(
+          `SELECT DISTINCT i.applied_settings_revision AS revision FROM turn_inputs i
+            JOIN turns t ON t.session_id = i.session_id AND t.run_id = i.run_id
+            WHERE i.session_id = ? AND t.first_seq < ? AND i.applied_settings_revision IS NOT NULL`,
+        )
+        .all(source.id, cutoff)
+        .map((row) => row.revision!)
+      const keptRevisions = JSON.stringify([
+        ...new Set([...keptTurns.map((turn) => turn.settingsRevision), ...appliedRevisions, source.settingsRevision]),
+      ])
+      this.db
+        .query(
+          `INSERT INTO session_settings
+            (session_id, revision, agent_title, model_id, reasoning_effort, applied_at)
+            SELECT ?, revision, agent_title, model_id, reasoning_effort, applied_at
+            FROM session_settings WHERE session_id = ? AND revision IN (SELECT value FROM json_each(?))`,
+        )
+        .run(target.id, source.id, keptRevisions)
       this.db
         .query(
           `INSERT INTO sessions
-            (id, agent_key, model, reasoning_effort, model_overrides, permission, forked_from_session, forked_from_run,
+            (id, current_settings_revision, model_overrides, permission, forked_from_session, forked_from_run,
              created_at, next_seq)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           target.id,
-          source.agent,
-          source.model,
-          source.reasoningEffort,
+          source.settingsRevision,
           JSON.stringify(source.modelOverrides),
           source.permission === null ? null : JSON.stringify(source.permission),
           source.id,
@@ -561,22 +702,32 @@ export class SessionStore {
       this.db
         .query(
           `INSERT INTO turns
-            (session_id, run_id, position, cause, input_membership, user_message_ids, model, reasoning_effort, status, first_seq, started_at, ended_at,
+            (session_id, run_id, position, cause, settings_revision, status, first_seq, started_at, ended_at,
              context_workflow_id, context_start_item)
-            SELECT ?, run_id, position, cause, input_membership, user_message_ids, model, reasoning_effort, status, first_seq, started_at, ended_at,
+            SELECT ?, run_id, position, cause, settings_revision, status, first_seq, started_at, ended_at,
               NULL, context_start_item
             FROM turns WHERE session_id = ? AND first_seq < ?`,
         )
         .run(target.id, source.id, cutoff)
-      const kept = turns.filter((turn) => turn.firstSeq < cutoff).map((turn) => turn.runId)
+      this.db
+        .query(
+          `INSERT INTO turn_inputs (session_id, run_id, ordinal, input_id, entry_ref, applied_settings_revision)
+            SELECT ?, i.run_id, i.ordinal, i.input_id, i.entry_ref, i.applied_settings_revision
+            FROM turn_inputs i JOIN turns t ON t.session_id = i.session_id AND t.run_id = i.run_id
+            WHERE i.session_id = ? AND t.first_seq < ?`,
+        )
+        .run(target.id, source.id, cutoff)
+      const kept = keptTurns.map((turn) => turn.runId)
       this.conversation.copy(source.id, target.id, kept)
       this.timeline.copy(source.id, target.id, kept)
       this.db
         .query(
-          `INSERT INTO session_grants (session_id, position, permission, pattern)
-            SELECT ?, position, permission, pattern FROM session_grants WHERE session_id = ?`,
+          `INSERT INTO session_grants (session_id, title_key, position, permission, pattern)
+            SELECT ?, title_key, position, permission, pattern FROM session_grants WHERE session_id = ?`,
         )
         .run(target.id, source.id)
+      const violations = this.db.query<{ table: string; rowid: number; parent: string }, []>("PRAGMA foreign_key_check").all()
+      if (violations.length > 0) throw new Error(`fork integrity failed: ${JSON.stringify(violations)}`)
       return this.getSession(target.id)!
     })()
   }

@@ -22,6 +22,8 @@ export interface AgentOptions {
 interface Call {
   readonly name: string
   readonly modelCallId: string
+  readonly providerCallId: string
+  readonly invocationId?: string
   started: boolean
   answered: boolean
   /** Whether a committed assistant item holds the call, so its result is an item too. */
@@ -38,8 +40,12 @@ class TurnEvents {
   private text: string | null = null
   private reasoning: string | null = null
   private readonly streaming = new Map<number, string>()
-  /** The turn's tool calls, keyed by model call and provider call id. */
-  readonly calls = new Map<string, Call>()
+  /** Streamed calls before their assistant item supplies owned invocation ids. */
+  private readonly streamingCalls = new Map<string, Call>()
+  /** Committed calls, keyed by their owned invocation id. */
+  private readonly ownedCalls = new Map<string, Call>()
+  private invocationIds: ReadonlyArray<string> = []
+  private committedCalls: NonNullable<AIMessage["tool_calls"]> = []
   private modelCallId: string | null = null
   private committed = false
   private closed = false
@@ -72,6 +78,10 @@ class TurnEvents {
     this.modelCallId = modelCallId
     this.committed = false
     this.streaming.clear()
+    this.streamingCalls.clear()
+    this.ownedCalls.clear()
+    this.invocationIds = []
+    this.committedCalls = []
     this.emit({ type: "MODEL_CALL_STARTED", runId: this.context.turn.runId, modelCallId, ordinal })
   }
 
@@ -114,9 +124,10 @@ class TurnEvents {
         this.emitAll(ended)
         id = call.id
         this.streaming.set(index, id)
-        this.calls.set(this.callKey(id), {
+        this.streamingCalls.set(this.callKey(id), {
           name: call.name,
           modelCallId: this.modelCallId,
+          providerCallId: id,
           started: false,
           answered: false,
           committed: false,
@@ -154,18 +165,7 @@ class TurnEvents {
   commitMessage(message: AIMessage, inputBoundaryId: string) {
     const events = this.endEvents()
     for (const call of message.tool_calls ?? []) {
-      const known = this.calls.get(this.callKey(call.id!))
-      if (known !== undefined) {
-        known.committed = true
-        continue
-      }
-      this.calls.set(this.callKey(call.id!), {
-        name: call.name,
-        modelCallId: this.modelCallId!,
-        started: false,
-        answered: false,
-        committed: true,
-      })
+      if (this.streamingCalls.has(this.callKey(call.id!))) continue
       events.push(
         { type: "TOOL_CALL_START", modelCallId: this.modelCallId!, toolCallId: call.id!, toolCallName: call.name },
         { type: "TOOL_CALL_END", modelCallId: this.modelCallId!, toolCallId: call.id! },
@@ -173,34 +173,64 @@ class TurnEvents {
     }
     events.push({ type: "MODEL_CALL_COMMITTED", runId: this.context.turn.runId, modelCallId: this.modelCallId!, inputBoundaryId })
     if (!this.closed) {
-      this.context.commitAssistant(message, events)
+      this.committedCalls = message.tool_calls ?? []
+      this.invocationIds = this.context.commitAssistant(message, events, this.modelCallId!)
+      for (const [index, call] of this.committedCalls.entries()) {
+        const invocationId = this.invocationIds[index]
+        if (invocationId === undefined) continue
+        const streamed = this.streamingCalls.get(this.callKey(call.id!))
+        this.ownedCalls.set(invocationId, {
+          name: call.name,
+          modelCallId: this.modelCallId!,
+          providerCallId: call.id!,
+          invocationId,
+          started: streamed?.started === true,
+          answered: false,
+          committed: true,
+          ...(streamed?.cancelNote === undefined ? {} : { cancelNote: streamed.cancelNote }),
+        })
+      }
+      this.streamingCalls.clear()
       this.committed = true
       this.context.afterCommit()
     }
   }
 
-  started(id: string) {
-    const call = this.calls.get(this.callKey(id))
+  invocationFor(call: NonNullable<AIMessage["tool_calls"]>[number]): string | undefined {
+    return this.invocationIds[this.committedCalls.indexOf(call)]
+  }
+
+  started(invocationId: string | undefined) {
+    if (invocationId === undefined) return
+    const call = this.ownedCalls.get(invocationId)
     if (call === undefined || call.started) return
     call.started = true
-    this.emit({ type: "TOOL_EXECUTION_STARTED", modelCallId: call.modelCallId, toolCallId: id })
+    this.context.toolStarted(invocationId)
+    this.emit({
+      type: "TOOL_EXECUTION_STARTED",
+      modelCallId: call.modelCallId,
+      toolCallId: call.providerCallId,
+      invocationId,
+    })
   }
 
   /** Sets the note a canceled result of the call carries. */
-  cancelNote(id: string, note: string) {
-    const call = this.calls.get(this.callKey(id))
+  cancelNote(invocationId: string | undefined, note: string) {
+    if (invocationId === undefined) return
+    const call = this.ownedCalls.get(invocationId)
     if (call !== undefined) call.cancelNote = note
   }
 
-  note(id: string): string | undefined {
-    return this.calls.get(this.callKey(id))?.cancelNote
+  note(invocationId: string | undefined): string | undefined {
+    return invocationId === undefined ? undefined : this.ownedCalls.get(invocationId)?.cancelNote
   }
 
   /** Records the call's result: an item with its event for a committed call, else the event alone. */
-  result(id: string, content: ToolContent, outcome: ToolOutcome) {
-    const call = this.calls.get(this.callKey(id))
+  result(invocationId: string, name: string, content: ToolContent, outcome: ToolOutcome) {
+    const call = this.ownedCalls.get(invocationId)
     if (call === undefined || this.closed) return
     call.answered = true
+    const id = call.providerCallId
     const event: SessionEventBody = {
       type: "TOOL_CALL_RESULT",
       modelCallId: call.modelCallId,
@@ -209,19 +239,36 @@ class TurnEvents {
       role: "tool",
       content: toolContentText(content),
       outcome,
+      invocationId,
     }
-    if (call.committed) this.context.commitResult({ callId: id, name: call.name, content, outcome }, event)
-    else this.emit(event)
+    this.context.commitResult({ callId: id, name, content, outcome }, event, call.modelCallId, invocationId)
   }
 
   /** Ends open streams and gives each of the turn's calls without a result a failed result of `outcome`. */
   settle(outcome: "canceled" | "failed") {
     this.endCall()
-    for (const [key, call] of this.calls) {
-      if (call.answered) continue
-      const id = key.slice(key.indexOf(":") + 1)
+    for (const call of this.ownedCalls.values()) {
+      if (call.answered || call.invocationId === undefined) continue
       const content = unfinishedResult(outcome, call.started)
-      this.result(id, outcome === "canceled" && call.cancelNote !== undefined ? `${content} ${call.cancelNote}` : content, outcome)
+      this.result(
+        call.invocationId,
+        call.name,
+        outcome === "canceled" && call.cancelNote !== undefined ? `${content} ${call.cancelNote}` : content,
+        outcome,
+      )
+    }
+    for (const call of this.streamingCalls.values()) {
+      if (call.answered) continue
+      const content = unfinishedResult(outcome, call.started)
+      this.emit({
+        type: "TOOL_CALL_RESULT",
+        modelCallId: call.modelCallId,
+        messageId: crypto.randomUUID(),
+        toolCallId: call.providerCallId,
+        role: "tool",
+        content,
+        outcome,
+      })
     }
   }
 
@@ -230,6 +277,7 @@ class TurnEvents {
     if (cancelled) this.settle("canceled")
     else this.endCall()
     if (this.modelCallId !== null && !this.committed) {
+      this.context.discardModelCall(this.modelCallId, cancelled ? "cancelled" : "interrupted")
       this.emit({ type: "MODEL_CALL_DISCARDED", runId: this.context.turn.runId, modelCallId: this.modelCallId, reason: cancelled ? "cancelled" : "interrupted" })
     }
     this.closed = true
@@ -237,13 +285,15 @@ class TurnEvents {
 
   discard(reason: "failed" | "cancelled" | "interrupted") {
     if (this.modelCallId !== null) {
+      this.context.discardModelCall(this.modelCallId, reason)
       this.emit({ type: "MODEL_CALL_DISCARDED", runId: this.context.turn.runId, modelCallId: this.modelCallId, reason })
     }
     this.text = null
     this.reasoning = null
     this.streaming.clear()
     const modelCallId = this.modelCallId
-    for (const [key, call] of this.calls) if (call.modelCallId === modelCallId) this.calls.delete(key)
+    for (const [key, call] of this.streamingCalls) if (call.modelCallId === modelCallId) this.streamingCalls.delete(key)
+    for (const [key, call] of this.ownedCalls) if (call.modelCallId === modelCallId) this.ownedCalls.delete(key)
     this.modelCallId = null
     this.committed = false
   }
@@ -279,6 +329,19 @@ const finalMessage = (chunks: ReadonlyArray<AIMessageChunk>): { message: AIMessa
     ...(merged.id === undefined ? {} : { id: merged.id }),
   })
   return { message, invalid }
+}
+
+const retainRendered = (context: TurnContext, text: string, renderer: string) => {
+  const digest = new Bun.CryptoHasher("sha256").update(text).digest("hex")
+  context.storeContent(digest, text)
+  return {
+    representationId: digest,
+    contentId: digest,
+    mediaType: "text/plain",
+    digest,
+    byteLength: Buffer.byteLength(text),
+    renderer,
+  }
 }
 
 /**
@@ -337,6 +400,7 @@ const tracedPort = (port: ModelPort, context: TurnContext): ModelPort => ({
 
 const loop = async (options: AgentOptions, context: TurnContext, events: TurnEvents, signal: AbortSignal): Promise<TurnOutcome> => {
   const { session, turn } = context
+  if (turn.model === null) throw new TurnFailure("the session has no model selected", "model_unavailable")
   const model = options.models.find((candidate) => candidate.id === turn.model)
   if (model === undefined) throw new TurnFailure(`the model ${turn.model} is not configured`, "model_unavailable")
   const settings = callSettings(model, session.modelOverrides[model.id], turn.reasoningEffort)
@@ -353,7 +417,10 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
     if (issue !== null) throw new TurnFailure(`the model call was not sent: ${allowanceMessage(issue)}`, "tool_definitions_over_allowance")
 
     const window = context.window()
-    const messages = renderWindow(window.harness, window.items, turn.model, model.imageInput)
+    const renderedGroups: Array<{ readonly sourceEntryIds: ReadonlyArray<string>; readonly rendered: string }> = []
+    const messages = renderWindow(window.harness, window.items, turn.model, model.imageInput, turn.agentTitle, (sourceEntryIds, rendered) =>
+      renderedGroups.push({ sourceEntryIds: [...sourceEntryIds], rendered }),
+    )
     // The context limit, checked before each model call: an estimate reaching the checkpoint window size.
     const estimate = estimateCall(REQUEST_INSTRUCTIONS, messages, specs)
     if (estimate >= context.checkpointWindowSize) {
@@ -366,6 +433,116 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
     }
     const chunks: Array<AIMessageChunk> = []
     const modelCallId = crypto.randomUUID()
+    const inputBoundaryId = crypto.randomUUID()
+    const instructionDigest = new Bun.CryptoHasher("sha256").update(REQUEST_INSTRUCTIONS).digest("hex")
+    const providerRendered = retainRendered(
+      context,
+      JSON.stringify({ instructions: REQUEST_INSTRUCTIONS, messages, tools: specs }),
+      "ashe-agent/window@1",
+    )
+    context.beginModelCall({
+      modelCallId,
+      inputBoundaryId,
+      ordinal: modelCallOrdinal,
+      windowPosition: window.position,
+      request: {
+        version: 1,
+        instructions: REQUEST_INSTRUCTIONS,
+        providerInput: {
+          renderer: "ashe-agent/window@1",
+          digest: providerRendered.digest,
+          representationId: providerRendered.representationId,
+          contentId: providerRendered.contentId,
+          byteLength: providerRendered.byteLength,
+          messageCount: messages.length,
+        },
+        contributions: [
+          {
+            position: 0,
+            kind: "instruction",
+            sourceEntryId: null,
+            representation: {
+              representationId: instructionDigest,
+              contentId: instructionDigest,
+              mediaType: "text/plain",
+              digest: instructionDigest,
+              transformation: "system-block",
+            },
+            transformation: "system-block",
+            rendered: retainRendered(context, REQUEST_INSTRUCTIONS, "ashe-agent/instruction@1"),
+          },
+          ...renderedGroups.flatMap((group, index) => {
+            const groupItems = group.sourceEntryIds.flatMap((entryId) => {
+              const item = window.items.find((candidate) => candidate.entryId === entryId)
+              return item === undefined ? [] : [item]
+            })
+            const first = groupItems[0]
+            if (first === undefined) return []
+            const transformation =
+              first.kind === "result" && first.cleared
+                ? "context-result-cleared"
+                : groupItems.some((item) => item.runId !== null && (item.agentTitle !== turn.agentTitle || item.model !== turn.model))
+                  ? "foreign-transcript"
+                  : first.kind === "component"
+                    ? "developer-block"
+                    : first.kind === "user"
+                      ? "user-block"
+                      : first.kind === "assistant"
+                        ? "native-replay"
+                        : "tool-result"
+            const itemContribution = {
+              position: (index + 1) * 1_000,
+              kind: "message" as const,
+              sourceEntryId: first.entryId,
+              sourceEntryIds: group.sourceEntryIds,
+              representation: {
+                representationId: first.representationId,
+                contentId: first.contentId,
+                mediaType: first.contentFormat,
+                digest: first.representationId,
+                transformation,
+              },
+              transformation,
+              rendered: retainRendered(context, group.rendered, "ashe-agent/window@1"),
+            }
+            const attachments = groupItems.flatMap((item) =>
+              item.kind === "user"
+                ? (item.attachments ?? []).map((attachment, offset) => ({
+                    position: (index + 1) * 1_000 + offset + 1,
+                    kind: "message" as const,
+                    sourceEntryId: item.entryId,
+                    representation: {
+                      representationId: attachment.representationId,
+                      contentId: attachment.contentId,
+                      mediaType: attachment.mediaType,
+                      digest: attachment.digest,
+                      transformation: "attachment-original",
+                    },
+                    transformation: "attachment-original",
+                    rendered: {
+                      representationId: attachment.representationId,
+                      contentId: attachment.contentId,
+                      mediaType: attachment.mediaType,
+                      digest: attachment.digest,
+                      renderer: "ashe-agent/original@1",
+                    },
+                  }))
+                : [],
+            )
+            return [itemContribution, ...attachments]
+          }),
+          ...specs.map((spec, index) => ({
+            position: 1_000_000 + index,
+            kind: "tool-definition" as const,
+            name: spec.name,
+            description: spec.description,
+            parameters: spec.parameters,
+            rendered: retainRendered(context, JSON.stringify(spec), "ashe-agent/tool-definition@1"),
+          })),
+        ],
+      },
+      offeredTools: specs,
+    })
     events.startCall(modelCallId, modelCallOrdinal++)
     try {
       const call = { model: turn.model, instructions: REQUEST_INSTRUCTIONS, messages, tools: specs, ...settings }
@@ -385,8 +562,15 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
       throw new TurnFailure(`the model call failed: ${error instanceof Error ? error.message : String(error)}`, "model_failed")
     }
     const { message, invalid } = finalMessage(chunks)
-    events.commitMessage(message, crypto.randomUUID())
-    for (const [id, raw] of invalid) events.result(id, `The arguments were not valid JSON: ${raw}`, "failed")
+    events.commitMessage(message, inputBoundaryId)
+    for (const call of message.tool_calls ?? []) {
+      const raw = invalid.get(call.id!)
+      if (raw !== undefined) {
+        const invocationId = events.invocationFor(call)
+        if (invocationId === undefined) throw new IntegrityFailure("a committed call has no owned invocation")
+        events.result(invocationId, call.name, `The arguments were not valid JSON: ${raw}`, "failed")
+      }
+    }
 
     const calls = (message.tool_calls ?? []).filter((call) => !invalid.has(call.id!))
     if (calls.length === 0 && invalid.size === 0) {
@@ -399,8 +583,10 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
     let stopped = false
     for (const call of calls) {
       const callId = call.id!
+      const invocationId = events.invocationFor(call)
+      if (invocationId === undefined) throw new IntegrityFailure("a committed call has no owned invocation")
       if (stopped) {
-        events.result(callId, unfinishedResult("canceled", false), "canceled")
+        events.result(invocationId, call.name, unfinishedResult("canceled", false), "canceled")
         continue
       }
       const result = await runTool(
@@ -409,6 +595,7 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
         call.args,
         callId,
         modelCallId,
+        invocationId,
         context,
         events,
         signal,
@@ -417,7 +604,7 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
       )
       signal.throwIfAborted()
       if (result.outcome === "declined" && result.endTurn) stopped = true
-      events.result(callId, result.content, result.outcome)
+      events.result(invocationId, call.name, result.content, result.outcome)
     }
     if (stopped) return { status: "finished" }
     // A step boundary after the tool results: eligible input ends this AgentTurn.
@@ -431,6 +618,7 @@ const runTool = async (
   args: unknown,
   callId: string,
   modelCallId: string,
+  invocationId: string | undefined,
   context: TurnContext,
   events: TurnEvents,
   signal: AbortSignal,
@@ -473,9 +661,9 @@ const runTool = async (
           deadline: Number.POSITIVE_INFINITY,
           clock: context.toolPolicy.clock,
           authorize: (check, also) => context.authorize(callId, check, also === undefined ? signal : AbortSignal.any([signal, also])),
-          started: () => events.started(callId),
-          onCancel: (note) => events.cancelNote(callId, note),
-          note: () => events.note(callId),
+          started: () => events.started(invocationId),
+          onCancel: (note) => events.cancelNote(invocationId, note),
+          note: () => events.note(invocationId),
           programCall: (program, outcome) => events.emit({
             type: "PROGRAM_CALL_FINISHED",
             modelCallId,

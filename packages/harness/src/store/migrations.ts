@@ -140,6 +140,8 @@ export const applyMigrations = (
     throw error
   }
   for (const migration of status.pending) {
+    const withoutForeignKeys = migration.sql.startsWith("-- foreign-keys-off\n")
+    if (withoutForeignKeys) db.run("PRAGMA foreign_keys = OFF")
     db.run("BEGIN IMMEDIATE")
     try {
       const current = migrationStatus(readLedger(db), migrations)
@@ -147,6 +149,12 @@ export const applyMigrations = (
         throw new MigrationError({ kind: "failed", message: "another process changed the ledger while migrating" })
       }
       db.run(migration.sql)
+      if (withoutForeignKeys) {
+        const violations = db.query("PRAGMA foreign_key_check").all()
+        if (violations.length > 0) {
+          throw new MigrationError({ kind: "failed", message: `${migration.name} left foreign key violations` })
+        }
+      }
       db.query(`INSERT INTO ${LEDGER} (position, name, sha256, applied_at) VALUES (?, ?, ?, ?)`).run(
         migration.position,
         migration.name,
@@ -161,6 +169,8 @@ export const applyMigrations = (
         kind: "failed",
         message: `${migration.name} failed: ${error instanceof Error ? error.message : String(error)}`,
       })
+    } finally {
+      if (withoutForeignKeys) db.run("PRAGMA foreign_keys = ON")
     }
   }
   return status.pending

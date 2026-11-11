@@ -48,7 +48,10 @@ context workflow checkpoint.
 
 `session.input` stores the user message as waiting input, with an
 `INPUT_WAITING` event naming its id, text, mode, and sender, before it
-returns the message's id, so a client can show it as pending. On an idle
+returns the message's id, so a client can show it as pending. Its optional
+selection patch carries requested title, model, and effort changes; its
+optional attachments claim retained originals for that input and remain on
+the admitted user entry and its request manifest. On an idle
 session, the message then starts a turn. While a turn runs, a message
 waits in the steering lane by default: it waits for the complete model
 response and every tool that response requested to settle, never entering
@@ -58,8 +61,11 @@ boundary. A message sent with mode `queue` waits until execution is idle
 and no steering input is waiting, then joins the other eligible queued
 messages as one UserTurn. Steering therefore precedes older queued input.
 
-An AgentTurn keeps the effective model and reasoning effort captured when
-it starts. A model or effort change, and a steering, context, or
+At admission, the batch's requested settings apply in arrival order. An
+immutable `session_settings` revision is written for each effective change,
+and the AgentTurn references the final revision established at its UserTurn
+boundary. Its history entries retain that title and model, including when
+the turn later fails. A model or effort change, and a steering, context, or
 continuation handoff, affects the next AgentTurn.
 
 `session.resume` requests a continuation on an idle session. It is refused
@@ -131,9 +137,10 @@ that AgentTurn and before the next UserTurn even while the source executes
 later work, keeping their event numbers and leaving the source unchanged.
 An unsettled point is refused, as is a request with no eligible pair.
 The new session gets its own new session directory. Its `SESSION_CREATED`
-event gives the source's agent, selected model, reasoning effort, and
-agent settings, which it starts with. It also keeps the conversation
-state that no copied turn or a copied turn owns and the source's
+event gives the source's applied selection and agent settings, which it
+starts with. It also keeps the conversation state that no copied turn or a
+copied turn owns, preserving inherited authorship while sharing immutable
+content, and the source's
 [session grants](permissions.md#session-grants). The source's
 `SESSION_REWOUND` and `MODEL_CHANGED` events, pending input, active
 client actions, and shell processes are not copied. Its first eligible

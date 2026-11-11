@@ -530,6 +530,9 @@ describe("telemetry", () => {
       h.input(id, "second")
       const research = await waitFor("a research call span", () => fresh().find((span) => span.name === "ashe_agent.research_call"), 10_000)
       expect(research.attributes["error.type"]).toBe("research_failed")
+      expect(
+        h.hub.store.conversation.successfulManifests(id).some((entry) => (entry.manifest as any).purpose === "research"),
+      ).toBe(false)
       await h.calls(4)
       await h.restart()
       const turn = await waitFor("the context turn span", () => fresh().find((span) => span.name === "ashe_agent.context_turn"), 10_000)

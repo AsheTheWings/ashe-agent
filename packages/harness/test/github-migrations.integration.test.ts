@@ -19,7 +19,7 @@ test("SQLite migrations drop password state and logins while preserving API toke
     db.run("INSERT INTO refresh_tokens VALUES ('old-refresh', 'old', 1, 100, NULL)")
     db.run("INSERT INTO api_tokens VALUES ('api', 'program', 'synthetic-hash', 1, NULL, NULL)")
     const before = db.query("SELECT * FROM api_tokens").all()
-    expect(applyMigrations(db, migrations)).toHaveLength(4)
+    expect(applyMigrations(db, migrations)).toHaveLength(6)
     expect(applyMigrations(db, migrations)).toHaveLength(0)
     expect(db.query("SELECT * FROM api_tokens").all()).toEqual(before)
     expect(db.query("SELECT name FROM sqlite_master WHERE name IN ('owner', 'login_failures')").all()).toEqual([])

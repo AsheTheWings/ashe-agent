@@ -3,11 +3,14 @@ import { context as otelContext, type Context as TraceContext, type Span } from 
 import { Context, Effect, Exit, Fiber, Layer } from "effect"
 import {
   type Agent,
+  type AgentProfile,
   ErrorCode,
   type InputMode,
   type Model,
   PERMISSION_ACTION,
   type PermissionActionResult,
+  type RetainedAttachmentRef,
+  type SelectionPatch,
   type Sender,
   type SessionEvent,
   type SessionEventBody,
@@ -20,6 +23,7 @@ import { programCallsNote, unfinishedResult } from "../agent/notes.ts"
 import { withholdingName, type Tool } from "../agent/tools.ts"
 import type { ToolContent, ToolOutcome } from "../agent/window.ts"
 import type { SessionAgent } from "../agents/agents.ts"
+import { AttachmentError, AttachmentStore, type UploadLimits } from "../content/attachments.ts"
 import { InstructionsUnreadable, type KnownInstructions } from "../agents/setup.ts"
 import { displayTitle, type FileMetadata } from "../agents/titles.ts"
 import {
@@ -70,18 +74,39 @@ export interface TurnContext {
   /** Persists an event of the turn and sends it to every subscriber. */
   readonly emit: (body: SessionEventBody) => SessionEvent
   /** The session's current checkpoint window: its harness instructions and its items. */
-  readonly window: () => { readonly harness: string; readonly items: ReadonlyArray<Item> }
+  readonly window: () => { readonly position: number; readonly harness: string; readonly items: ReadonlyArray<Item> }
   /** The tools the session's rules leave offered now. */
   readonly tools: () => ReadonlyArray<Tool>
+  /** Freezes a model call's request before it is sent and records that it started. */
+  readonly storeContent: (sha256: string, text: string) => void
+  /** Freezes a model call's request before it is sent and records that it started. */
+  readonly beginModelCall: (call: {
+    readonly modelCallId: string
+    readonly inputBoundaryId: string
+    readonly ordinal: number
+    readonly windowPosition: number
+    readonly request: unknown
+    readonly offeredTools: unknown
+  }) => void
+  /** Records a model call that ended without a retained response. */
+  readonly discardModelCall: (modelCallId: string, outcome: "failed" | "cancelled" | "interrupted") => void
   /** Records a model call's assistant message as an item, in one transaction with the events that end its streams. */
-  readonly commitAssistant: (message: AIMessage, events: ReadonlyArray<SessionEventBody>) => void
+  readonly commitAssistant: (
+    message: AIMessage,
+    events: ReadonlyArray<SessionEventBody>,
+    modelCallId: string,
+  ) => ReadonlyArray<string>
   /** Runs post-commit context work after the assistant commit becomes durable. */
   readonly afterCommit: () => void
   /** Records a tool result as an item, in one transaction with its `TOOL_CALL_RESULT` event. */
   readonly commitResult: (
     result: { readonly callId: string; readonly name: string; readonly content: ToolContent; readonly outcome: ToolOutcome },
     event: SessionEventBody,
+    modelCallId: string,
+    invocationId?: string,
   ) => void
+  /** Records the actual start of an owned tool invocation. */
+  readonly toolStarted: (invocationId: string) => void
   /**
    * At a complete step boundary, whether another input batch is eligible to
    * start the next turn. It never appends to the admitted turn.
@@ -179,6 +204,8 @@ export interface HubOptions {
   readonly serverTimeZone?: string
   /** Elapsed-time limits for every tool invocation; a 300000 ms global limit when unset. */
   readonly toolPolicy?: ToolExecutionPolicy
+  readonly uploads?: AttachmentStore
+  readonly uploadLimits?: UploadLimits
   readonly now?: () => number
 }
 
@@ -222,6 +249,7 @@ const notFound = (what: string) => new ProtocolError({ code: ErrorCode.notFound,
 const conflict = (message: string) => new ProtocolError({ code: ErrorCode.conflict, message })
 const invalid = (message: string) => new ProtocolError({ code: ErrorCode.invalidInput, message })
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
+const senderOwner = (sender: Sender) => (sender.kind === "token" ? `token:${sender.tokenId}` : `login:${sender.loginId}`)
 
 const SESSION_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
 /** The largest multiple of the alphabet's size below 256: bytes from it on are discarded, so each character is uniform. */
@@ -240,8 +268,8 @@ export const randomSessionId = (): string => {
 
 const wire = (component: Component) => ({ type: component.type, heading: component.heading, text: component.text })
 
-const effectiveSelection = (session: SessionRecord, model: string, reasoningEffort: string | null) => ({
-  agentTitle: session.agent ?? UNTITLED_AGENT_TITLE,
+const effectiveSelection = (agentTitle: string, model: string | null, reasoningEffort: string | null) => ({
+  agentTitle,
   modelSettings: { modelId: model, reasoningEffort },
 })
 
@@ -264,6 +292,7 @@ export class SessionHub {
   readonly actions = new ActionBroker((sessionId, body) => this.emit(sessionId, body))
   private readonly now: () => number
   private readonly toolPolicy: ToolExecutionPolicy
+  readonly attachments: AttachmentStore
   private stopping = false
   private readonly context: ContextTurns
 
@@ -272,6 +301,7 @@ export class SessionHub {
     private readonly options: HubOptions,
   ) {
     this.now = options.now ?? Date.now
+    this.attachments = options.uploads ?? new AttachmentStore(store.db, options.uploadLimits)
     this.toolPolicy = options.toolPolicy ?? defaultToolPolicy()
     this.context = new ContextTurns(
       {
@@ -323,11 +353,9 @@ export class SessionHub {
           this.store.appendEvent(sessionId, { type: "PERMISSION_WITHDRAWN", requestId, reason: "restart" }, this.now())
         }
         const openModelCalls = new Map<string, string>()
-        const startedCalls = new Map<string, string>()
         const committedCalls = new Set<string>()
         for (const { event } of this.turnEvents(sessionId, runId)) {
           if (event.type === "MODEL_CALL_STARTED") openModelCalls.set(event.modelCallId, event.runId)
-          if (event.type === "TOOL_CALL_START") startedCalls.set(`${event.modelCallId}:${event.toolCallId}`, event.toolCallName)
           if (event.type === "MODEL_CALL_COMMITTED") committedCalls.add(event.modelCallId)
           if (event.type === "MODEL_CALL_COMMITTED" || event.type === "MODEL_CALL_DISCARDED") {
             openModelCalls.delete(event.modelCallId)
@@ -340,19 +368,18 @@ export class SessionHub {
             this.now(),
           )
         }
-        for (const { modelCallId, toolCallId, started, program } of this.unansweredCalls(sessionId, runId)) {
+        for (const { modelCallId, toolCallId, name, invocationId, started, program } of this.unansweredCalls(sessionId, runId)) {
           const unfinished = unfinishedResult("interrupted", started)
           const content = program === null ? unfinished : `${unfinished} ${programCallsNote(program)}`
-          const key = `${modelCallId}:${toolCallId}`
-          const name = committedCalls.has(modelCallId) ? startedCalls.get(key) : undefined
-          if (name === undefined) continue
-          this.conversation.appendItem(sessionId, window.position, { runId, model: turn.model }, {
-            kind: "result",
-            callId: toolCallId,
-            name,
-            content,
-            outcome: "interrupted",
-          })
+          if (!committedCalls.has(modelCallId)) continue
+          this.conversation.appendToolResult(
+            sessionId,
+            window.position,
+            { runId, model: turn.model, agentTitle: turn.agentTitle },
+            { callId: toolCallId, name, content, outcome: "interrupted" },
+            modelCallId,
+            invocationId,
+          )
           this.store.appendEvent(
             sessionId,
             {
@@ -363,6 +390,7 @@ export class SessionHub {
               role: "tool",
               content,
               outcome: "interrupted",
+              ...(invocationId === undefined ? {} : { invocationId }),
             },
             this.now(),
           )
@@ -561,29 +589,68 @@ export class SessionHub {
     type Call = {
       modelCallId: string
       toolCallId: string
+      name: string
+      invocationId?: string
       started: boolean
       program: Array<{ tool: string; outcome: string }> | null
     }
-    const calls = new Map<string, Call>()
+    const calls: Array<Call> = []
+    const byInvocation = new Map<string, Call>()
+    const find = (modelCallId: string, toolCallId: string, invocationId?: string) =>
+      (invocationId === undefined ? undefined : byInvocation.get(invocationId)) ??
+      calls.find((call) => call.modelCallId === modelCallId && call.toolCallId === toolCallId)
+    const remove = (call: Call) => {
+      const index = calls.indexOf(call)
+      if (index >= 0) calls.splice(index, 1)
+      if (call.invocationId !== undefined) byInvocation.delete(call.invocationId)
+    }
     for (const { event } of this.turnEvents(sessionId, runId)) {
       if (event.type === "TOOL_CALL_START") {
-        calls.set(`${event.modelCallId}:${event.toolCallId}`, {
+        const call = {
           modelCallId: event.modelCallId,
           toolCallId: event.toolCallId,
+          name: event.toolCallName,
+          ...(event.invocationId === undefined ? {} : { invocationId: event.invocationId }),
           started: false,
           program: event.toolCallName === "execute" ? [] : null,
-        })
+        }
+        calls.push(call)
+        if (call.invocationId !== undefined) byInvocation.set(call.invocationId, call)
       }
       if (event.type === "PROGRAM_CALL_FINISHED") {
-        calls.get(`${event.modelCallId}:${event.toolCallId}`)?.program?.push({ tool: event.tool, outcome: event.outcome })
+        find(event.modelCallId, event.toolCallId)?.program?.push({ tool: event.tool, outcome: event.outcome })
       }
       if (event.type === "TOOL_EXECUTION_STARTED") {
-        const call = calls.get(`${event.modelCallId}:${event.toolCallId}`)
+        const call = find(event.modelCallId, event.toolCallId, event.invocationId)
         if (call !== undefined) call.started = true
       }
-      if (event.type === "TOOL_CALL_RESULT") calls.delete(`${event.modelCallId}:${event.toolCallId}`)
+      if (event.type === "TOOL_CALL_RESULT") {
+        const call = find(event.modelCallId, event.toolCallId, event.invocationId)
+        if (call !== undefined) remove(call)
+      }
     }
-    return [...calls.values()]
+    const used = new Set(calls.flatMap((call) => (call.invocationId === undefined ? [] : [call.invocationId])))
+    const rows = this.store.db
+      .query<{ entry_id: string; model_call_id: string; provider_call_id: string | null }, [string, string]>(
+        `SELECT a.entry_id, a.model_call_id, a.provider_call_id FROM agent_tools a
+          JOIN session_entries e ON e.session_id = a.session_id AND e.entry_id = a.entry_id
+          WHERE a.session_id = ? AND e.owner_turn_id = ? AND a.settled_at IS NULL
+          ORDER BY e.position`,
+      )
+      .all(sessionId, runId)
+    for (const call of calls) {
+      if (call.invocationId !== undefined) continue
+      const row = rows.find(
+        (candidate) =>
+          candidate.model_call_id === call.modelCallId &&
+          candidate.provider_call_id === call.toolCallId &&
+          !used.has(candidate.entry_id),
+      )
+      if (row === undefined) continue
+      call.invocationId = row.entry_id
+      used.add(row.entry_id)
+    }
+    return calls
   }
 
   private state(sessionId: string): SessionState {
@@ -802,7 +869,7 @@ export class SessionHub {
         }),
       )()
     } catch (error) {
-      if (error instanceof ProtocolError || error instanceof IntegrityFailure) throw error
+      if (error instanceof ProtocolError || error instanceof IntegrityFailure || error instanceof AttachmentError) throw error
       throw new IntegrityFailure(`the session state transaction failed: ${errorText(error)}`)
     }
     const listeners = this.state(sessionId).listeners
@@ -912,6 +979,71 @@ export class SessionHub {
 
   private dates() {
     return currentDates(this.now(), this.options.userTimeZone ?? "UTC", this.options.serverTimeZone)
+  }
+
+  private configuredAgent(title: string): SessionAgent | null {
+    if (title === UNTITLED_AGENT_TITLE) return { key: null, model: null, overrides: {}, permission: null }
+    try {
+      return this.options.setup.resolve(title)
+    } catch {
+      return null
+    }
+  }
+
+  private compatibleEffort(effort: string | null, modelId: string | null): string | null {
+    if (effort === null || modelId === null) return null
+    const model = this.options.models.find((candidate) => candidate.id === modelId)
+    return model === undefined || model.efforts.includes(effort) ? effort : null
+  }
+
+  private nextAdmissionProfile(current: AgentProfile, patch: SelectionPatch): AgentProfile {
+    let title = current.agentTitle
+    let modelId = current.modelSettings.modelId
+    let effort = current.modelSettings.reasoningEffort
+    if (patch.agentTitle !== undefined) {
+      title = patch.agentTitle
+      const listing = this.options.setup.agents().agents.find((agent) => agent.key === title)
+      if (title === UNTITLED_AGENT_TITLE) {
+        modelId = this.options.defaultModel
+        effort = null
+      } else if (listing !== undefined) {
+        modelId = listing.model ?? this.options.defaultModel
+        effort = listing.reasoningEfforts[modelId] ?? this.compatibleEffort(effort, modelId)
+      } else {
+        modelId = null
+        effort = null
+      }
+    }
+    if (patch.modelSettings?.modelId !== undefined) {
+      modelId = patch.modelSettings.modelId
+      effort = this.compatibleEffort(effort, modelId)
+    }
+    if (patch.modelSettings?.reasoningEffort !== undefined) effort = patch.modelSettings.reasoningEffort
+    return { agentTitle: title, modelSettings: { modelId, reasoningEffort: effort } }
+  }
+
+  private admissionSelection(session: SessionRecord, taken: ReadonlyArray<WaitingEntry>) {
+    let profile: AgentProfile = {
+      agentTitle: session.agent ?? UNTITLED_AGENT_TITLE,
+      modelSettings: { modelId: session.model, reasoningEffort: session.reasoningEffort },
+    }
+    const steps: Array<{ readonly inputId: string; readonly profile: AgentProfile; readonly before: AgentProfile }> = []
+    for (const entry of taken) {
+      if (entry.kind !== "user" || entry.selection === undefined) continue
+      const before = profile
+      profile = this.nextAdmissionProfile(profile, entry.selection)
+      steps.push({ inputId: entry.inputId, profile, before })
+    }
+    const agent = this.configuredAgent(profile.agentTitle)
+    const effective: SessionRecord = {
+      ...session,
+      agent: profile.agentTitle === UNTITLED_AGENT_TITLE ? null : profile.agentTitle,
+      model: profile.modelSettings.modelId,
+      reasoningEffort: profile.modelSettings.reasoningEffort,
+      modelOverrides: agent?.overrides ?? {},
+      permission: agent?.permission ?? null,
+    }
+    return { profile, steps, effective }
   }
 
   /** A new session id that no session and no directory has. */
@@ -1032,7 +1164,7 @@ export class SessionHub {
       this.store.setModel(sessionId, configured.id, effort)
       append({
         type: "SELECTION_CHANGED",
-        selection: effectiveSelection(session, configured.id, effort),
+        selection: effectiveSelection(session.agent ?? UNTITLED_AGENT_TITLE, configured.id, effort),
         settingsRevisionId: crypto.randomUUID(),
         sender,
       })
@@ -1046,13 +1178,30 @@ export class SessionHub {
    * at the running turn's next complete step, and a queued one starts a turn
    * after it ends; messages of each lane enter in arrival order.
    */
-  input(sessionId: string, text: string, mode: InputMode | undefined, sender: Sender): string {
+  input(
+    sessionId: string,
+    text: string,
+    mode: InputMode | undefined,
+    sender: Sender,
+    options: { readonly selection?: SelectionPatch; readonly attachments?: ReadonlyArray<RetainedAttachmentRef> } = {},
+  ): string {
     this.session(sessionId)
     if (this.stopping) throw conflict("the server is stopping")
     if (this.state(sessionId).controlled) throw conflict("the session's history is being changed")
     const inputId = crypto.randomUUID()
-    const entry = { kind: "user" as const, inputId, text, mode: mode ?? "steer", sender }
+    const entry = {
+      kind: "user" as const,
+      inputId,
+      text,
+      mode: mode ?? "steer",
+      sender,
+      ...(options.selection === undefined ? {} : { selection: options.selection }),
+      ...(options.attachments === undefined || options.attachments.length === 0 ? {} : { attachments: options.attachments }),
+    }
     this.commit(sessionId, (append) => {
+      if (options.attachments !== undefined && options.attachments.length > 0) {
+        this.attachments.claim(senderOwner(sender), sessionId, inputId, options.attachments, this.now())
+      }
       this.conversation.addWaiting(sessionId, entry, this.now())
       append({ type: "INPUT_WAITING", inputId, text, mode: entry.mode, sender })
     })
@@ -1194,8 +1343,7 @@ export class SessionHub {
    * reconciliation yields before the first user message. A fork component
    * stays immediately before the fork-caused notifications it explains.
    */
-  private assembleDelivery(sessionId: string, taken: ReadonlyArray<WaitingEntry>) {
-    const session = this.session(sessionId)
+  private assembleDelivery(sessionId: string, taken: ReadonlyArray<WaitingEntry>, session = this.session(sessionId)) {
     const window = this.conversation.currentWindow(sessionId)!
     const { components: state, errors } = this.reconcile(session, this.conversation.knownStates(sessionId, window.position))
     type Delivered =
@@ -1245,7 +1393,7 @@ export class SessionHub {
   ) {
     const window = this.conversation.currentWindow(sessionId)!
     for (const error of errors) append({ type: "SESSION_ERROR", code: error.code, message: error.message, runId: turn.runId })
-    const owner = { runId: turn.runId, model: turn.model }
+    const owner = { runId: turn.runId, model: turn.model, agentTitle: turn.agentTitle }
     let message: Array<Component> = []
     const closeMessage = () => {
       if (message.length > 0) append({ type: "DEVELOPER_MESSAGE", runId: turn.runId, components: message.map(wire) })
@@ -1263,6 +1411,7 @@ export class SessionHub {
         inputId: entry.entry.inputId,
         text: entry.entry.text,
         sender: entry.entry.sender,
+        ...(entry.entry.attachments === undefined ? {} : { attachments: entry.entry.attachments }),
       })
       this.context.userMessage(sessionId, item.position, turn.runId)
       append({
@@ -1305,11 +1454,24 @@ export class SessionHub {
   ) {
     const state = this.state(sessionId)
     const runId = crypto.randomUUID()
-    const { delivered, membership, errors } = this.assembleDelivery(sessionId, taken)
+    const current = this.session(sessionId)
+    const admission = this.admissionSelection(current, taken)
+    const { delivered, membership, errors } = this.assembleDelivery(sessionId, taken, admission.effective)
     const contextInput = taken.find(isContextInput)
     const association = contextInput?.kind === "notification" ? this.context.association(contextInput.workflowId) : null
     const { session, turn } = this.commit(sessionId, (append) => {
-      const session = this.session(sessionId)
+      const revisions = new Map<string, string>()
+      for (const step of admission.steps) {
+        if (
+          step.before.agentTitle === step.profile.agentTitle &&
+          step.before.modelSettings.modelId === step.profile.modelSettings.modelId &&
+          step.before.modelSettings.reasoningEffort === step.profile.modelSettings.reasoningEffort
+        ) {
+          continue
+        }
+        revisions.set(step.inputId, this.store.setSettings(sessionId, step.profile))
+      }
+      const admitted = this.session(sessionId)
       const userMessageIds = taken.flatMap((entry) => (entry.kind === "user" ? [entry.inputId] : []))
       const cause = takeCause(taken)
       const turn = this.store.insertTurn(
@@ -1319,9 +1481,8 @@ export class SessionHub {
           cause,
           membership,
           userMessageIds,
-          model: session.model,
-          reasoningEffort: session.reasoningEffort,
-          firstSeq: session.nextSeq,
+          settingsRevision: admitted.settingsRevision,
+          firstSeq: admitted.nextSeq,
           contextWorkflowId: association?.workflowId ?? null,
           contextStartItem: association?.startItem ?? null,
         },
@@ -1330,24 +1491,41 @@ export class SessionHub {
       this.fileState.putFiles(snapshot.research)
       this.fileState.recordSnapshot(sessionId, turn.runId, snapshot.refs)
       this.deliverInto(sessionId, turn, delivered, errors, taken, append)
+      for (const [inputId, revision] of revisions) this.store.setInputSettingsRevision(sessionId, turn.runId, inputId, revision)
       append({
         type: "RUN_STARTED",
         threadId: sessionId,
         runId: turn.runId,
-        selection: effectiveSelection(session, turn.model, turn.reasoningEffort),
-        settingsRevision: turn.runId,
+        selection: effectiveSelection(turn.agentTitle, turn.model, turn.reasoningEffort),
+        settingsRevision: turn.settingsRevision,
         cause,
         userMessageIds,
         membership,
       })
       this.context.turnStarted(turn)
-      return { session, turn }
+      return {
+        session: { ...admission.effective, settingsRevision: admitted.settingsRevision, nextSeq: admitted.nextSeq },
+        turn,
+      }
     })
-    this.context.afterItems(sessionId, turn)
+    try {
+      this.context.afterItems(sessionId, turn)
+    } catch (error) {
+      const message = `the turn could not start its context work: ${error instanceof Error ? error.message : String(error)}`
+      this.commit(sessionId, (append) => {
+        this.store.endTurn(sessionId, turn.runId, "failed", this.now())
+        append({ type: "RUN_ERROR", runId: turn.runId, message, code: "turn_start_failed" })
+      })
+      this.context.turnEnded(sessionId, turn.runId, "failed")
+      return
+    }
     const model = this.options.models.find((candidate) => candidate.id === turn.model)
-    const span = startSpan("ashe_agent.turn", { "ashe_agent.model": turn.model, "ashe_agent.turn.cause": turn.cause })
+    const span = startSpan("ashe_agent.turn", {
+      ...(turn.model === null ? {} : { "ashe_agent.model": turn.model }),
+      "ashe_agent.turn.cause": turn.cause,
+    })
     const live: Live = { fiber: null as unknown as Fiber.Fiber<TurnOutcome>, turn, cancelled: false, span, startedAt: performance.now() }
-    const owner = { runId: turn.runId, model: turn.model }
+    const owner = { runId: turn.runId, model: turn.model, agentTitle: turn.agentTitle }
     const rules = () => this.rules(this.session(sessionId))
     const context: TurnContext = {
       session,
@@ -1355,25 +1533,50 @@ export class SessionHub {
       emit: (body) => this.emit(sessionId, body),
       window: () => {
         const window = this.conversation.currentWindow(sessionId)!
-        return { harness: window.harnessInstructions, items: this.conversation.items(sessionId, window.position) }
+        return { position: window.position, harness: window.harnessInstructions, items: this.conversation.items(sessionId, window.position) }
       },
       tools: () => {
         const tools = this.offeredTools(rules(), sessionId)
         // A cleared context turn keeps only the tools it needs to organize its context.
         return this.context.clearings(turn.runId) === 0 ? tools : tools.filter((tool) => CLEARED_CONTEXT_TOOLS.includes(tool.spec.name))
       },
-      commitAssistant: (message, events) => {
-        this.commit(sessionId, (append) => {
+      beginModelCall: (call) => {
+        this.commit(sessionId, () => this.conversation.beginModelCall(sessionId, turn.runId, call, this.now()))
+      },
+      storeContent: (sha256, text) => this.conversation.putContent(sha256, text),
+      discardModelCall: (modelCallId, outcome) => {
+        this.commit(sessionId, () => this.conversation.endModelCall(sessionId, modelCallId, outcome, this.now()))
+      },
+      commitAssistant: (message, events, modelCallId) => {
+        return this.commit(sessionId, (append) => {
           const window = this.conversation.currentWindow(sessionId)!
-          this.conversation.appendItem(sessionId, window.position, owner, { kind: "assistant", message })
-          for (const body of events) append(body)
+          this.conversation.commitModelCall(sessionId, modelCallId, message, this.now())
+          const assistant = this.conversation.appendAssistant(sessionId, window.position, owner, message, modelCallId)
+          const occurrences = new Map<string, Array<string>>()
+          for (const [index, call] of (message.tool_calls ?? []).entries()) {
+            const ids = occurrences.get(call.id!) ?? []
+            if (assistant.toolInvocationIds[index] !== undefined) ids.push(assistant.toolInvocationIds[index]!)
+            occurrences.set(call.id!, ids)
+          }
+          for (const body of events) {
+            if (body.type === "TOOL_CALL_START" || body.type === "TOOL_CALL_END") {
+              const invocationId = occurrences.get(body.toolCallId)?.shift()
+              append(invocationId === undefined ? body : { ...body, invocationId })
+            } else {
+              append(body)
+            }
+          }
+          return assistant.toolInvocationIds
         })
       },
+      toolStarted: (invocationId) => {
+        this.commit(sessionId, () => this.conversation.markToolStarted(sessionId, invocationId, this.now()))
+      },
       afterCommit: () => this.context.afterItems(sessionId, turn),
-      commitResult: (result, event) => {
+      commitResult: (result, event, modelCallId, invocationId) => {
         this.commit(sessionId, (append) => {
           const window = this.conversation.currentWindow(sessionId)!
-          this.conversation.appendItem(sessionId, window.position, owner, { kind: "result", ...result })
+          this.conversation.appendToolResult(sessionId, window.position, owner, result, modelCallId, invocationId)
           append(event)
         })
         this.context.afterItems(sessionId, turn)
@@ -1520,7 +1723,10 @@ export class SessionHub {
             ? ["interrupted", "interrupted"]
             : ["failed", "internal"]
     endSpan(live.span, { "ashe_agent.turn.status": status }, errorClass)
-    recordDuration("ashe_agent.turn.duration", (performance.now() - live.startedAt) / 1000, { "ashe_agent.model": live.turn.model, "ashe_agent.turn.status": status })
+    recordDuration("ashe_agent.turn.duration", (performance.now() - live.startedAt) / 1000, {
+      ...(live.turn.model === null ? {} : { "ashe_agent.model": live.turn.model }),
+      "ashe_agent.turn.status": status,
+    })
   }
 
 

@@ -150,8 +150,21 @@ export class FileState {
         UNION SELECT sha256 FROM memory_generation_files
         UNION SELECT sha256 FROM pending_restore_files
         UNION SELECT json_extract(f.value, '$.sha256') FROM research_baselines b, json_each(b.files) f
-        UNION SELECT json_extract(sources, '$.userInstructions.sha256') FROM developer_components
-          WHERE json_extract(sources, '$.userInstructions.sha256') IS NOT NULL
+        UNION SELECT content_sha256 FROM session_entries
+        UNION SELECT harness_content_sha256 FROM checkpoint_windows WHERE harness_content_sha256 IS NOT NULL
+        UNION SELECT arguments_ref FROM agent_tools
+        UNION SELECT result_ref FROM agent_tools WHERE result_ref IS NOT NULL
+        UNION SELECT json_extract(c.data, '$.component.sources.userInstructions.sha256')
+          FROM session_entries e JOIN contents c ON c.sha256 = e.content_sha256
+          WHERE e.kind = 'developer'
+            AND json_extract(c.data, '$.component.sources.userInstructions.sha256') IS NOT NULL
+        UNION SELECT replacement_ref FROM context_result_replacements
+        UNION SELECT body_ref FROM request_manifests
+        UNION SELECT content_ref FROM request_manifest_rendered
+        UNION SELECT input_manifest_ref FROM model_calls WHERE input_manifest_ref IS NOT NULL
+        UNION SELECT offered_tools_ref FROM model_calls WHERE offered_tools_ref IS NOT NULL
+        UNION SELECT provider_replay_ref FROM model_calls WHERE provider_replay_ref IS NOT NULL
+        UNION SELECT content_sha256 FROM attachments
       )`,
     )
   }

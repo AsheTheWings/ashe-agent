@@ -87,6 +87,30 @@ const withContext = async (body: (h: AgentHarness, aux: RoutedModel) => Promise<
 }
 
 describe("context turns", () => {
+  test("a post-admission failure in a context turn ends its workflow", async () => {
+    await withContext(async (h, aux) => {
+      const id = h.create({ model: mid.id })
+      await turn(h, id, "first", blob(76_000), say("first done"))
+      await eventually(h, id, "TIMELINE_ENTRY")
+      const context = (h.hub as unknown as {
+        context: { afterItems: (sessionId: string, turn: any) => void }
+      }).context
+      const afterItems = context.afterItems.bind(context)
+      context.afterItems = (sessionId, turn) => {
+        if (turn.contextWorkflowId !== null) throw new Error("context admission hook failed")
+        afterItems(sessionId, turn)
+      }
+      h.model.next(blob(5_000), say("must not run"))
+      h.input(id, "second")
+      await h.turnsEnded(id, 2)
+      expect((h.hub as unknown as { context: { activeWorkflow: (sessionId: string) => unknown } }).context.activeWorkflow(id)).toBeNull()
+      expect(h.hub.store.turns(id).at(-1)).toMatchObject({ status: "failed" })
+      expect(h.hub.store.conversation.waiting(id)).toEqual([])
+      expect(h.hub.isRunning(id)).toBe(false)
+      expect(aux.calls("compaction").length).toBeGreaterThan(0)
+    })
+  })
+
   test("a context turn with less than the reserve left holds input, waits for a slow open-boundary compaction, and continues in a checkpoint window", async () => {
     await withContext(async (h, aux) => {
       const id = h.create({ model: mid.id })
@@ -216,6 +240,7 @@ describe("context turns", () => {
     const catalogs = { skills: null as string | null, codeMode: null as string | null }
     const cases = [
       { code: "compaction_failed", arrange: (aux: RoutedModel) => aux.next("compaction", failWith(new Error("down")), failWith(new Error("down"))), during: () => {} },
+      { code: "compaction_failed", arrange: (aux: RoutedModel) => aux.next("compaction", say(""), say("")), during: () => {} },
       { code: "research_failed", arrange: (aux: RoutedModel) => aux.next("research", failWith(new Error("down")), failWith(new Error("down"))), during: () => {} },
       { code: "checkpoint_window_failed", arrange: () => {}, during: () => (catalogs.skills = `- \`a\`: ${"s".repeat(20_000)}`) },
     ]
@@ -251,6 +276,18 @@ describe("context turns", () => {
           if (failure.code === "compaction_failed") {
             const inputId = bodies(h.events(id)).find((event) => event.type === "INPUT_RECEIVED" && event.text === "second").inputId
             expect(ofType(h, id, "RUN_ERROR")[0].message).toBe(`the compaction call for the chat boundary from the user message ${inputId} failed twice`)
+            const outcomes = h.db
+              .query<{ outcome: string }, [string]>(
+                `SELECT m.outcome FROM model_calls m
+                  JOIN request_manifests r ON r.session_id = m.session_id AND r.model_call_id = m.model_call_id
+                  JOIN contents c ON c.sha256 = r.body_ref
+                  WHERE m.session_id = ? AND json_extract(c.data, '$.purpose') = 'compaction'
+                  ORDER BY m.started_at`,
+              )
+              .all(id)
+              .map((row) => row.outcome)
+            expect(outcomes.filter((outcome) => outcome === "failed")).toHaveLength(2)
+            expect(outcomes.filter((outcome) => outcome === "success").length).toBeGreaterThan(0)
           }
           // Two failed calls in the failed context turn, then one in the held input's.
           if (failure.code === "research_failed") expect(aux.calls("research")).toHaveLength(3)
@@ -583,6 +620,9 @@ describe("the context limit", () => {
         expect(ofType(h, id, "RUN_STARTED").map((event) => event.cause)).toEqual(["user", "notification", "user"])
         expect(callText(h.model.last())).toContain("<user>\nheld\n</user>")
         expect(ofType(h, id, "CHECKPOINT_WINDOW_SEEDED")).toHaveLength(1)
+        expect(
+          h.hub.store.conversation.successfulManifests(id).some((entry) => (entry.manifest as any).purpose === "handoff"),
+        ).toBe(false)
       })
     }
   })
@@ -632,6 +672,20 @@ describe("compaction entries", () => {
           ].join("\n"),
         )
         expect(ofType(h, id, "TIMELINE_ENTRY")).toMatchObject([{ entry: { number: 1, kind: "compaction", fields: { Text: "Requests:\n- the user's request" } } }])
+        const compactionManifest = h.hub.store.conversation
+          .successfulManifests(id)
+          .find((entry) => (entry.manifest as any).purpose === "compaction")!.manifest as any
+        const renderedAuxiliary = JSON.parse(
+          Buffer.from(h.hub.store.conversation.contentBytes(compactionManifest.providerInput.contentId)!).toString("utf8"),
+        )
+        expect(renderedAuxiliary).toMatchObject({
+          instructions: calls[0]!.instructions,
+          messages: JSON.parse(JSON.stringify(calls[0]!.messages)),
+          tools: [],
+        })
+        for (const part of compactionManifest.contributions) {
+          expect(h.hub.store.conversation.contentBytes(part.rendered.contentId)).not.toBeNull()
+        }
         const [boundary] = h.hub.store.timeline.boundaries(id)
         expect(boundary!.closedThrough).not.toBeNull()
         // The next user message starts a new boundary.

@@ -94,14 +94,28 @@ describe("migrations on a real SQLite file", () => {
       expect(tables).not.toContain("checkpoint_blobs")
       expect(tables).not.toContain("checkpoint_writes")
       expect(tables).toEqual(
-        expect.arrayContaining(["checkpoint_windows", "window_items", "developer_components", "contents", "waiting_input", "context_workflows"]),
+        expect.arrayContaining([
+          "checkpoint_windows",
+          "session_entries",
+          "window_entries",
+          "model_calls",
+          "request_manifests",
+          "turn_inputs",
+          "contents",
+          "waiting_input",
+          "context_workflows",
+          "attachments",
+          "uploads",
+        ]),
       )
+      const views = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'view'").all().map((row) => row.name)
+      expect(views).toEqual(expect.arrayContaining(["window_items", "developer_components", "tool_result_clearings"]))
       const turnColumns = db.query<{ name: string }, []>("PRAGMA table_info(turns)").all().map((row) => row.name)
       expect(turnColumns).not.toContain("checkpoint_id")
       expect(turnColumns).not.toContain("input_id")
       expect(turnColumns).not.toContain("context_item")
       expect(turnColumns).not.toContain("context_trigger")
-      expect(turnColumns).toEqual(expect.arrayContaining(["input_membership", "context_workflow_id", "context_start_item"]))
+      expect(turnColumns).toEqual(expect.arrayContaining(["settings_revision", "context_workflow_id", "context_start_item"]))
 
       const store = new SessionStore(db, join(runDir, "sessions"))
       store.createSession(
@@ -123,8 +137,7 @@ describe("migrations on a real SQLite file", () => {
         permission: { edit: "deny" },
       })
       const turn = {
-        model: "test/alpha",
-        reasoningEffort: null,
+        settingsRevision: "settings:1",
         membership: [{ kind: "system" as const, inputId: "system:1" }],
         contextWorkflowId: null,
         contextStartItem: null,

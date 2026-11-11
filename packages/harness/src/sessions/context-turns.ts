@@ -6,12 +6,13 @@ import {
   type SessionEventBody,
 } from "@ashe-agent/protocol"
 import { context as otelContext, type Context as TraceContext, type Span } from "@opentelemetry/api"
+import { AIMessage, HumanMessage } from "@langchain/core/messages"
 import { IntegrityFailure, TurnFailure } from "../agent/failure.ts"
 import type { ModelPort } from "../agent/model.ts"
 import type { Tool, ToolResult, ToolRun } from "../agent/tools.ts"
 import { messageText } from "../agent/window.ts"
 import {
-  auxiliaryCall,
+  auxiliaryCall as runAuxiliaryCall,
   COMPACTION_PROMPT,
   compactionInput,
   HANDOFF_PROMPT,
@@ -20,6 +21,7 @@ import {
   RESEARCH_PROMPT,
   researchInput,
   type BoundaryMessage,
+  type Prompt,
 } from "../context/auxiliary.ts"
 import { checkpointComponent, recentTranscript, trimPlan, type SecondaryTimeline } from "../context/checkpoint.ts"
 import {
@@ -474,6 +476,119 @@ export class ContextTurns {
     return { model, settings: callSettings(model, session.modelOverrides[model.id], selection) }
   }
 
+  private async requestAuxiliary(
+    sessionId: string,
+    runId: string,
+    task: AuxiliaryTask,
+    call: {
+      readonly model: string
+      readonly settings: CallSettings
+      readonly prompt: Prompt
+      readonly input: string
+      readonly maxOutputTokens?: number
+    },
+    signal: AbortSignal,
+    accept: (output: { readonly text: string; readonly truncated: boolean }) => boolean = () => true,
+  ): Promise<{ readonly text: string; readonly truncated: boolean }> {
+    const conversation = this.host.store.conversation
+    const window = conversation.currentWindow(sessionId)
+    if (window === null) throw new IntegrityFailure("an auxiliary request has no checkpoint window")
+    const modelCallId = crypto.randomUUID()
+    const inputBoundaryId = crypto.randomUUID()
+    const promptDigest = sha256(Buffer.from(call.prompt.text, "utf8"))
+    const inputDigest = sha256(Buffer.from(call.input, "utf8"))
+    conversation.putContent(promptDigest, call.prompt.text)
+    conversation.putContent(inputDigest, call.input)
+    const retain = (text: string, renderer: string) => {
+      const digest = sha256(Buffer.from(text, "utf8"))
+      conversation.putContent(digest, text)
+      return {
+        representationId: digest,
+        contentId: digest,
+        mediaType: "text/plain",
+        digest,
+        byteLength: Buffer.byteLength(text),
+        renderer,
+      }
+    }
+    const providerText = JSON.stringify({ instructions: call.prompt.text, messages: [new HumanMessage(call.input)], tools: [] })
+    const providerRendered = retain(providerText, "ashe-agent/auxiliary@1")
+    this.host.commit(sessionId, () =>
+      conversation.beginModelCall(
+        sessionId,
+        runId,
+        {
+          modelCallId,
+          inputBoundaryId,
+          ordinal: 1_000_000 + conversation.nextModelCallOrdinal(sessionId, window.position),
+          windowPosition: window.position,
+          request: {
+            version: 1,
+            purpose: task,
+            instructions: call.prompt.text,
+            providerInput: {
+              renderer: "ashe-agent/auxiliary@1",
+              digest: providerRendered.digest,
+              representationId: providerRendered.representationId,
+              contentId: providerRendered.contentId,
+              byteLength: providerRendered.byteLength,
+              messageCount: 1,
+            },
+            contributions: [
+              {
+                position: 0,
+                kind: "instruction",
+                sourceEntryId: null,
+                representation: {
+                  representationId: promptDigest,
+                  contentId: promptDigest,
+                  mediaType: "text/plain",
+                  digest: promptDigest,
+                  transformation: null,
+                },
+                transformation: null,
+                rendered: retain(call.prompt.text, "ashe-agent/instruction@1"),
+              },
+              {
+                position: 1_000,
+                kind: "message",
+                sourceEntryId: null,
+                representation: {
+                  representationId: inputDigest,
+                  contentId: inputDigest,
+                  mediaType: "text/plain",
+                  digest: inputDigest,
+                  transformation: `${task}-input`,
+                },
+                transformation: `${task}-input`,
+                rendered: retain(call.input, "ashe-agent/auxiliary-input@1"),
+              },
+            ],
+          },
+          offeredTools: [],
+        },
+        this.host.now(),
+      ),
+    )
+    let output: { readonly text: string; readonly truncated: boolean }
+    try {
+      output = await runAuxiliaryCall(this.options.port, call, signal)
+    } catch (error) {
+      this.host.commit(sessionId, () =>
+        conversation.endModelCall(sessionId, modelCallId, signal.aborted ? "cancelled" : "failed", this.host.now()),
+      )
+      throw error
+    }
+    if (!accept(output)) {
+      this.host.commit(sessionId, () => conversation.endModelCall(sessionId, modelCallId, "failed", this.host.now()))
+      return output
+    }
+    this.host.commit(sessionId, () =>
+      conversation.commitModelCall(sessionId, modelCallId, new AIMessage(output.text), this.host.now()),
+    )
+    return output
+  }
+
   /**
    * Runs the compaction call of the boundary `position`, unless one runs
    * already, and stores its output as the boundary's compaction entry, or
@@ -502,10 +617,13 @@ export class ContextTurns {
           this.host.trace(sessionId),
           "compaction_failed",
           async (notes) => {
-            const output = await auxiliaryCall(
-              this.options.port,
+            const output = await this.requestAuxiliary(
+              sessionId,
+              this.store.turns(sessionId).at(-1)!.runId,
+              "compaction",
               { model: model.id, settings, prompt: COMPACTION_PROMPT, input: compactionInput(timeline, messages), maxOutputTokens: SUMMARY_MAX_OUTPUT_TOKENS },
               signal,
+              (output) => output.text !== "",
             )
             if (output.text === "") notes.fail("compaction_failed")
             return output
@@ -789,7 +907,14 @@ export class ContextTurns {
         state.trace,
         "research_failed",
         async (notes) => {
-          const output = await auxiliaryCall(this.options.port, { model: model.id, settings, prompt: RESEARCH_PROMPT, input }, signal)
+          const output = await this.requestAuxiliary(
+            session.id,
+            state.currentTurnId,
+            "research",
+            { model: model.id, settings, prompt: RESEARCH_PROMPT, input },
+            signal,
+            (output) => researchSummary(output.text) !== null,
+          )
           const summary = researchSummary(output.text)
           if (summary === null) notes.fail("research_failed")
           return summary
@@ -951,10 +1076,13 @@ export class ContextTurns {
       async () => {
         let output: { readonly text: string; readonly truncated: boolean }
         try {
-          output = await auxiliaryCall(
-            this.options.port,
+          output = await this.requestAuxiliary(
+            sessionId,
+            turn.runId,
+            "handoff",
             { model: model.id, settings, prompt: HANDOFF_PROMPT, input: handoffInput(timeline, transcript), maxOutputTokens: SUMMARY_MAX_OUTPUT_TOKENS },
             signal,
+            (output) => !output.truncated && output.text !== "",
           )
         } catch (error) {
           signal.throwIfAborted()
@@ -1118,7 +1246,7 @@ export class ContextTurns {
         if (sources.instructions !== null) this.conversation.putContent(sources.instructions.sha256, sources.instructions.text)
         const window = this.conversation.insertWindow(sessionId, turn.runId, sources.harness, now)
         for (const component of seed.components) {
-          this.conversation.appendItem(sessionId, window.position, { runId: turn.runId, model: turn.model }, { kind: "component", component })
+          this.conversation.appendItem(sessionId, window.position, { runId: turn.runId, model: turn.model, agentTitle: turn.agentTitle }, { kind: "component", component })
         }
         this.store.files.putFiles(research)
         this.conversation.recordBaseline(sessionId, window.position, turn.runId, research)
