@@ -1,4 +1,4 @@
-import { loadInputsOrExit, processSources } from "../../server/src/inputs/bootstrap.ts"
+import { loadInputsOrExit, processSources } from "../../harness/src/inputs/bootstrap.ts"
 
 /** Creates Vite from the development inputs, without dependency environment overrides. */
 export const createDevelopmentWebServer = async (root = new URL("..", import.meta.url).pathname) => {

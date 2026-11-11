@@ -23,7 +23,7 @@ const configurationInputs = (): ReadonlyArray<[string, ConfigurationInput<Schema
  */
 export const renderDotEnv = (): string => {
   const lines = [
-    "# Generated from packages/server/src/inputs/catalog.ts by `bun run generate`; do not edit.",
+    "# Generated from packages/harness/src/inputs/catalog.ts by `bun run generate`; do not edit.",
     "# Development defaults of every process input, for reading only: no process or tool loads this file.",
     "# An input shown as `# NAME=` has no development default and is required where its process uses it.",
     "# An input shown as `# NAME= (optional)` is unset by default and may stay unset.",

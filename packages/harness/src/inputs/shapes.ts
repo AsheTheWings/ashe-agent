@@ -58,8 +58,8 @@ export const Permission = Schema.Union([
 
 export type Permission = typeof Permission.Type
 
-/** Tool namespaces the server's built-in tools own. */
-export const RESERVED_NAMESPACES = ["web", "file", "shell", "context"] as const
+/** Tool namespaces the harness's built-in tools own. */
+export const RESERVED_NAMESPACES = ["web", "file", "shell", "session", "context"] as const
 
 const McpStdioServer = Schema.Struct({
   type: Schema.Literal("stdio"),
@@ -126,7 +126,7 @@ export const ModelEntry = Schema.Struct({
   name: Schema.optionalKey(Schema.NonEmptyString),
   limit: Schema.Struct({ context: PositiveInt }),
   capabilities: Schema.Struct({
-    input: Schema.Array(Schema.Literals(["text", "image"])).check(nonEmpty, unique("input kind")),
+    input: Schema.Array(Schema.Literals(["text", "image", "pdf"])).check(nonEmpty, unique("input kind")),
     temperature: Schema.optionalKey(Schema.Boolean),
     reasoning: Schema.optionalKey(
       Schema.Struct({ efforts: Schema.Array(Schema.NonEmptyString).check(nonEmpty, unique("reasoning effort")) }),

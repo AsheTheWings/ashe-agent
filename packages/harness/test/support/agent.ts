@@ -28,6 +28,7 @@ export const configuredModel = (
   options: {
     readonly contextLimit?: number
     readonly imageInput?: boolean
+    readonly pdfInput?: boolean
     readonly temperatureCapable?: boolean
     readonly efforts?: ReadonlyArray<string>
     readonly settings?: ModelOverrides
@@ -39,6 +40,7 @@ export const configuredModel = (
   name: id,
   contextLimit: options.contextLimit ?? 400_000,
   imageInput: options.imageInput ?? false,
+  pdfInput: options.pdfInput ?? false,
   temperatureCapable: options.temperatureCapable ?? false,
   efforts: options.efforts ?? [],
   settings: options.settings ?? {},

@@ -27,7 +27,7 @@ import m0026 from "../../migrations/0026_turn_membership.sql" with { type: "text
 import m0027 from "../../migrations/0027_context_workflows.sql" with { type: "text" }
 
 /**
- * The migration directory `packages/server/migrations`, embedded so a
+ * The migration directory `packages/harness/migrations`, embedded so a
  * compiled binary carries it. A conformance test keeps this list equal to
  * the directory's files.
  */

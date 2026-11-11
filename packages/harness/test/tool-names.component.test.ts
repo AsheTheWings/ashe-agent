@@ -136,8 +136,8 @@ describe("tool names", () => {
       const { handlers } = sessionHandlers(h.hub)
       expect(await handlers["models.list"]!({}, {} as RequestContext)).toEqual({
         models: [
-          { id: "test/alpha", name: "test/alpha", contextLimit: 300_000, imageInput: false, reasoningEfforts: ["low", "high"], reasoningEffort: "low" },
-          { id: "test/beta", name: "Beta", contextLimit: 400_000, imageInput: true, reasoningEfforts: [], reasoningEffort: null },
+          { id: "test/alpha", name: "test/alpha", contextLimit: 300_000, imageInput: false, pdfInput: false, reasoningEfforts: ["low", "high"], reasoningEffort: "low" },
+          { id: "test/beta", name: "Beta", contextLimit: 400_000, imageInput: true, pdfInput: false, reasoningEfforts: [], reasoningEffort: null },
         ],
         defaultModel: "test/alpha",
       })
@@ -148,7 +148,7 @@ describe("tool names", () => {
 
   test("an MCP server named after a reserved namespace is refused", () => {
     const decode = Schema.decodeUnknownExit(McpServers)
-    for (const name of ["web", "file", "shell", "context"]) {
+    for (const name of ["web", "file", "shell", "session", "context"]) {
       expect(decode({ [name]: { type: "stdio", command: "server" } })._tag).toBe("Failure")
     }
     expect(decode({ docs: { type: "stdio", command: "server" } })._tag).toBe("Success")

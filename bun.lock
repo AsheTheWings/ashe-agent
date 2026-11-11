@@ -18,15 +18,8 @@
         "effect": "4.1.0",
       },
     },
-    "packages/protocol": {
-      "name": "@ashe-agent/protocol",
-      "version": "0.0.0",
-      "dependencies": {
-        "effect": "4.1.0",
-      },
-    },
-    "packages/server": {
-      "name": "@ashe-agent/server",
+    "packages/harness": {
+      "name": "@ashe-agent/harness",
       "version": "0.0.0",
       "dependencies": {
         "@ashe-agent/codemode": "workspace:*",
@@ -55,6 +48,13 @@
       },
       "devDependencies": {
         "@modelcontextprotocol/server": "2.4.0",
+      },
+    },
+    "packages/protocol": {
+      "name": "@ashe-agent/protocol",
+      "version": "0.0.0",
+      "dependencies": {
+        "effect": "4.1.0",
       },
     },
     "packages/web": {
@@ -92,9 +92,9 @@
   "packages": {
     "@ashe-agent/codemode": ["@ashe-agent/codemode@workspace:packages/codemode"],
 
-    "@ashe-agent/protocol": ["@ashe-agent/protocol@workspace:packages/protocol"],
+    "@ashe-agent/harness": ["@ashe-agent/harness@workspace:packages/harness"],
 
-    "@ashe-agent/server": ["@ashe-agent/server@workspace:packages/server"],
+    "@ashe-agent/protocol": ["@ashe-agent/protocol@workspace:packages/protocol"],
 
     "@ashe-agent/web": ["@ashe-agent/web@workspace:packages/web"],
 

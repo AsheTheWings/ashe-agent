@@ -83,7 +83,7 @@ inserted lines take the file's first line ending.
 
 The parser and context matching are ported from opencode's patch module,
 and the vendored scenarios of Codex's apply-patch crate, under
-`packages/server/test/fixtures/codex-apply-patch/`, check that it behaves
+`packages/harness/test/fixtures/codex-apply-patch/`, check that it behaves
 as Codex does.
 
 ## `file_read`

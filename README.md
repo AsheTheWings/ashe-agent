@@ -17,7 +17,7 @@ revision.
 
 ## Repository
 
-The repository is a Bun workspace of four packages. `packages/server`
+The repository is a Bun workspace of four packages. `packages/harness`
 holds the server's input layer, store, WebSocket server, turn loop, and
 the `ashe-agent` command; `packages/protocol` the protocol's message
 schemas; `packages/codemode` the interpreter that runs code mode
@@ -46,13 +46,13 @@ It also builds, qualifies, and publishes the
 
 ## Use
 
-Run the command from the repository with `bun packages/server/src/main.ts`,
+Run the command from the repository with `bun packages/harness/src/main.ts`,
 or as `bin/ashe-agent` from a bundle. A first start in development:
 
 ```sh
 export ASHE_AGENT_PROFILE=development
-bun packages/server/src/main.ts migrate
-bun packages/server/src/main.ts serve
+bun packages/harness/src/main.ts migrate
+bun packages/harness/src/main.ts serve
 ```
 
 Before serving, register a GitHub OAuth app with callback

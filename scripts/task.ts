@@ -160,7 +160,7 @@ const buildBinary = async () => {
     "--target=bun-linux-x64",
     "--define",
     `ASHE_AGENT_REVISION=${JSON.stringify(revision)}`,
-    join(root, "packages/server/src/main.ts"),
+    join(root, "packages/harness/src/main.ts"),
     "--outfile",
     join(dist, "bundle/bin/ashe-agent"),
   ])

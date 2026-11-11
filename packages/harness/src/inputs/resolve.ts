@@ -198,6 +198,19 @@ export const resolveInputs = <P extends Process>(process: P, sources: Sources): 
     }
   }
 
+  if (
+    typeof values.communicationWaitMinMs === "number" &&
+    typeof values.communicationWaitDefaultMs === "number" &&
+    typeof values.communicationWaitMaxMs === "number" &&
+    !(values.communicationWaitMinMs <= values.communicationWaitDefaultMs &&
+      values.communicationWaitDefaultMs <= values.communicationWaitMaxMs)
+  ) {
+    issues.push({
+      input: catalog.communicationWaitDefaultMs.env,
+      problem: "must be between the configured minimum and maximum wait",
+    })
+  }
+
   if (issues.length > 0 || profile === undefined) return { ok: false, issues }
   return { ok: true, profile, inputs: values as unknown as Inputs<P> }
 }

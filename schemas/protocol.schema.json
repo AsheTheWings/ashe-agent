@@ -4887,6 +4887,9 @@
               "imageInput": {
                 "type": "boolean"
               },
+              "pdfInput": {
+                "type": "boolean"
+              },
               "reasoningEfforts": {
                 "type": "array",
                 "items": {
@@ -4909,6 +4912,7 @@
               "name",
               "contextLimit",
               "imageInput",
+              "pdfInput",
               "reasoningEfforts",
               "reasoningEffort"
             ],

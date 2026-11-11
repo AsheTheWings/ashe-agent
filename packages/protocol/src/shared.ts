@@ -32,6 +32,8 @@ export const Model = Schema.Struct({
   /** The model's context window, in tokens. */
   contextLimit: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
   imageInput: Schema.Boolean,
+  /** Whether the model accepts native PDF input. */
+  pdfInput: Schema.Boolean,
   /** The reasoning efforts the model lists; empty for a model without reasoning. */
   reasoningEfforts: Schema.Array(Schema.String),
   /** The model entry's own reasoning effort setting, if any. */
