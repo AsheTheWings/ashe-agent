@@ -422,7 +422,11 @@ describe("real PDF conversion and retained content", () => {
       const messages = JSON.stringify(h.model.last().messages)
       expect(messages).toContain('"type":"input_image"')
       expect(messages).toContain('"representationId"')
-      expect(JSON.stringify(responsesInput(h.model.last()))).toContain('"type":"input_image"')
+      const providerInput = responsesInput(h.model.last())
+      const providerImage = providerInput
+        .flatMap((item) => Array.isArray(item.content) ? item.content : [])
+        .find((part) => part.type === "input_image")!
+      expect(Object.keys(providerImage).sort()).toEqual(["detail", "image_url", "type"])
     } finally {
       await h.cleanup()
     }
