@@ -45,6 +45,8 @@ export const ERROR_CLASSES = [
   "not_owner",
   "github_failed",
   "sign_in_unknown_state",
+  "wrong_password",
+  "sign_in_throttled",
   "attachment_unsupported",
   "conversion_failed",
   "conversion_timeout",
@@ -66,7 +68,7 @@ export const VALIDATION_RESULTS = ["passed", "failed"] as const
 export const QUESTION_OUTCOMES = ["answered", "message", "canceled"] as const
 export const ACTION_OUTCOMES = ["completed", "canceled", "timedOut", "disconnected", "failed"] as const
 export const CHECKPOINT_WINDOW_CAUSES = ["creation", "context_turn"] as const
-export const SIGN_IN_OUTCOMES = ["signed_in", "denied", "not_owner", "github_failed", "unknown_state"] as const
+export const SIGN_IN_OUTCOMES = ["signed_in", "denied", "not_owner", "github_failed", "unknown_state", "wrong_password", "sign_in_throttled"] as const
 export const SUBSCRIPTION_SUPPRESSION_REASONS = ["reentry"] as const
 
 /** Every attribute a signal may carry, with its type and, when bounded by a list, its values. */
@@ -115,7 +117,7 @@ export const ATTRIBUTES = {
     type: "string",
     values: SIGN_IN_OUTCOMES,
     description:
-      "How a GitHub sign-in callback ended: the owner signed in, the user denied access, another GitHub user, a GitHub failure, or an unknown state.",
+      "How a sign-in ended: the owner signed in, the user denied access, another GitHub user, a GitHub failure, an unknown state, a wrong development password, or a throttled password attempt.",
   },
   "ashe_agent.subscription.suppression_reason": {
     type: "string",
@@ -219,6 +221,10 @@ export const SPANS = {
   "ashe_agent.restore": { description: "Completing a rewind's pending restore of research and memory files.", attributes: ["error.type"] },
   "ashe_agent.github_sign_in": {
     description: "One GitHub sign-in callback, from GitHub's redirect to the redirect back to the client.",
+    attributes: ["ashe_agent.sign_in.outcome", "error.type"],
+  },
+  "ashe_agent.password_sign_in": {
+    description: "One development password sign-in, from the password exchange to the sign-in code it answers.",
     attributes: ["ashe_agent.sign_in.outcome", "error.type"],
   },
   "ashe_agent.content_retention": {

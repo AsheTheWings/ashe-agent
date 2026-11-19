@@ -59,7 +59,8 @@ export const randomToken = (): string => Buffer.from(crypto.getRandomValues(new 
 export const challengeOf = (verifier: string): string =>
   Buffer.from(new Bun.CryptoHasher("sha256").update(verifier).digest()).toString("base64url")
 
-const CHALLENGE = /^[A-Za-z0-9_-]{43}$/
+/** A sign-in challenge: the base64url SHA-256 of the client's verifier. */
+export const CHALLENGE = /^[A-Za-z0-9_-]{43}$/
 
 const withoutTrailingSlash = (url: string) => url.replace(/\/+$/, "")
 

@@ -1,5 +1,6 @@
 import { Context, Effect, Layer } from "effect"
 import type { GithubSignInConfig } from "../auth/github.ts"
+import type { PasswordSignInConfig } from "../auth/password.ts"
 import { sessionHandlers } from "../sessions/handlers.ts"
 import { Sessions } from "../sessions/hub.ts"
 import { Store } from "../store/database.ts"
@@ -9,7 +10,12 @@ export interface ServeOptions {
   readonly hostname: string
   readonly port: number
   readonly origins: ReadonlyArray<string>
-  readonly github: GithubSignInConfig
+  /** The GitHub OAuth app the owner signs in through; null removes the GitHub routes. */
+  readonly github: GithubSignInConfig | null
+  /** The development password the owner signs in with; null removes the password route. */
+  readonly password: PasswordSignInConfig | null
+  /** The owner's user ID, carried by every login either sign-in creates. */
+  readonly ownerId: number
 }
 
 /** The listening protocol server over the session hub, stopped when its layer is released. */

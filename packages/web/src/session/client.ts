@@ -5,6 +5,7 @@
 import { sha256 } from "@noble/hashes/sha2.js"
 import {
   ErrorCode,
+  PASSWORD_SIGN_IN_PATH,
   PERMISSION_ACTION,
   PermissionActionArgs,
   QUESTIONS_ACTION,
@@ -200,6 +201,53 @@ export class SessionClient {
       this.ports.signIn.storage.setItem(storageKeys.signInServer, serverUrl)
       this.set({ error: null })
       this.ports.signIn.navigate(start.href)
+    } catch (error) {
+      this.set({ error: messageOf(error) })
+    }
+  }
+
+  /** Signs in with the server's development password, then connects with the spent code. */
+  async signInWithPassword(password: string): Promise<void> {
+    try {
+      const serverUrl = this.state.serverUrl
+      const endpoint = new URL(serverUrl)
+      endpoint.protocol = endpoint.protocol === "ws:" ? "http:" : "https:"
+      endpoint.pathname = PASSWORD_SIGN_IN_PATH
+      endpoint.search = ""
+      endpoint.hash = ""
+      const verifier = base64url(this.ports.signIn.randomBytes())
+      this.ports.signIn.storage.setItem(storageKeys.verifier, verifier)
+      this.ports.signIn.storage.setItem(storageKeys.signInServer, serverUrl)
+      this.set({ error: null })
+      const response = await fetch(endpoint.href, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          origin: this.ports.signIn.origin,
+          challenge: base64url(sha256(new TextEncoder().encode(verifier))),
+          password,
+        }),
+      })
+      if (!response.ok) {
+        this.set({
+          error:
+            response.status === 401
+              ? "Incorrect password. Try again."
+              : response.status === 429
+                ? "Too many attempts. Try again in a minute."
+                : response.status === 404
+                  ? "Password sign-in is unavailable on this server."
+                  : "Password sign-in failed. Try again.",
+        })
+        return
+      }
+      const body = (await response.json()) as { signIn?: unknown }
+      if (typeof body.signIn !== "string" || body.signIn === "") {
+        this.set({ error: "Password sign-in failed. Try again." })
+        return
+      }
+      this.disconnect()
+      void this.connect(serverUrl, ++this.generation, { code: body.signIn, verifier })
     } catch (error) {
       this.set({ error: messageOf(error) })
     }

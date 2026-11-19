@@ -155,7 +155,8 @@ and privacy rules.
 ## Signing in
 
 The sign-in page offers **Continue with GitHub** for the configured
-harness. The tab keeps its verifier and endpoint in `sessionStorage`,
+harness, and a development password form when it runs from development.
+The tab keeps its verifier and endpoint in `sessionStorage`,
 removes the return fragment before connecting, and exchanges the code once.
 The access token stays in memory; the refresh token stays in this browser
 under an endpoint-scoped key. Cross-tab refresh holds a bounded Web Lock.
