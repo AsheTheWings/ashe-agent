@@ -157,17 +157,38 @@
       "description": "Browser origins allowed to open a WebSocket connection."
     },
     "githubClientId": {
-      "type": "string",
-      "minLength": 1,
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Client ID of the GitHub OAuth app the owner signs in through."
     },
     "githubClientSecretFile": {
-      "type": "string",
-      "pattern": "^\\/",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^\\/"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "Path of the protected file holding the GitHub OAuth app's client secret."
     },
     "githubCallbackUrl": {
-      "type": "string",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "description": "The server's sign-in callback URL, <server origin>/v1/auth/github/callback, as the OAuth app registers it."
     },
     "githubOwnerId": {
@@ -175,6 +196,18 @@
       "minimum": 1,
       "maximum": 9007199254740991,
       "description": "Numeric GitHub user ID of the owner, the only account that signs in."
+    },
+    "devPasswordFile": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^\\/"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional path of the protected file holding the development password the owner signs in with."
     },
     "githubUrl": {
       "type": "string",

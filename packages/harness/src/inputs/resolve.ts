@@ -211,6 +211,33 @@ export const resolveInputs = <P extends Process>(process: P, sources: Sources): 
     })
   }
 
+  // Sign-in methods are profile-gated: the development password never
+  // reaches production, and development always keeps one way to sign in.
+  if (profile !== undefined && Object.hasOwn(values, "devPasswordFile")) {
+    const passwordFile = values.devPasswordFile as string | null
+    if (passwordFile !== null && profile === "production") {
+      issues.push({ input: catalog.devPasswordFile.env, problem: "only applies to development" })
+    }
+    if (profile === "development" && passwordFile !== null && Object.hasOwn(values, "devPassword")) {
+      const password = values.devPassword as Redacted.Redacted<string> | null
+      if (password !== null) {
+        const text = Redacted.value(password)
+        if (text.length < 15 || text.length > 256 || /[\r\n]/.test(text)) {
+          issues.push({ input: catalog.devPasswordFile.env, problem: "want a single-line password of 15 to 256 characters" })
+        }
+      }
+    }
+    if (
+      profile === "development" &&
+      passwordFile === null &&
+      (values.githubClientId ?? null) === null &&
+      (values.githubClientSecretFile ?? null) === null &&
+      (values.githubCallbackUrl ?? null) === null
+    ) {
+      issues.push({ input: catalog.devPasswordFile.env, problem: "development needs a password file or a GitHub OAuth app" })
+    }
+  }
+
   if (issues.length > 0 || profile === undefined) return { ok: false, issues }
   return { ok: true, profile, inputs: values as unknown as Inputs<P> }
 }
