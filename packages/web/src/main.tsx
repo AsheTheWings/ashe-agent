@@ -2,12 +2,15 @@ import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 import { App } from "./client/App.tsx"
 import { ClientProvider } from "./app/client-context.tsx"
+import { initTheme } from "./app/theme/useTheme.ts"
 import { browserPorts } from "./session/browser-ports.ts"
 import { SessionClient } from "./session/client.ts"
 import { serverEndpoint } from "./session/server-endpoint.ts"
 import "./index.css"
 
 declare const __ASHE_AGENT_DEV_SERVER_URL__: string | null
+
+initTheme()
 
 const client = new SessionClient(browserPorts(serverEndpoint(window.location.origin, __ASHE_AGENT_DEV_SERVER_URL__)))
 client.resume()

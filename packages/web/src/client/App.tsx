@@ -10,6 +10,7 @@ import type {
 import { Component, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from "react"
 import { useClient, useClientState } from "../app/client-context.tsx"
 import { SignIn } from "../app/sign-in.tsx"
+import { ThemeDialog } from "../app/theme/ThemeDialog.tsx"
 import type { ClientState } from "../session/client.ts"
 import { ProtocolError } from "../session/connection.ts"
 import type { AssistantItem, Item, PendingInput, PendingPermission, QuestionsItem, SessionView, ToolPart, UserItem } from "../session/projection.ts"
@@ -1182,6 +1183,7 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
   const [recoveryTick, setRecoveryTick] = useState(0)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const [themeOpen, setThemeOpen] = useState(false)
   const [shortcuts, setShortcuts] = useState<ShortcutPreferences>(shortcutPreferences)
   const [grants, setGrants] = useState<ReadonlyArray<{ agentTitle: string; permission: string; pattern: string }>>([])
   const [grantTitle, setGrantTitle] = useState<string | null>(null)
@@ -1397,6 +1399,7 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
             </select>
           </label>
           <button type="button" className="rounded border px-2 py-1 text-xs" onClick={() => setDetailsOpen(!detailsOpen)}>Session details</button>
+          <button type="button" className="rounded border px-2 py-1 text-xs" onClick={() => setThemeOpen(true)}>Theme</button>
           <label className="text-xs">View key
             <select className="bg-background ml-1 rounded border px-2 py-1" value={shortcuts.viewModifier} onChange={(event) => setShortcuts({ ...shortcuts, viewModifier: event.target.value === "alt" ? "alt" : "ctrl" })}>
               <option value="ctrl">Ctrl+I</option>
@@ -1436,6 +1439,7 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
           </section>
         )}
         {currentView !== "chat" && <PendingStrip pending={view?.pending ?? []} full={currentView === "session"} onReveal={() => setSessionView(active!, "session")} />}
+        <ThemeDialog open={themeOpen} onOpenChange={setThemeOpen} />
         {recoverables.length > 0 && (
           <div className="bg-muted border-b px-4 py-2 text-xs">
             <span className="text-muted-foreground">Recoverable drafts from another tab:</span>

@@ -61,6 +61,27 @@ storage. A preview or attention reveal switches to Session and scrolls its
 matching block; ordinary incoming content does not change a retained reading
 position.
 
+## Themes
+
+The header Theme button opens the theme library. Appearance selects Light,
+Dark, or System; System follows the operating system. The library holds the
+stock palette, five built-in palettes, and the custom themes stored in the
+browser. Using a theme paints it immediately and remembers the choice in
+browser storage.
+
+Light uses and Dark uses can pin different themes per appearance, so the
+client mixes two palettes while System appearance follows the operating
+system. Themes with a single appearance stay on it.
+
+New custom theme starts from a canvas and accent seed that generates a full
+palette, and every color role stays editable; a second appearance can be
+added or removed. The editor previews each change on the page and restores
+the stored theme on cancel. Custom themes also duplicate, download as JSON
+files, delete, and import back from files. Theme choices live only in the
+browser: blocked storage keeps the stock palette for the page, a malformed
+stored library reads as empty, and a missing selected theme falls back to
+stock.
+
 ## Composer and recovery
 
 One fixed composer serves every view. It keeps text, attachments, title,
