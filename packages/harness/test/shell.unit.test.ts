@@ -34,10 +34,15 @@ describe("shell output", () => {
 })
 
 describe("login shell", () => {
-  test("a passwd entry gives its last field when it is an absolute path", () => {
+  test("a passwd entry gives its last field when it is a usable absolute path", () => {
     expect(shellOfPasswdEntry("ashe:x:1000:1000:Ashe,,,:/home/ashe:/usr/bin/zsh\n")).toBe("/usr/bin/zsh")
     expect(shellOfPasswdEntry("svc:x:999:999::/var/lib/svc:")).toBeNull()
     expect(shellOfPasswdEntry("svc:x:999:999::/var/lib/svc:nologin")).toBeNull()
+    expect(shellOfPasswdEntry("svc:x:999:999::/var/lib/svc:/usr/sbin/nologin")).toBeNull()
+    expect(shellOfPasswdEntry("svc:x:999:999::/var/lib/svc:/sbin/nologin")).toBeNull()
+    expect(shellOfPasswdEntry("svc:x:999:999::/var/lib/svc:/bin/false")).toBeNull()
+    expect(shellOfPasswdEntry("svc:x:999:999::/var/lib/svc:/usr/bin/false")).toBeNull()
+    expect(shellOfPasswdEntry("svc:x:999:999::/var/lib/svc:/")).toBeNull()
     expect(shellOfPasswdEntry("not an entry")).toBeNull()
   })
 })

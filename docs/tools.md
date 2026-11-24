@@ -186,7 +186,8 @@ sandbox, or an environment are left out.
 `shell_exec_command` runs `cmd` in a new process of the server user's
 login shell, as `<shell> -lc <cmd>`, or `-c` when `login` is false. The
 shell is the one the user database gives the server's user, through
-`getent passwd`, or `/bin/sh` when it gives none; `SHELL` is not read. It
+`getent passwd`, or `/bin/sh` when it gives none or a non-login shell
+such as `nologin` or `false`; `SHELL` is not read. It
 runs on a pseudo-terminal when `tty` is true and on pipes otherwise, in
 `workdir` resolved against the session directory, else in the session
 directory. The script the shell-environment input names, when set, is

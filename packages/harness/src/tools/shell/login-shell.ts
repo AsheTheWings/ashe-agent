@@ -1,15 +1,20 @@
 /** The shell a command runs in when the user database names none. */
 export const FALLBACK_SHELL = "/bin/sh"
 
+/** Basenames of non-login shells that refuse to run commands. */
+const NON_LOGIN_SHELLS = new Set(["nologin", "false"])
+
 /**
  * The login shell in a `passwd` entry, `name:password:uid:gid:gecos:home:shell`,
- * or null when the entry names no absolute path there.
+ * or null when the entry names no usable absolute path there.
  */
 export const shellOfPasswdEntry = (entry: string): string | null => {
   const fields = entry.trim().split(":")
   if (fields.length !== 7) return null
   const shell = fields[6]!
-  return shell.startsWith("/") ? shell : null
+  if (!shell.startsWith("/")) return null
+  const name = shell.slice(shell.lastIndexOf("/") + 1)
+  return name === "" || NON_LOGIN_SHELLS.has(name) ? null : shell
 }
 
 /**
