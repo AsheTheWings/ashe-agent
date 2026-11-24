@@ -140,6 +140,12 @@ const cleanRevision = (): string | null => {
 const dist = join(root, "dist")
 const bundleName = "ashe-agent-linux-x64.tar"
 
+/** Builds the browser client assets into `packages/web/dist` without compiling the backend. */
+const buildWebClient = async () => {
+  process.stdout.write("\n== web client build ==\n")
+  return await run([process.execPath, join(root, "packages/web/scripts/build-client.ts")])
+}
+
 /** Builds the web client into `packages/web/dist`, stamping its revision. */
 const buildWeb = async () => {
   process.stdout.write("\n== web build ==\n")
@@ -295,6 +301,7 @@ const tasks: Record<string, () => Promise<number>> = {
   "test:conformance": () => test("conformance"),
   "test:test262": test262,
   "dev:web": devWeb,
+  "build:web-client": buildWebClient,
   "build:web": buildWeb,
   "build:binary": buildBinary,
   bundle,

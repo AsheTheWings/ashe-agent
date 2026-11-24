@@ -14,8 +14,14 @@ bun run dev:web
 ```
 
 serves the browser client through Vite on `127.0.0.1`. The configured
-development endpoint is the harness WebSocket address. The harness owns
-the direct conversation socket; the web backend is a separate process.
+development endpoint is the harness WebSocket address; when the optional
+development web backend URL is set, Vite proxies `/v1/web-state` and
+`/v1/web/*` to that backend. The harness owns the direct conversation
+socket; the web backend is a separate process.
+
+`bun run build:web-client` builds only the browser client assets into
+`packages/web/dist` without compiling the backend binary or requiring a
+clean commit, so a source-mode web backend can serve them directly.
 
 `bun run build:web` builds from a clean commit and writes to
 `packages/web/dist`: the Vite client at the root, the compiled backend at

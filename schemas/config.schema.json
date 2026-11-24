@@ -196,6 +196,17 @@
       "type": "string",
       "description": "WebSocket endpoint the development web client connects to."
     },
+    "devWebBackendUrl": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional HTTP origin of a web backend the development web server proxies web-state and web API paths to."
+    },
     "permission": {
       "anyOf": [
         {
