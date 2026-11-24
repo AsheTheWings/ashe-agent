@@ -4,7 +4,9 @@
  */
 import { sha256 } from "@noble/hashes/sha2.js"
 import {
+  AUTH_METHODS_PATH,
   ErrorCode,
+  PASSWORD_SIGN_IN_PATH,
   PERMISSION_ACTION,
   PermissionActionArgs,
   QUESTIONS_ACTION,
@@ -202,6 +204,84 @@ export class SessionClient {
       this.ports.signIn.navigate(start.href)
     } catch (error) {
       this.set({ error: messageOf(error) })
+    }
+  }
+
+  /** Queries which sign-in methods the configured server accepts. */
+  async authMethods(): Promise<{ readonly github: boolean; readonly password: boolean }> {
+    try {
+      const endpoint = new URL(this.state.serverUrl)
+      endpoint.protocol = endpoint.protocol === "ws:" ? "http:" : "https:"
+      endpoint.pathname = AUTH_METHODS_PATH
+      endpoint.search = ""
+      endpoint.hash = ""
+      const response = await fetch(endpoint.href, { method: "GET" })
+      if (!response.ok) return { github: true, password: false }
+      const body = (await response.json()) as { github?: unknown; password?: unknown }
+      return {
+        github: typeof body.github === "boolean" ? body.github : true,
+        password: typeof body.password === "boolean" ? body.password : false,
+      }
+    } catch {
+      return { github: true, password: false }
+    }
+  }
+
+  /** Signs in with the server's development password, then connects with the spent code. */
+  async signInWithPassword(password: string): Promise<void> {
+    this.disconnect()
+    const generation = ++this.generation
+    this.set({ status: "connecting", error: null })
+    try {
+      const serverUrl = this.state.serverUrl
+      const endpoint = new URL(serverUrl)
+      endpoint.protocol = endpoint.protocol === "ws:" ? "http:" : "https:"
+      endpoint.pathname = PASSWORD_SIGN_IN_PATH
+      endpoint.search = ""
+      endpoint.hash = ""
+      const verifier = base64url(this.ports.signIn.randomBytes())
+      const response = await fetch(endpoint.href, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          origin: this.ports.signIn.origin,
+          challenge: base64url(sha256(new TextEncoder().encode(verifier))),
+          password,
+        }),
+      })
+      if (this.generation !== generation) return
+      if (!response.ok) {
+        this.set({
+          status: "signedOut",
+          error:
+            response.status === 401
+              ? "Incorrect password. Try again."
+              : response.status === 429
+                ? "Too many attempts. Try again in a minute."
+                : response.status === 404
+                  ? "Password sign-in is unavailable on this server."
+                  : "Password sign-in failed. Try again.",
+        })
+        return
+      }
+      let body: unknown
+      try {
+        body = await response.json()
+      } catch {
+        if (this.generation !== generation) return
+        this.set({ status: "signedOut", error: "Password sign-in failed. Try again." })
+        return
+      }
+      if (this.generation !== generation) return
+      const signIn = typeof body === "object" && body !== null ? (body as { signIn?: unknown }).signIn : undefined
+      if (typeof signIn !== "string" || signIn === "") {
+        this.set({ status: "signedOut", error: "Password sign-in failed. Try again." })
+        return
+      }
+      void this.connect(serverUrl, generation, { code: signIn, verifier })
+    } catch (error) {
+      if (this.generation !== generation) return
+      this.set({ status: "signedOut", error: messageOf(error) })
     }
   }
 
