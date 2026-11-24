@@ -160,9 +160,12 @@ and privacy rules.
 
 ## Signing in
 
-The sign-in page offers **Continue with GitHub** for the configured
-harness. The tab keeps its verifier and endpoint in `sessionStorage`,
-removes the return fragment before connecting, and exchanges the code once.
+The sign-in page queries `GET /v1/auth/methods` on the configured harness
+and offers whichever sign-in methods the server accepts: **Continue with
+GitHub**, a development password form, or both. For GitHub sign-in, the tab
+keeps its verifier and endpoint in `sessionStorage`, removes the return
+fragment before connecting, and exchanges the code once; password sign-in
+keeps its verifier in memory and exchanges the returned code directly.
 The access token stays in memory; the refresh token stays in this browser
 under an endpoint-scoped key. Cross-tab refresh holds a bounded Web Lock.
 When Web Locks are unavailable or cannot be acquired, no unlocked refresh
