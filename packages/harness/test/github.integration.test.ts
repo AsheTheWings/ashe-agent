@@ -19,7 +19,7 @@ const withServer = async (body: (h: { run: CliRun; db: Database; url: string; ad
   try {
     await run.prepare()
     db = openDatabase(run.databasePath)
-    server = startWebSocketServer({ db, hostname: "127.0.0.1", port: 0, origins: ["http://127.0.0.1:5173"], github: run.github.config, handlers: {}, now: () => now })
+    server = startWebSocketServer({ db, hostname: "127.0.0.1", port: 0, origins: ["http://127.0.0.1:5173"], github: run.github.config, password: null, ownerId: 42, handlers: {}, now: () => now })
     await body({ run, db, url: server.url, advance: (ms) => { now += ms } })
   } finally {
     await server?.stop()

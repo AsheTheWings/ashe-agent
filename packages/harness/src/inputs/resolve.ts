@@ -211,6 +211,44 @@ export const resolveInputs = <P extends Process>(process: P, sources: Sources): 
     })
   }
 
+  // Sign-in methods are profile-gated: the development password never reaches
+  // production, production requires a complete GitHub OAuth app, and
+  // development requires a complete GitHub OAuth app, a password file, or both.
+  if (profile !== undefined && Object.hasOwn(values, "devPasswordFile")) {
+    const githubKeys = ["githubClientId", "githubClientSecretFile", "githubCallbackUrl"] as const
+    const githubMissing = githubKeys.filter((key) => (values[key] ?? null) === null)
+    const passwordFile = values.devPasswordFile as string | null
+    if (profile === "production") {
+      if (passwordFile !== null) {
+        issues.push({ input: catalog.devPasswordFile.env, problem: "only applies to development" })
+      }
+      for (const key of githubMissing) {
+        if (Object.hasOwn(values, key)) {
+          issues.push({ input: catalog[key].env, problem: "is required in the production profile" })
+        }
+      }
+    }
+    if (profile === "development") {
+      if (githubMissing.length > 0 && githubMissing.length < githubKeys.length) {
+        for (const key of githubMissing) {
+          issues.push({ input: catalog[key].env, problem: "is required when configuring a GitHub OAuth app" })
+        }
+      }
+      if (passwordFile !== null && Object.hasOwn(values, "devPassword")) {
+        const password = values.devPassword as Redacted.Redacted<string> | null
+        if (password !== null) {
+          const text = Redacted.value(password)
+          if (text.length < 15 || text.length > 256 || /[\r\n]/.test(text)) {
+            issues.push({ input: catalog.devPasswordFile.env, problem: "want a single-line password of 15 to 256 characters" })
+          }
+        }
+      }
+      if (passwordFile === null && githubMissing.length === githubKeys.length) {
+        issues.push({ input: catalog.devPasswordFile.env, problem: "development needs a password file or a GitHub OAuth app" })
+      }
+    }
+  }
+
   if (issues.length > 0 || profile === undefined) return { ok: false, issues }
   return { ok: true, profile, inputs: values as unknown as Inputs<P> }
 }

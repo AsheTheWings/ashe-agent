@@ -1,5 +1,5 @@
 {
-  "version": 9,
+  "version": 10,
   "scope": "ashe-agent",
   "attributes": {
     "rpc.method": {
@@ -41,6 +41,8 @@
         "not_owner",
         "github_failed",
         "sign_in_unknown_state",
+        "wrong_password",
+        "sign_in_throttled",
         "attachment_unsupported",
         "conversion_failed",
         "conversion_timeout",
@@ -176,9 +178,11 @@
         "denied",
         "not_owner",
         "github_failed",
-        "unknown_state"
+        "unknown_state",
+        "wrong_password",
+        "sign_in_throttled"
       ],
-      "description": "How a GitHub sign-in callback ended: the owner signed in, the user denied access, another GitHub user, a GitHub failure, or an unknown state."
+      "description": "How a sign-in ended: the owner signed in, the user denied access, another GitHub user, a GitHub failure, an unknown state, a wrong development password, or a throttled password attempt."
     },
     "ashe_agent.subscription.suppression_reason": {
       "type": "string",
@@ -315,6 +319,8 @@
     "not_owner",
     "github_failed",
     "sign_in_unknown_state",
+    "wrong_password",
+    "sign_in_throttled",
     "attachment_unsupported",
     "conversion_failed",
     "conversion_timeout",
@@ -460,6 +466,13 @@
     },
     "ashe_agent.github_sign_in": {
       "description": "One GitHub sign-in callback, from GitHub's redirect to the redirect back to the client.",
+      "attributes": [
+        "ashe_agent.sign_in.outcome",
+        "error.type"
+      ]
+    },
+    "ashe_agent.password_sign_in": {
+      "description": "One development password sign-in, from the password exchange to the sign-in code it answers.",
       "attributes": [
         "ashe_agent.sign_in.outcome",
         "error.type"

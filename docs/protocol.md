@@ -46,11 +46,14 @@ session id, or a previously authenticated socket as installation identity.
 
 ## HTTP sign-in endpoints
 
-The same listener answers `GET /v1/auth/github/start` with the client's
-`origin` and S256 `challenge`, and `GET /v1/auth/github/callback` with
-GitHub's `state` and `code` or `error`. They redirect through GitHub and
-return a one-time code in the client's URL fragment. The client removes
-the fragment before opening `/v1/ws`, then sends `auth.exchange` with
+The same listener answers `GET /v1/auth/methods` with `{"github": boolean, "password": boolean}`
+for configured origins, `GET /v1/auth/github/start` with the client's
+`origin` and S256 `challenge`, `GET /v1/auth/github/callback` with
+GitHub's `state` and `code` or `error`, and, in development when a password
+file is configured, `POST /v1/auth/password/exchange` with `origin`,
+`challenge`, and `password`. GitHub sign-in returns a one-time code in the
+client's URL fragment and password sign-in returns it as JSON. The client
+removes any fragment before opening `/v1/ws`, then sends `auth.exchange` with
 `code`, `verifier`, and `protocolVersion`. Its result is the same token
 pair as `auth.refresh`. [Authentication](authentication.md) owns the flow's
 validation, time limits, and failures. Every other path receives 404.

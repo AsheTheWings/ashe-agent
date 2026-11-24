@@ -322,12 +322,24 @@ describe("layer precedence", () => {
 })
 
 describe("GitHub and development web inputs", () => {
-  test("the OAuth app and owner have no defaults in either profile", () => {
-    for (const profile of ["development", "production"]) {
-      const env = { ...serveEnv, ASHE_AGENT_PROFILE: profile } as Record<string, string>
-      for (const name of ["ASHE_AGENT_GITHUB_CLIENT_ID", "ASHE_AGENT_GITHUB_CLIENT_SECRET_FILE", "ASHE_AGENT_GITHUB_CALLBACK_URL", "ASHE_AGENT_GITHUB_OWNER_ID"]) delete env[name]
-      const issues = issuesOf(resolveInputs("serve", sources(env, serveFiles)))
-      for (const name of ["ASHE_AGENT_GITHUB_CLIENT_ID", "ASHE_AGENT_GITHUB_CLIENT_SECRET_FILE", "ASHE_AGENT_GITHUB_CALLBACK_URL", "ASHE_AGENT_GITHUB_OWNER_ID"]) expect(issues).toContain(name)
+  test("the OAuth app is required in production and optional in development, the owner in both", () => {
+    const production = { ...serveEnv, ASHE_AGENT_PROFILE: "production" } as Record<string, string>
+    for (const name of ["ASHE_AGENT_GITHUB_CLIENT_ID", "ASHE_AGENT_GITHUB_CLIENT_SECRET_FILE", "ASHE_AGENT_GITHUB_CALLBACK_URL", "ASHE_AGENT_GITHUB_OWNER_ID"]) delete production[name]
+    const productionResolution = resolveInputs("serve", sources(production, serveFiles))
+    expect(productionResolution.ok).toBe(false)
+    if (!productionResolution.ok) {
+      for (const name of ["ASHE_AGENT_GITHUB_CLIENT_ID", "ASHE_AGENT_GITHUB_CLIENT_SECRET_FILE", "ASHE_AGENT_GITHUB_CALLBACK_URL", "ASHE_AGENT_GITHUB_OWNER_ID"]) {
+        expect(productionResolution.issues).toContainEqual({ input: name, problem: `is required in the production profile` })
+      }
+    }
+    const development = { ...serveEnv } as Record<string, string>
+    for (const name of ["ASHE_AGENT_GITHUB_CLIENT_ID", "ASHE_AGENT_GITHUB_CLIENT_SECRET_FILE", "ASHE_AGENT_GITHUB_CALLBACK_URL"]) delete development[name]
+    const developmentResolution = resolveInputs("serve", sources(development, serveFiles))
+    expect(developmentResolution.ok).toBe(false)
+    if (!developmentResolution.ok) {
+      expect(developmentResolution.issues).toEqual([
+        { input: "ASHE_AGENT_DEV_PASSWORD_FILE", problem: "development needs a password file or a GitHub OAuth app" },
+      ])
     }
   })
 
@@ -357,5 +369,67 @@ describe("GitHub and development web inputs", () => {
       expect(issuesOf(resolveInputs("devWeb", sources({ ASHE_AGENT_DEV_WEB_SERVER_URL: url })))).toContain("ASHE_AGENT_DEV_WEB_SERVER_URL")
     }
     expect(resolveInputs("token", sources({ ASHE_AGENT_DEV_WEB_SERVER_URL: "invalid" })).ok).toBe(true)
+  })
+})
+
+describe("development password inputs", () => {
+  const passwordFile = "/run/ashe-agent/dev-password"
+  const withoutGithub = (env: Record<string, string>): Record<string, string> => {
+    const rest = { ...env }
+    delete rest.ASHE_AGENT_GITHUB_CLIENT_ID
+    delete rest.ASHE_AGENT_GITHUB_CLIENT_SECRET_FILE
+    delete rest.ASHE_AGENT_GITHUB_CALLBACK_URL
+    return rest
+  }
+
+  test("a development password replaces the GitHub app", () => {
+    const files = { ...serveFiles, [passwordFile]: protectedFile("correct horse battery staple") }
+    const resolution = resolveInputs("serve", sources({ ...withoutGithub(serveEnv), ASHE_AGENT_DEV_PASSWORD_FILE: passwordFile }, files))
+    expect(resolution.ok).toBe(true)
+  })
+
+  test("a partial GitHub app configuration in development is refused", () => {
+    const partial = withoutGithub(serveEnv)
+    partial.ASHE_AGENT_GITHUB_CLIENT_ID = "client-id"
+    const resolution = resolveInputs("serve", sources(partial, serveFiles))
+    expect(resolution.ok).toBe(false)
+    if (!resolution.ok) {
+      expect(resolution.issues).toEqual([
+        { input: "ASHE_AGENT_GITHUB_CLIENT_SECRET_FILE", problem: "is required when configuring a GitHub OAuth app" },
+        { input: "ASHE_AGENT_GITHUB_CALLBACK_URL", problem: "is required when configuring a GitHub OAuth app" },
+      ])
+    }
+  })
+
+  test("short, long, and multiline passwords are refused", () => {
+    for (const password of ["short", "x".repeat(257), "line one\nline two"]) {
+      const files = { ...serveFiles, [passwordFile]: protectedFile(password) }
+      const resolution = resolveInputs("serve", sources({ ...withoutGithub(serveEnv), ASHE_AGENT_DEV_PASSWORD_FILE: passwordFile }, files))
+      expect(resolution.ok).toBe(false)
+      if (!resolution.ok) {
+        expect(resolution.issues).toEqual([
+          { input: "ASHE_AGENT_DEV_PASSWORD_FILE", problem: "want a single-line password of 15 to 256 characters" },
+        ])
+      }
+    }
+  })
+
+  test("a production password file or null GitHub inputs are refused", () => {
+    const files = {
+      ...serveFiles,
+      [passwordFile]: protectedFile("correct horse battery staple"),
+      [configPath]: configFile({ githubClientId: null, githubClientSecretFile: null, githubCallbackUrl: null }),
+    }
+    const resolution = resolveInputs(
+      "serve",
+      sources({ ...withoutGithub(serveEnv), ASHE_AGENT_PROFILE: "production", ASHE_AGENT_DEV_PASSWORD_FILE: passwordFile }, files),
+    )
+    expect(resolution.ok).toBe(false)
+    if (!resolution.ok) {
+      expect(resolution.issues).toContainEqual({ input: "ASHE_AGENT_DEV_PASSWORD_FILE", problem: "only applies to development" })
+      for (const name of ["ASHE_AGENT_GITHUB_CLIENT_ID", "ASHE_AGENT_GITHUB_CLIENT_SECRET_FILE", "ASHE_AGENT_GITHUB_CALLBACK_URL"]) {
+        expect(resolution.issues).toContainEqual({ input: name, problem: "is required in the production profile" })
+      }
+    }
   })
 })

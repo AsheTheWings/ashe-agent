@@ -68,7 +68,10 @@ Before serving, register a GitHub OAuth app with callback
 and production. Write its client secret into an owner-only file, preserving
 its bytes, and configure the app, the owner's numeric GitHub user ID, and
 the client origin through the config file [configuration](docs/configuration.md)
-describes.
+describes. For development only, a password file can stand in for the OAuth
+app: write a single line of 15 to 256 characters with no trailing newline
+into an owner-only file and configure it as the development password file
+instead of the app.
 
 For development, register the development server's HTTP callback, configure
 the development client's origin and browser-accessible WebSocket endpoint,
@@ -80,7 +83,8 @@ an occupied port.
 the default model; see [configuration](docs/configuration.md). The web
 backend serves the browser assets and its own authenticated state. Start
 it with the web inputs and observer credential, open the
-[web client](docs/web-client.md), and choose **Continue with GitHub**.
+[web client](docs/web-client.md), and sign in with the server's configured
+method (**Continue with GitHub** or, in development, the password form).
 [Authentication](docs/authentication.md) describes the flow and limits.
 
 ## Documentation
@@ -89,7 +93,7 @@ it with the web inputs and observer credential, open the
 - [Commands](docs/commands.md): what each `ashe-agent` command does.
 - [Configuration](docs/configuration.md): how inputs reach the server, the
   config file, profiles, and protected files.
-- [Authentication](docs/authentication.md): GitHub sign-in, logins,
+- [Authentication](docs/authentication.md): GitHub and development password sign-in, logins,
   API tokens, and how connections authenticate.
 - [Protocol](docs/protocol.md): how clients and the server exchange
   messages and session events.

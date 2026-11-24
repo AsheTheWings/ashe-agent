@@ -79,7 +79,7 @@ const formatTime = (ms: number | null) => (ms === null ? "never" : new Date(ms).
  */
 const serveInputs = () => {
   const sources = processSources()
-  const { inputs } = loadInputsOrExit("serve", sources)
+  const { profile, inputs } = loadInputsOrExit("serve", sources)
   removeDependencyVariables(process.env)
   const keys = readProviderKeys(inputs.providers, readDiskFile)
   if (Result.isFailure(keys)) {
@@ -87,13 +87,13 @@ const serveInputs = () => {
   }
   const headers = inputs.otlpHeaders === null ? Result.succeed({}) : parseOtlpHeaders(Redacted.value(inputs.otlpHeaders))
   if (Result.isFailure(headers)) fail(`invalid inputs\n  ${catalog.otlpHeadersFile.env}: ${headers.failure}`, 2)
-  return { sources, inputs, apiKeys: Result.getOrThrow(keys), otlpHeaders: Redacted.make(Result.getOrThrow(headers)) }
+  return { sources, profile, inputs, apiKeys: Result.getOrThrow(keys), otlpHeaders: Redacted.make(Result.getOrThrow(headers)) }
 }
 
 const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> = {
   async serve(args) {
     if (args.length > 0) usageError("serve takes no arguments")
-    const { sources, inputs, apiKeys, otlpHeaders } = serveInputs()
+    const { sources, profile, inputs, apiKeys, otlpHeaders } = serveInputs()
     const models = configuredModels(inputs.providers)
     openCurrentDatabase(inputs.stateDir).close()
     // The agent loop's libraries load only for serve, so operator commands start quickly.
@@ -197,15 +197,23 @@ const commands: Record<string, (args: ReadonlyArray<string>) => Promise<void>> =
       hostname: inputs.listenHost,
       port: inputs.listenPort,
       origins: inputs.origins,
-      github: {
-        clientId: inputs.githubClientId,
-        // The secret's file input has no default, so a resolved serve always holds it.
-        clientSecret: inputs.githubClientSecret!,
-        callbackUrl: inputs.githubCallbackUrl,
-        ownerId: inputs.githubOwnerId,
-        githubUrl: inputs.githubUrl,
-        githubApiUrl: inputs.githubApiUrl,
-      },
+      github:
+        inputs.githubClientId !== null && inputs.githubClientSecret !== null && inputs.githubCallbackUrl !== null
+          ? {
+              clientId: inputs.githubClientId,
+              clientSecret: inputs.githubClientSecret,
+              callbackUrl: inputs.githubCallbackUrl,
+              ownerId: inputs.githubOwnerId,
+              githubUrl: inputs.githubUrl,
+              githubApiUrl: inputs.githubApiUrl,
+            }
+          : null,
+      // Resolve refuses a password file in any other profile, so development holds the only one.
+      password:
+        profile === "development" && inputs.devPassword !== null
+          ? { ownerId: inputs.githubOwnerId, secret: inputs.devPassword }
+          : null,
+      ownerId: inputs.githubOwnerId,
     }).pipe(
       Layer.provideMerge(
         Sessions.layer({
