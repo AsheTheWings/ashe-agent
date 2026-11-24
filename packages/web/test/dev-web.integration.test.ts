@@ -77,6 +77,34 @@ describe("development web input boundary", () => {
     }
   }, 25_000)
 
+  test("configured web backend URL proxies web API requests through the development web server", async () => {
+    const backend = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: (request) => new URL(request.url).pathname === "/v1/web/health"
+        ? Response.json({ ready: true, database: "current" })
+        : new Response("not found", { status: 404 }),
+    })
+    const home = mkdtempSync(join(tmpdir(), "ashe-agent-dev-web-proxy-"))
+    writeFileSync(join(home, "index.html"), "<!doctype html><title>Development web test</title>")
+    writeFileSync(join(home, "config.json"), JSON.stringify({ devWebBackendUrl: `http://127.0.0.1:${backend.port}` }))
+    writeFileSync(join(home, "vite.config.js"), 'export default { define: { __ASHE_AGENT_DEV_SERVER_URL__: "null" }, envDir: false, envPrefix: [] }')
+    const child = start(home, 0)
+    const errors = new Response(child.stderr).text()
+    try {
+      const listening = await bounded("readiness", ready(child))
+      const health = await fetch(new URL("/v1/web/health", listening.url))
+      expect(health.status).toBe(200)
+      expect(await health.json()).toEqual({ ready: true, database: "current" })
+    } finally {
+      child.kill()
+      await bounded("shutdown", child.exited)
+      await errors
+      backend.stop(true)
+      rmSync(home, { recursive: true, force: true })
+    }
+  }, 25_000)
+
   test("an occupied port fails instead of choosing another port", async () => {
     const occupied = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("") })
     const home = mkdtempSync(join(tmpdir(), "ashe-agent-dev-web-"))

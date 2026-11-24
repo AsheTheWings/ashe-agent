@@ -73,6 +73,7 @@ const configuration = <S extends Schema.Top>(
 const both = <A>(value: (dirs: Dirs) => A) => ({ development: value, production: value })
 
 const NullablePath = Schema.NullOr(AbsolutePath)
+const NullableHttpUrl = Schema.NullOr(HttpUrl)
 const MiB = 1024 ** 2
 
 /**
@@ -226,6 +227,14 @@ export const catalog = {
     schema: WebSocketUrl,
     processes: ["devWeb"],
     defaults: { development: () => "ws://127.0.0.1:7420/v1/ws" },
+  }),
+  devWebBackendUrl: configuration({
+    description: "Optional HTTP origin of a web backend the development web server proxies web-state and web API paths to.",
+    env: "ASHE_AGENT_DEV_WEB_BACKEND_URL",
+    codec: "string",
+    schema: NullableHttpUrl,
+    processes: ["devWeb"],
+    defaults: both(() => null),
   }),
   permission: configuration({
     description: "Permission rules in opencode's shape; a tool call no rule matches is allowed.",

@@ -7,10 +7,21 @@ export const createDevelopmentWebServer = async (root = new URL("..", import.met
   const platform = new Set(["PATH", "HOME", "TMPDIR", "LANG", "TZ", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"])
   for (const name of Object.keys(process.env)) if (!platform.has(name)) delete process.env[name]
   const { createServer } = await import("vite")
+  const proxy = inputs.devWebBackendUrl === null
+    ? undefined
+    : {
+        "/v1/web-state": { target: inputs.devWebBackendUrl, ws: true },
+        "/v1/web": { target: inputs.devWebBackendUrl },
+      }
   return createServer({
     root,
     define: { __ASHE_AGENT_DEV_SERVER_URL__: JSON.stringify(inputs.devWebServerUrl) },
-    server: { host: "127.0.0.1", allowedHosts: [...inputs.devWebAllowedHosts], strictPort: true },
+    server: {
+      host: "127.0.0.1",
+      allowedHosts: [...inputs.devWebAllowedHosts],
+      strictPort: true,
+      ...(proxy === undefined ? {} : { proxy }),
+    },
   })
 }
 
