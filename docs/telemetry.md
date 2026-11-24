@@ -17,11 +17,12 @@ classes, under a version that changes with any of them.
   admission, each turn, each model call, and each tool call. A tool call
   records whether its execution budget expired.
   A code mode program's tool calls are child spans of their `execute` call.
-- `ashe_agent.github_sign_in` covers the GitHub callback and records one
-  bounded sign-in outcome. WebSocket authentication is covered by its
-  protocol request span and error class. The owner identity and retained
-  content HTTP responses have no separate signal; their only output is the
-  authenticated product response.
+- `ashe_agent.github_sign_in` covers the GitHub callback and
+  `ashe_agent.password_sign_in` covers a development password exchange; each
+  records one bounded sign-in outcome without secrets. WebSocket
+  authentication is covered by its protocol request span and error class.
+  The sign-in methods, owner identity, and retained content HTTP responses
+  have no separate signal; their only output is the product response.
 - Each assigned client action has a span from assignment to settlement,
   with its name and bounded outcome; its duration is a histogram. Action
   arguments and results, question text, answer text, and permission notes

@@ -2,11 +2,13 @@ import type { Database } from "bun:sqlite"
 import type { Server, ServerWebSocket } from "bun"
 import { Result, Schema } from "effect"
 import {
+  AUTH_METHODS_PATH,
   AnyRequest,
   ErrorCode,
   PROTOCOL_PATH,
   PROTOCOL_VERSIONS,
   OWNER_IDENTITY_PATH,
+  PASSWORD_SIGN_IN_PATH,
   RETAINED_CONTENT_PATH,
   SIGN_IN_CALLBACK_PATH,
   SIGN_IN_START_PATH,
@@ -22,6 +24,7 @@ import {
 } from "@ashe-agent/protocol"
 import { authenticate, createLogin, principalActive, refresh, type AuthenticateResult } from "../auth/credentials.ts"
 import { GithubSignIn, type GithubSignInConfig } from "../auth/github.ts"
+import { PASSWORD_REQUEST_LIMIT_BYTES, PasswordSignIn, type PasswordSignInConfig } from "../auth/password.ts"
 import { emitLog, endSpan, startSpan, type ErrorClass } from "../telemetry/signals.ts"
 import { harnessIdentity } from "../store/identity.ts"
 
@@ -95,8 +98,12 @@ export interface WebSocketServerOptions {
   readonly hostname: string
   readonly port: number
   readonly origins: ReadonlyArray<string>
-  /** The GitHub OAuth app the owner signs in through, and the owner's GitHub user ID. */
-  readonly github: GithubSignInConfig
+  /** The GitHub OAuth app the owner signs in through; null removes the GitHub routes. */
+  readonly github: GithubSignInConfig | null
+  /** The development password the owner signs in with; null removes the password route. */
+  readonly password: PasswordSignInConfig | null
+  /** The owner's user ID, carried by every login either sign-in creates. */
+  readonly ownerId: number
   readonly handlers: Handlers
   /** Reads one authenticated retained original for the content download endpoint. */
   readonly retainedOriginal?: (
@@ -136,16 +143,18 @@ const error = (code: number, message: string): ErrorObject => ({ code, message }
 const decodeRequest = Schema.decodeUnknownResult(AnyRequest, { onExcessProperty: "error" })
 
 /**
- * Serves the protocol on one WebSocket path and the GitHub sign-in on its
- * start and callback paths; every other path is not found. A connection's
- * first message must authenticate it within `AUTH_DEADLINE_MS`; any other
- * first message, a failed authentication, or an unsupported version closes
- * it.
+ * Serves the protocol on one WebSocket path, sign-in discovery and GitHub or
+ * development password sign-in on their HTTP paths, and authenticated owner
+ * identity and retained content downloads; every other path is not found. A
+ * connection's first message must authenticate it within `AUTH_DEADLINE_MS`;
+ * any other first message, a failed authentication, or an unsupported version
+ * closes it.
  */
 export const startWebSocketServer = (options: WebSocketServerOptions): WebSocketServer => {
   const now = options.now ?? Date.now
-  const signIn = new GithubSignIn(options.github, options.origins, now)
-  const ownerId = options.github.ownerId
+  const signIn = options.github === null ? null : new GithubSignIn(options.github, options.origins, now)
+  const passwordSignIn = options.password === null ? null : new PasswordSignIn(options.password, now)
+  const ownerId = options.ownerId
   const sockets = new Set<ServerWebSocket<Connection>>()
   const noStore = {
     "Cache-Control": "no-store",
@@ -165,11 +174,34 @@ export const startWebSocketServer = (options: WebSocketServerOptions): WebSocket
     return outcome.ok && principalActive(options.db, outcome.principal, ownerId) ? outcome : { ok: false }
   }
   const withNoStore = (headers: Readonly<Record<string, string>> = {}) => ({ ...noStore, ...headers })
+  const withSignInHeaders = (headers: Readonly<Record<string, string>> = {}) =>
+    withNoStore({ "Referrer-Policy": "no-referrer", ...headers })
   const json = (body: unknown, status: number, headers: Readonly<Record<string, string>> = {}) =>
     new Response(JSON.stringify(body), {
       status,
       headers: withNoStore({ "Content-Type": "application/json; charset=utf-8", ...headers }),
     })
+  const readBoundedBody = async (request: Request, limit: number): Promise<string | null> => {
+    if (request.body === null) return ""
+    const reader = request.body.getReader()
+    const chunks: Array<Uint8Array> = []
+    let total = 0
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        total += value.byteLength
+        if (total > limit) {
+          await reader.cancel()
+          return null
+        }
+        chunks.push(value)
+      }
+    } finally {
+      reader.releaseLock()
+    }
+    return new TextDecoder().decode(Buffer.concat(chunks, total))
+  }
 
   const send = (socket: ServerWebSocket<Connection>, message: unknown) => {
     if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message))
@@ -287,16 +319,91 @@ export const startWebSocketServer = (options: WebSocketServerOptions): WebSocket
   const server: Server<Connection> = Bun.serve<Connection>({
     hostname: options.hostname,
     port: options.port,
-    fetch(request, server) {
+    async fetch(request, server) {
       const url = new URL(request.url)
       if (url.pathname === SIGN_IN_START_PATH || url.pathname === SIGN_IN_CALLBACK_PATH) {
         if (request.method !== "GET") {
           return new Response("method not allowed", {
             status: 405,
-            headers: { Allow: "GET", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" },
+            headers: withSignInHeaders({ Allow: "GET" }),
           })
         }
+        if (signIn === null) return new Response("not found", { status: 404, headers: withSignInHeaders() })
         return url.pathname === SIGN_IN_START_PATH ? signIn.start(url) : signIn.callback(url)
+      }
+      if (url.pathname === AUTH_METHODS_PATH) {
+        const cors = originHeaders(request.headers.get("origin"))
+        if (cors === null) return new Response("origin not allowed", { status: 403, headers: withSignInHeaders() })
+        if (request.method === "OPTIONS") {
+          return new Response(null, {
+            status: 204,
+            headers: withSignInHeaders({
+              ...cors,
+              "Access-Control-Allow-Methods": "GET",
+              "Access-Control-Max-Age": "0",
+            }),
+          })
+        }
+        if (request.method !== "GET") {
+          return new Response("method not allowed", { status: 405, headers: withSignInHeaders({ ...cors, Allow: "GET" }) })
+        }
+        return json(
+          { github: signIn !== null, password: passwordSignIn !== null },
+          200,
+          { ...cors, "Referrer-Policy": "no-referrer" },
+        )
+      }
+      if (url.pathname === PASSWORD_SIGN_IN_PATH) {
+        const cors = originHeaders(request.headers.get("origin"))
+        if (cors === null) return new Response("origin not allowed", { status: 403, headers: withSignInHeaders() })
+        if (request.method === "OPTIONS") {
+          return new Response(null, {
+            status: 204,
+            headers: withSignInHeaders({
+              ...cors,
+              "Access-Control-Allow-Methods": "POST",
+              "Access-Control-Allow-Headers": "Content-Type",
+              "Access-Control-Max-Age": "0",
+            }),
+          })
+        }
+        if (passwordSignIn === null) return new Response("not found", { status: 404, headers: withSignInHeaders(cors) })
+        if (request.method !== "POST") {
+          return new Response("method not allowed", { status: 405, headers: withSignInHeaders({ ...cors, Allow: "POST" }) })
+        }
+        const length = Number(request.headers.get("content-length") ?? "0")
+        if (!Number.isSafeInteger(length) || length < 0 || length > PASSWORD_REQUEST_LIMIT_BYTES) {
+          return new Response("password exchange too large", { status: 413, headers: withSignInHeaders(cors) })
+        }
+        let body: unknown
+        try {
+          const text = await readBoundedBody(request, PASSWORD_REQUEST_LIMIT_BYTES)
+          if (text === null) {
+            return new Response("password exchange too large", { status: 413, headers: withSignInHeaders(cors) })
+          }
+          body = JSON.parse(text)
+        } catch {
+          return new Response("password exchange must be a JSON object", { status: 400, headers: withSignInHeaders(cors) })
+        }
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+          return new Response("password exchange must be a JSON object", { status: 400, headers: withSignInHeaders(cors) })
+        }
+        const { origin, challenge, password } = body as Record<string, unknown>
+        const result = passwordSignIn.start(typeof origin === "string" ? origin : null, options.origins, challenge, password)
+        const signInCors = { ...cors, "Referrer-Policy": "no-referrer" }
+        switch (result.outcome) {
+          case "signed_in":
+            return json({ signIn: result.code }, 200, signInCors)
+          case "wrong_password":
+            return json({ code: "authentication_failed", message: "incorrect password" }, 401, signInCors)
+          case "sign_in_throttled":
+            return json({ code: "sign_in_throttled", message: "too many attempts; try again in a minute" }, 429, signInCors)
+          default:
+            return new Response(result.outcome === "origin_not_allowed" ? "origin not allowed" : "invalid sign-in request", {
+              status: 400,
+              headers: withSignInHeaders(cors),
+            })
+        }
       }
       if (url.pathname === OWNER_IDENTITY_PATH || url.pathname.startsWith(`${RETAINED_CONTENT_PATH}/`)) {
         const cors = originHeaders(request.headers.get("origin"))
@@ -402,7 +509,9 @@ export const startWebSocketServer = (options: WebSocketServerOptions): WebSocket
         }
         const exchangeParams = request.success.params as { code?: unknown; verifier?: unknown } | undefined
         const exchangeUserId = request.success.method === "auth.exchange" && typeof exchangeParams?.code === "string"
-          ? signIn.exchange(exchangeParams.code, typeof exchangeParams.verifier === "string" ? exchangeParams.verifier : "") : null
+          ? (signIn?.exchange(exchangeParams.code, typeof exchangeParams.verifier === "string" ? exchangeParams.verifier : "") ??
+            passwordSignIn?.exchange(exchangeParams.code, typeof exchangeParams.verifier === "string" ? exchangeParams.verifier : "") ?? null)
+          : null
         const principal = socket.data.principal
         if (principal === null) return traced(request.success, () => authenticateConnection(socket, request.success, exchangeUserId))
         return traced(request.success, () => handle(socket, request.success, principal))

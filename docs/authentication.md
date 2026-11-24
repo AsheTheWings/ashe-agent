@@ -1,7 +1,8 @@
 # Authentication
 
 AsheAgent serves one owner, identified by a configured numeric GitHub user
-ID. Browser clients sign in with GitHub; programs use named API tokens.
+ID. Browser clients sign in with GitHub, or with a development password;
+programs use named API tokens.
 
 ## GitHub sign-in
 
@@ -34,6 +35,28 @@ Pending sign-ins and codes live only in server memory and disappear on a
 restart. GitHub credentials and codes are absent from persistence and
 telemetry. Sign-in HTTP responses set `Cache-Control: no-store` and
 `Referrer-Policy: no-referrer`.
+
+## Development password sign-in
+
+In the development profile only, the owner can sign in with a password read
+from a protected file the development password file input names. Production
+refuses that input, so the password route is absent there. `GET /v1/auth/methods`
+reports `{"github": boolean, "password": boolean}` for configured browser
+origins so the built web client shows only the sign-in methods the server
+accepts. The GitHub button in development needs a configured OAuth app;
+without one its start path answers 404.
+
+The client posts its origin, the verifier's 43-character base64url SHA-256
+challenge, and the password to `POST /v1/auth/password/exchange` as JSON.
+The server accepts only a configured origin, answers a 60-second sign-in
+code bound to the challenge, and the client exchanges it exactly like a
+GitHub code. The password never reaches persistence or telemetry.
+
+Ten wrong passwords in a minute throttle further attempts until the
+window ends; a correct password resets the count. Wrong passwords answer
+401, throttled ones 429, and an unconfigured route 404. The file must hold
+a single line of 15 to 256 characters and be inaccessible to group and
+others, like every protected file.
 
 ## Logins
 

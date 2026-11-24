@@ -16,6 +16,17 @@ export const SIGN_IN_START_PATH = "/v1/auth/github/start"
 /** The HTTP path GitHub returns the browser to during a sign-in. */
 export const SIGN_IN_CALLBACK_PATH = "/v1/auth/github/callback"
 
+/** The HTTP path returning which sign-in methods the server accepts: `{ github, password }`. */
+export const AUTH_METHODS_PATH = "/v1/auth/methods"
+
+/**
+ * The HTTP path that exchanges a development password for a sign-in code,
+ * with a JSON body holding the client's `origin`, the base64url SHA-256
+ * `challenge` of its verifier, and the `password`. It answers the code as
+ * JSON. The server answers it only with a development password configured.
+ */
+export const PASSWORD_SIGN_IN_PATH = "/v1/auth/password/exchange"
+
 const JsonRpc = Schema.Literal("2.0")
 
 /** Request ids are strings or integers; a response to an unidentifiable request has id null. */

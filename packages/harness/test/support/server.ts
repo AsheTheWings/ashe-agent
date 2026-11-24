@@ -164,7 +164,7 @@ export class TestServer {
   }
 
   async start() {
-    const layer = ProtocolServer.layer({ hostname: "127.0.0.1", port: 0, origins: this.origins, github: { clientId: "test", clientSecret: Redacted.make("synthetic"), callbackUrl: "http://127.0.0.1/callback", ownerId: 42, githubUrl: "http://127.0.0.1:9", githubApiUrl: "http://127.0.0.1:9" } }).pipe(
+    const layer = ProtocolServer.layer({ hostname: "127.0.0.1", port: 0, origins: this.origins, github: { clientId: "test", clientSecret: Redacted.make("synthetic"), callbackUrl: "http://127.0.0.1/callback", ownerId: 42, githubUrl: "http://127.0.0.1:9", githubApiUrl: "http://127.0.0.1:9" }, password: null, ownerId: 42 }).pipe(
       Layer.provideMerge(
         Sessions.layer({
           models: this.options.models ?? models,
