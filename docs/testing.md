@@ -144,16 +144,16 @@ output. It needs Podman.
 ## CI
 
 CI runs on GitHub-hosted runners. Every non-draft pull request, every
-push, and every manual dispatch runs the fast gate, the integration
-tests, test262, the bundle build, and qualification of that bundle.
+default-branch push, and every manual dispatch runs the fast gate, the
+integration tests, test262, the bundle build, and qualification of that bundle.
 Pull request runs receive no secrets and no OIDC token, and no workflow
 uses `pull_request_target`; the repository requires approval before the
 workflows of any outside contributor's pull request run.
 
-On a push or a manual dispatch on a branch, the job that qualified the
-bundle then publishes it to the host's artifact registry, the host the
-`ARTIFACT_REGISTRY` repository variable names: one `oras push`, with the
-job's OIDC token, of the bundle as the single layer of
+On a default-branch push or a manual dispatch on a branch, the job that
+qualified the bundle then publishes it to the host's artifact registry, the
+host the `ARTIFACT_REGISTRY` repository variable names: one `oras push`, with
+the job's OIDC token, of the bundle as the single layer of
 `ashe-agent/<area>:<commit>-<run id>-<run attempt>`, where the area is
 `default` on `main` and `branches` elsewhere. Only that job may request
 an OIDC token. It checks that the pushed layer is the qualified bundle
@@ -163,8 +163,8 @@ a pinned release whose archive and binary SHA-256 it checks first.
 The `web-image` workflow runs the same way on the
 same events, as its own run: the fast gate, the web build for the
 web image, the image built and annotated into an OCI layout, and
-qualification of that layout. On a push or a manual
-dispatch the job that qualified it pushes the same manifest, checked
-against the qualified digest, to
+qualification of that layout. On a default-branch push or a manual
+dispatch on a branch, the job that qualified it pushes the same manifest,
+checked against the qualified digest, to
 `ashe-agent/<area>:<commit>-<run id>-<run attempt>` and logs
 `SHA-256: <hex>` for it.

@@ -4,7 +4,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   push:
-    branches: ["**"]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -16,8 +16,8 @@ env:
   ORAS_SHA256: 7c43d74f5f64c94932b31c76103bb7f48af837fe8aa5316fba7968b6c523350e
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Pull request runs test, build, and qualify the bundle but never get a token.
