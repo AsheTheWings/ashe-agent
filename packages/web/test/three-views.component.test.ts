@@ -17,7 +17,7 @@ import { Composer, composerPrimaryAction } from "../src/client/Composer.tsx"
 import { WorkspaceHeader, type SessionNotificationEntry } from "../src/client/Header.tsx"
 import { formatPayloadText, resolveScrollPaneHeight, TOOL_PANE_BASE_HEIGHT } from "../src/client/json-view.tsx"
 import type { Draft } from "../src/client/drafts.ts"
-import { computeCheckpointStats, computeSessionStats } from "../src/client/stats.ts"
+import { computeCheckpointStats, computeSessionStats, formatTokens } from "../src/client/stats.ts"
 import type { SessionView } from "../src/session/projection.ts"
 
 const fakeClient = () =>
@@ -372,6 +372,11 @@ describe("owned three-view rendering", () => {
     const html = render(createElement(Checkpoint, { context, entries: [systemEntry, ...sampleEntries] }))
     expect(html).not.toContain("INSTRUCTION")
     expect(html).not.toContain("PROVIDER-MESSAGE")
+    expect(html).toContain("TOOL-DEFINITIONS")
+    expect(html.indexOf("TOOL-DEFINITIONS")).toBeLessThan(html.indexOf("SYSTEM-MESSAGE"))
+    expect(html).not.toContain("<time")
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).toContain("1 tool")
     expect(html).toContain("SYSTEM-MESSAGE")
     expect(html).toContain("Harness instructions")
     expect(html).toContain("Harness rules for the session")
@@ -380,9 +385,8 @@ describe("owned three-view rendering", () => {
     expect(html).toContain("Transcript")
     expect(html).toContain("Earlier model turn.")
     expect(html).toContain("Result cleared to free context")
-    expect(html).toContain("tool definition")
-    expect(html).toContain("file_patch")
-    expect(html).toContain("Apply a patch")
+    expect(html).toContain("AA")
+    expect(html).toContain("~100")
 
     // Provider inputTokens is the window size; opaque thoughts are bounded by prior reasoningTokens and input gap.
     const usage = [
@@ -407,11 +411,21 @@ describe("owned three-view rendering", () => {
     expect(stats?.providerOutputTokens).toBe(30)
 
     const barHtml = render(createElement(CheckpointStatsBar, { context, entries: [systemEntry, ...sampleEntries], usage }))
-    expect(barHtml).toContain("720 tokens")
-    expect(barHtml).toContain("30 out")
+    expect(barHtml).toContain("720")
+    expect(barHtml).not.toContain("tokens")
+    expect(barHtml).not.toContain("30 out")
     expect(barHtml).toContain("Harness")
     expect(barHtml).toContain("Agent output")
     expect(barHtml).toContain("partial")
+    expect(barHtml).toContain("Window 1")
+
+    expect(formatTokens(754)).toBe("754")
+    expect(formatTokens(754, true)).toBe("~754")
+    expect(formatTokens(1_000)).toBe("1K")
+    expect(formatTokens(4_710)).toBe("4.7K")
+    expect(formatTokens(79_124, true)).toBe("~79.1K")
+    expect(formatTokens(999_950)).toBe("1M")
+    expect(formatTokens(1_240_000)).toBe("1.2M")
   })
 
   test("external image destinations render as inert consent placeholders and raw HTML is never evaluated", () => {
@@ -444,7 +458,7 @@ describe("owned three-view rendering", () => {
     expect(idleHtml).toContain("file_patch")
 
     const emptyHtml = render(createElement(ActivityPreview, { view: { ...idleView, items: [] }, onReveal: () => {} }))
-    expect(emptyHtml).toContain("No agent thoughts or tool calls yet")
+    expect(emptyHtml).toContain("No agent activity yet")
   })
 
   test("SessionNotifications collapses to the latest entry and expands a 5-row scrollable viewport with ActivityPreview as an entry", () => {
@@ -493,6 +507,50 @@ describe("owned three-view rendering", () => {
     expect(idleHeader).toContain("Active run")
     expect(idleHeader).not.toContain("Working")
     expect(idleHeader).not.toContain("Needs you")
+    expect(idleHeader).toContain('data-slot="secondary-window-toggle-slot"')
+    expect(idleHeader).not.toContain('data-slot="secondary-window-toggle"')
+    expect(idleHeader).not.toContain('data-slot="session-notifications"')
+
+    const withNoticeHeader = render(
+      createElement(WorkspaceHeader, {
+        title: "Active run",
+        currentView: "chat",
+        onViewChange: () => {},
+        notifications: [{ id: "err-1", kind: "notice", tone: "destructive", timestamp: 1, message: "Connection failed" }],
+        semanticEntries: [],
+        checkpointContext: null,
+        checkpointUsage: [],
+        sidebarPinned: true,
+        onToggleSidebar: () => {},
+        attentionCount: 0,
+        needsHuman: false,
+        shortcuts: { viewModifier: "ctrl", typeToFocus: true },
+      }),
+    )
+    expect(withNoticeHeader).toContain('data-slot="session-notifications"')
+    expect(withNoticeHeader).toContain("Connection failed")
+
+    const sessionHeader = render(
+      createElement(WorkspaceHeader, {
+        title: "Active run",
+        currentView: "session",
+        onViewChange: () => {},
+        notifications: [],
+        semanticEntries: sampleEntries,
+        checkpointContext: null,
+        checkpointUsage: [],
+        sidebarPinned: true,
+        onToggleSidebar: () => {},
+        attentionCount: 0,
+        needsHuman: false,
+        shortcuts: { viewModifier: "ctrl", typeToFocus: true },
+        hasSecondaryContent: true,
+        secondaryWindowOpen: false,
+        onToggleSecondaryWindow: () => {},
+      }),
+    )
+    expect(sessionHeader).toContain('data-slot="secondary-window-toggle-slot"')
+    expect(sessionHeader).toContain('data-slot="secondary-window-toggle"')
 
     const attentionHeader = render(
       createElement(WorkspaceHeader, {

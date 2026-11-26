@@ -64,53 +64,76 @@ has no messages yet, Chat centers a tall starter composer card with the attach,
 agent, model/effort, and send controls inside its bottom toolbar. Once messages
 exist, Chat shows user messages in bubbles, grouping messages admitted by one
 turn, and assistant output inline with safe GitHub Flavored Markdown rendering,
-keeping thoughts, tools, and developer blocks out of the conversation
-stream. Session displays full-width, horizontally padded, always-expanded
-canonical semantic blocks (`SYSTEM-MESSAGE`, `DEVELOPER-MESSAGE`,
-`USER-MESSAGE`, `AGENT-MESSAGE`, `AGENT-THOUGHT`, `AGENT-TOOL`) separated by
-horizontal dividers—omitting empty text-less agent carrier entries, showing
+keeping thoughts, tools, and developer blocks out of the conversation stream.
+Chat messages reveal friendly relative timestamps (`Just now`, `5 mins ago`,
+`2 hours ago`, `Yesterday`) on hover/focus with exact date/time tooltips.
+Session displays full-width, horizontally padded, always-expanded canonical
+semantic blocks (`SYSTEM-MESSAGE`, `DEVELOPER-MESSAGE`, `USER-MESSAGE`,
+`AGENT-MESSAGE` with the `AA` monogram, `AGENT-THOUGHT`, `AGENT-TOOL`) separated
+by horizontal dividers—omitting empty text-less agent carrier entries, grouping
+each block's header metadata (including human-readable full date/time and
+compact estimated token count with exact tooltips) inline on the left, showing
 agent/model identity on agent blocks and on peer-agent `USER-MESSAGE` entries
 (linked to the sender session), rendering `AGENT-TOOL` input and result in
 equal-height scrollable panes with formatted syntax-colored JSON (expanding
 slightly when a payload nearly fits to avoid tiny scrollbars) and semantic
-outcome badges, and automatically hydrating large retained bodies as they
-enter the viewport. Checkpoint window displays the latest successful
-model-input boundary's contributions with the same padded layout, semantic
-headers, formatted payloads, and automatic hydration.
+outcome badges, and automatically hydrating large retained bodies as they enter
+the viewport. Checkpoint window displays the selected `ModelCallContext`
+request-input snapshot with the same padded layout, grouped inline headers
+(without per-block timestamps), a single collapsible `TOOL-DEFINITIONS` block
+first (collapsed by default), formatted payloads, and automatic hydration.
 
-Every open session uses a constant two-bar header. The top bar shows the
-session title and the view selector dropdown (`Chat`, `Session`,
-`Checkpoint window`). The second bar adapts to the active view while
-holding a constant height:
+Switching from Chat to Session anchors Session's scroll position instantly to
+the focused user message in Chat without moving Chat's saved scroll position on
+return. Selection-safe `Shift+click` on an agent message in Chat or an agent
+message, thought, or tool block in Session opens the Checkpoint window snapshot
+that generated it.
 
-- **Chat:** renders `SessionNotifications`, a constant-height notification
-  queue that shows the latest entry when collapsed and expands to a
-  five-entry scrollable viewport (newest at top) on click. `ActivityPreview`
-  lives in that queue, showing the latest thought summary and latest tool
-  call with status even when idle; clicking a preview switches to Session
-  and scrolls its matching block. Resumable turns, waiting inputs, execution
-  notices, draft recovery, and composer status all enter `SessionNotifications`
-  so nothing renders above the composer.
-- **Session:** summarizes high-value session insights—total, user, and
-  agent message counts, tool call count and most-used tool, and
-  estimated token total—with a popover breakdown by tool and block kind,
-  plus a queue toggle when alerts are waiting.
-- **Checkpoint window:** summarizes the latest boundary's estimated
-  token total, coverage, separate provider-reported usage, and a
-  segmented distribution across semantic components (including individual
-  developer components), with a popover chart and provider usage table,
-  plus a queue toggle when alerts are waiting.
+Every open session uses a `44px` primary header bar on desktop (`>= 48rem`)
+hosting the sidebar toggle (when floating or on mobile), the session title, a
+centered inset `ViewPanel` owned by the active view, the view selector dropdown
+(`Chat`, `Session`, `Checkpoint window`), and a reserved right-hand slot for
+the Secondary Window toggle button so adjacent controls never shift. On narrow
+mobile viewports (`< 48rem`), `ViewPanel` drops to a `36px` strip beneath the
+primary bar. Whenever actionable alerts, errors, or waiting-input notices exist
+across sessions (including connection/app errors, resumable turns, waiting
+inputs, execution failures, recoverable/unsupported drafts, and composer
+status), `SessionNotifications` renders as a conditional `36px` secondary bar
+directly below the primary bar (and inside a `44px` primary-styled bar beside
+the sidebar toggle on the home screen), showing the latest entry when collapsed
+and expanding to a five-entry scrollable list on click. App errors appear in
+`SessionNotifications` and never overlay the page.
+
+`ViewPanel` adapts to the active view:
+
+- **Chat:** renders `ActivityPreview`, showing the latest thought summary and
+  latest tool call with status even when idle; clicking a preview switches to
+  Session and scrolls its matching block.
+- **Session:** summarizes high-value session insights—total, user, and agent
+  message counts, tool call count and most-used tool, and compact estimated
+  token total (`754`, `4.7K`, `1.2M` with exact tooltips); clicking toggles the
+  **Session insights** Secondary Window.
+- **Checkpoint window:** summarizes the selected snapshot's input token total,
+  coverage, a stacked horizontal distribution bar grouped into **Harness**
+  (System message, Tool definitions, Developer messages, Tool results),
+  **Agent output**, and **User messages**, and the snapshot label
+  `Window <N> · <time>` (plus a `Latest` reset control when viewing a historical
+  snapshot); clicking toggles the **Checkpoint window** Secondary Window showing
+  **Context breakdown** and the timestamped snapshot switcher.
 
 `Ctrl+I` cycles views even when the composer has focus (`Alt+I` and
-type-to-compose are configurable in Settings). Each session remembers
-its last view and each view its scroll position in browser storage;
+type-to-compose are configurable in Settings), and `Ctrl+.` toggles the
+Secondary Window when the active view provides secondary content. Each session
+remembers its last view and each view its scroll position in browser storage;
 ordinary incoming content does not change a retained reading position.
 
-The desktop sidebar supports docked (pinned, shifting the main area) and
-floating (hover-overlay from the left edge or top-left toggle without
-shifting the main area) modes, persisted in browser storage. Mobile uses
-a slide-over drawer. Non-empty recoverable drafts from other tabs appear
-as entries in `SessionNotifications`.
+The desktop workspace splits into a resizable sidebar (`264px` default,
+clamped `220px`–`420px`, persisted in browser storage, toggling between docked
+and hover-floating modes), a **Primary Window**, and an optional right-hand
+**Secondary Window** (`36%` default, clamped `24%`–`60%`, persisted in browser
+storage, drag-resized with a vertical handle). Mobile uses slide-over drawers
+for both the sidebar and the Secondary Window. Non-empty recoverable drafts
+from other tabs appear as entries in `SessionNotifications`.
 
 ## Settings and themes
 

@@ -18,13 +18,22 @@ import type { AssistantItem, SessionView, UserItem } from "@/session/projection.
 import { DisclosureCard, Permissions, Questions } from "./blocks.tsx"
 import { ClaudeCopyIcon } from "./icons.tsx"
 import { MarkdownText, PlainText } from "./markdown.tsx"
+import { formatFriendlyRelativeTime, formatFullTime } from "./types.ts"
 
 const USER_MESSAGE_FOLD_PX = 300
 
 const ACTION_BTN_CLASS =
   "text-muted-foreground hover:text-foreground hover:bg-accent/70 focus-visible:ring-ring/60 inline-flex size-6 items-center justify-center rounded-md bg-transparent outline-none transition-colors disabled:pointer-events-none disabled:opacity-40 focus-visible:ring-2"
 
-const AssistantBlock = ({ item }: { readonly item: AssistantItem }) => {
+const AssistantBlock = ({
+  item,
+  now,
+  onInspectModelCall,
+}: {
+  readonly item: AssistantItem
+  readonly now: number
+  readonly onInspectModelCall?: ((modelCallId: string) => void) | undefined
+}) => {
   const { isCopied, copyToClipboard } = useCopyToClipboard()
   const visibleParts = item.parts.filter((part) => part.type === "text")
   const hasError = item.error !== null || item.status === "cancelled" || item.status === "interrupted"
@@ -36,10 +45,24 @@ const AssistantBlock = ({ item }: { readonly item: AssistantItem }) => {
     .join("\n\n")
     .trim()
 
+  const handlePartClick = (event: React.MouseEvent, modelCallId: string) => {
+    if (!event.shiftKey || onInspectModelCall === undefined) return
+    const selection = typeof window !== "undefined" ? window.getSelection() : null
+    if (selection !== null && !selection.isCollapsed) return
+    event.preventDefault()
+    onInspectModelCall(modelCallId)
+  }
+
   return (
     <div className="group flex flex-col gap-2" data-run-id={item.runId} data-item-id={item.id}>
       {visibleParts.map((part) => (
-        <MarkdownText key={part.id} text={part.text} className="text-[0.9375rem] text-foreground" />
+        <div
+          key={part.id}
+          data-model-call-id={part.modelCallId}
+          onClick={(event) => handlePartClick(event, part.modelCallId)}
+        >
+          <MarkdownText text={part.text} className="text-[0.9375rem] text-foreground" />
+        </div>
       ))}
 
       {hasError && (
@@ -48,27 +71,46 @@ const AssistantBlock = ({ item }: { readonly item: AssistantItem }) => {
         </Alert>
       )}
 
-      {copyableText !== "" && (
+      {(copyableText !== "" || item.timestamp !== undefined) && (
         <div
           data-slot="assistant-message-actions"
-          className="-ms-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
+          className="-ms-1 flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
         >
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <button
-                  type="button"
-                  aria-label={isCopied ? "Copied" : "Copy"}
-                  className={ACTION_BTN_CLASS}
-                  onClick={() => copyToClipboard(copyableText)}
-                />
-              }
-            >
-              {isCopied ? <CheckIcon className="size-3.5" /> : <ClaudeCopyIcon className="size-4" />}
-              <span className="sr-only">{isCopied ? "Copied" : "Copy"}</span>
-            </TooltipTrigger>
-            <TooltipContent>{isCopied ? "Copied" : "Copy"}</TooltipContent>
-          </Tooltip>
+          {copyableText !== "" && (
+            <div className="flex items-center gap-0.5">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label={isCopied ? "Copied" : "Copy"}
+                      className={ACTION_BTN_CLASS}
+                      onClick={() => copyToClipboard(copyableText)}
+                    />
+                  }
+                >
+                  {isCopied ? <CheckIcon className="size-3.5" /> : <ClaudeCopyIcon className="size-4" />}
+                  <span className="sr-only">{isCopied ? "Copied" : "Copy"}</span>
+                </TooltipTrigger>
+                <TooltipContent>{isCopied ? "Copied" : "Copy"}</TooltipContent>
+              </Tooltip>
+            </div>
+          )}
+          {item.timestamp !== undefined && item.timestamp > 0 && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <time
+                    dateTime={new Date(item.timestamp).toISOString()}
+                    className="text-muted-foreground/60 cursor-default text-[11px] tabular-nums"
+                  />
+                }
+              >
+                {formatFriendlyRelativeTime(item.timestamp, now)}
+              </TooltipTrigger>
+              <TooltipContent>{formatFullTime(item.timestamp)}</TooltipContent>
+            </Tooltip>
+          )}
         </div>
       )}
     </div>
@@ -77,12 +119,14 @@ const AssistantBlock = ({ item }: { readonly item: AssistantItem }) => {
 
 const UserBubble = ({
   item,
+  now,
   observation,
   onRewind,
   onEdit,
   onFork,
 }: {
   readonly item: UserItem
+  readonly now: number
   readonly observation: SessionObservation | undefined
   readonly onRewind: (item: UserItem) => void
   readonly onEdit?: ((item: UserItem, text: string) => Promise<boolean>) | undefined
@@ -157,6 +201,8 @@ const UserBubble = ({
   }
 
   const stableMessageId = item.messages[0]?.id ?? item.id
+  const userAnchor = item.runId ?? stableMessageId
+  const userTimestamp = item.timestamp ?? item.messages[0]?.timestamp
 
   if (editing) {
     return (
@@ -164,6 +210,7 @@ const UserBubble = ({
         data-slot="user-message-edit"
         data-user-item-id={item.id}
         data-user-message-id={stableMessageId}
+        data-user-anchor={userAnchor}
         data-run-id={item.runId ?? undefined}
         className="group flex w-full flex-col items-end gap-2"
       >
@@ -242,6 +289,7 @@ const UserBubble = ({
     <div
       data-user-item-id={item.id}
       data-user-message-id={stableMessageId}
+      data-user-anchor={userAnchor}
       className="group flex flex-col items-end gap-1.5"
       data-run-id={item.runId ?? undefined}
     >
@@ -288,10 +336,26 @@ const UserBubble = ({
         )}
       </div>
 
-      <div
-        data-slot="user-message-actions"
-        className="flex items-center justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
-      >
+      <div className="flex items-center justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+        {userTimestamp !== undefined && userTimestamp > 0 && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <time
+                  dateTime={new Date(userTimestamp).toISOString()}
+                  className="text-muted-foreground/60 cursor-default text-[11px] tabular-nums"
+                />
+              }
+            >
+              {formatFriendlyRelativeTime(userTimestamp, now)}
+            </TooltipTrigger>
+            <TooltipContent>{formatFullTime(userTimestamp)}</TooltipContent>
+          </Tooltip>
+        )}
+        <div
+          data-slot="user-message-actions"
+          className="flex items-center justify-end gap-0.5"
+        >
         {item.runId !== null && observation !== undefined && (
           <>
             <Tooltip>
@@ -369,6 +433,7 @@ const UserBubble = ({
           </TooltipTrigger>
           <TooltipContent>{isCopied ? "Copied" : "Copy"}</TooltipContent>
         </Tooltip>
+        </div>
       </div>
     </div>
   )
@@ -380,6 +445,7 @@ export const Chat = ({
   onRewind,
   onEdit,
   onFork,
+  onInspectModelCall,
   elasticRoomPx = 0,
 }: {
   readonly view: SessionView
@@ -387,25 +453,35 @@ export const Chat = ({
   readonly onRewind: (item: UserItem) => void
   readonly onEdit?: (item: UserItem, text: string) => Promise<boolean>
   readonly onFork: (item: UserItem) => void
+  readonly onInspectModelCall?: (modelCallId: string) => void
   readonly elasticRoomPx?: number
-}) => (
-  <div data-slot="chat-transcript" className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-4 pt-6 pb-8">
-    {view.items.map((item) => {
-      if (item.kind === "user") {
-        return (
-          <UserBubble
-            key={item.id}
-            item={item}
-            observation={observation}
-            onRewind={onRewind}
-            onEdit={onEdit}
-            onFork={onFork}
-          />
-        )
-      }
-      if (item.kind === "assistant") {
-        return <AssistantBlock key={item.id} item={item} />
-      }
+}) => {
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  return (
+    <div data-slot="chat-transcript" className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-4 pt-6 pb-8">
+      {view.items.map((item) => {
+        if (item.kind === "user") {
+          return (
+            <UserBubble
+              key={item.id}
+              item={item}
+              now={now}
+              observation={observation}
+              onRewind={onRewind}
+              onEdit={onEdit}
+              onFork={onFork}
+            />
+          )
+        }
+        if (item.kind === "assistant") {
+          return <AssistantBlock key={item.id} item={item} now={now} onInspectModelCall={onInspectModelCall} />
+        }
       if (item.kind === "questions") {
         return <Questions key={item.id} item={item} />
       }
@@ -461,4 +537,5 @@ export const Chat = ({
       className="shrink-0"
     />
   </div>
-)
+  )
+}

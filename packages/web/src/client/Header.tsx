@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   AlertTriangleIcon,
   BarChart3Icon,
@@ -6,19 +6,17 @@ import {
   BrainIcon,
   CheckCircle2Icon,
   CheckIcon,
-  ChevronRightIcon,
   CircleDotIcon,
   InfoIcon,
   LayersIcon,
   Loader2Icon,
   MessageSquareIcon,
-  PanelLeftDashedIcon,
-  PanelLeftIcon,
+  RotateCcwIcon,
   WrenchIcon,
   XCircleIcon,
   XIcon,
 } from "lucide-react"
-import type { ModelCallContext, SemanticPageEntry } from "@ashe-agent/protocol"
+import type { ModelCallContext, ModelCallContextSummary, SemanticPageEntry } from "@ashe-agent/protocol"
 import { cn } from "cn"
 import { Badge } from "@/components/ui/badge.tsx"
 import { Button } from "@/components/ui/button.tsx"
@@ -28,12 +26,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu.tsx"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover.tsx"
-import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table.tsx"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx"
 import type { AssistantItem, ReasoningPart, SessionView, ToolPart } from "@/session/projection.ts"
-import { computeCheckpointStats, computeSessionStats, type CheckpointSegment } from "./stats.ts"
-import { VIEWS, formatFullTime, type ShortcutPreferences, type ViewName } from "./types.ts"
+import { SecondaryWindowIcon, SidebarPaneIcon } from "./icons.tsx"
+import { computeCheckpointStats, computeSessionStats, formatTokens, formatTokensTooltip, type CheckpointSegment } from "./stats.ts"
+import { VIEWS, formatCompactTime, formatFullTime, type ShortcutPreferences, type ViewName } from "./types.ts"
 
 export type SessionNotificationEntry =
   | {
@@ -48,6 +45,9 @@ export type SessionNotificationEntry =
       readonly kind: "notice"
       readonly tone: "info" | "warning" | "destructive"
       readonly timestamp: number
+      readonly sessionId?: string
+      readonly sessionTitle?: string
+      readonly isOtherSession?: boolean
       readonly message: string
       readonly detail?: string
       readonly badge?: string
@@ -101,7 +101,7 @@ const summarizeToolArgs = (argsText: string): string => {
   return trimmed.split("\n")[0] ?? ""
 }
 
-/** ActivityPreview entry content showing the last meaningful thought and/or tool call, even when idle. */
+/** ActivityPreview content showing the latest thought and/or tool call, even when idle. */
 const ActivityPreviewContent = ({
   view,
   onReveal,
@@ -119,14 +119,14 @@ const ActivityPreviewContent = ({
 
   if (thought === null && tool === null) {
     return (
-      <span className="text-muted-foreground flex h-full min-w-0 flex-1 items-center gap-1.5 truncate px-3">
+      <span className="text-muted-foreground flex h-full min-w-0 flex-1 items-center gap-1.5 truncate px-2.5">
         {active ? (
           <>
             <Loader2Icon className="text-primary size-3.5 shrink-0 animate-spin" />
             <span>Working…</span>
           </>
         ) : (
-          <span>No agent thoughts or tool calls yet</span>
+          <span>No agent activity yet</span>
         )}
       </span>
     )
@@ -140,16 +140,16 @@ const ActivityPreviewContent = ({
           onClick={() => onReveal(`thought:${thought.modelCallId ?? thought.id}`)}
           title={thoughtLine || "Thoughts"}
           className={cn(
-            "hover:bg-accent/70 focus-visible:bg-accent/70 flex h-full min-w-0 items-center gap-1.5 rounded-none px-3 text-start outline-none transition-colors",
-            split ? "basis-1/2 border-e border-border" : "flex-1",
+            "hover:bg-accent/70 focus-visible:bg-accent/70 flex h-full min-w-0 items-center gap-1.5 rounded-none px-2.5 text-start outline-none transition-colors",
+            split ? "basis-1/2 border-e border-border/70" : "flex-1",
           )}
         >
           <BrainIcon className={cn("size-3.5 shrink-0", active && tool === null ? "text-primary animate-pulse" : "text-muted-foreground")} />
           <span
             className="text-muted-foreground min-w-0 flex-1 overflow-hidden whitespace-nowrap"
             style={{
-              maskImage: "linear-gradient(to right, black calc(100% - 28px), transparent 100%)",
-              WebkitMaskImage: "linear-gradient(to right, black calc(100% - 28px), transparent 100%)",
+              maskImage: "linear-gradient(to right, black calc(100% - 24px), transparent 100%)",
+              WebkitMaskImage: "linear-gradient(to right, black calc(100% - 24px), transparent 100%)",
             }}
           >
             {thoughtLine || "Thinking…"}
@@ -162,7 +162,7 @@ const ActivityPreviewContent = ({
           onClick={() => onReveal(`tool:${tool.id}`)}
           title={`${tool.name}${toolSummary ? ` · ${toolSummary}` : ""}`}
           className={cn(
-            "hover:bg-accent/70 focus-visible:bg-accent/70 flex h-full min-w-0 items-center gap-1.5 rounded-none px-3 text-start outline-none transition-colors",
+            "hover:bg-accent/70 focus-visible:bg-accent/70 flex h-full min-w-0 items-center gap-1.5 rounded-none px-2.5 text-start outline-none transition-colors",
             split ? "basis-1/2" : "flex-1",
           )}
         >
@@ -178,14 +178,12 @@ const ActivityPreviewContent = ({
           <span
             className="min-w-0 flex-1 overflow-hidden whitespace-nowrap"
             style={{
-              maskImage: "linear-gradient(to right, black calc(100% - 28px), transparent 100%)",
-              WebkitMaskImage: "linear-gradient(to right, black calc(100% - 28px), transparent 100%)",
+              maskImage: "linear-gradient(to right, black calc(100% - 24px), transparent 100%)",
+              WebkitMaskImage: "linear-gradient(to right, black calc(100% - 24px), transparent 100%)",
             }}
           >
             <span className="font-mono text-[11px] font-medium text-foreground">{tool.name}</span>
-            {toolSummary !== "" && (
-              <span className="text-muted-foreground"> · {toolSummary}</span>
-            )}
+            {toolSummary !== "" && <span className="text-muted-foreground"> · {toolSummary}</span>}
           </span>
         </button>
       )}
@@ -193,7 +191,7 @@ const ActivityPreviewContent = ({
   )
 }
 
-/** Standalone ActivityPreview row (also rendered as an entry inside SessionNotifications). */
+/** Standalone ActivityPreview strip. */
 export const ActivityPreview = ({
   view,
   onReveal,
@@ -212,9 +210,11 @@ export const ActivityPreview = ({
 const NotificationEntryRow = ({
   entry,
   onActionComplete,
+  padRightForBell = false,
 }: {
   readonly entry: SessionNotificationEntry
   readonly onActionComplete?: () => void
+  readonly padRightForBell?: boolean
 }) => {
   if (entry.kind === "activity") {
     return (
@@ -242,23 +242,37 @@ const NotificationEntryRow = ({
       : entry.tone === "warning"
         ? "text-warning"
         : "text-muted-foreground"
+  const singlePrimaryAction =
+    entry.actionLabel !== undefined &&
+    entry.onAction !== undefined &&
+    entry.secondaryActionLabel === undefined &&
+    entry.onDismiss === undefined
 
   return (
     <div
       data-slot="notification-entry"
       data-kind="notice"
       className={cn(
-        "flex h-9 min-w-0 flex-1 items-center gap-2 px-3 text-xs",
+        "flex min-h-9 min-w-0 flex-1 items-center gap-2 py-1.5 ps-3 text-xs",
+        padRightForBell ? "pe-3" : "pe-0",
         entry.tone === "destructive" && "bg-destructive/5",
       )}
     >
       <ToneIcon className={cn("size-3.5 shrink-0", toneClass)} />
+      {entry.isOtherSession && entry.sessionTitle !== undefined && (
+        <Badge variant="outline" className="max-w-28 shrink-0 truncate text-[10px] font-normal">
+          {entry.sessionTitle}
+        </Badge>
+      )}
       {entry.badge !== undefined && (
         <Badge variant="secondary" className="shrink-0 font-mono text-[10px]">
           {entry.badge}
         </Badge>
       )}
-      <span className={cn("min-w-0 truncate", entry.tone === "destructive" ? "text-destructive font-medium" : "text-foreground")} title={entry.detail ? `${entry.message} — ${entry.detail}` : entry.message}>
+      <span
+        className={cn("min-w-0 flex-1 truncate", entry.tone === "destructive" ? "text-destructive font-medium" : "text-foreground")}
+        title={entry.detail ? `${entry.message} — ${entry.detail}` : entry.message}
+      >
         {entry.message}
         {entry.detail !== undefined && entry.detail !== "" && (
           <span className="text-muted-foreground font-normal"> · {entry.detail}</span>
@@ -285,7 +299,7 @@ const NotificationEntryRow = ({
             type="button"
             size="xs"
             variant="outline"
-            className="h-6 px-2 text-[11px]"
+            className={cn("h-6 px-2 text-[11px]", singlePrimaryAction && "w-24 justify-center")}
             onClick={(event) => {
               event.stopPropagation()
               entry.onAction?.()
@@ -310,22 +324,21 @@ const NotificationEntryRow = ({
             <XIcon className="size-3" />
           </Button>
         )}
+        {padRightForBell && <span className="w-10 shrink-0" aria-hidden="true" />}
       </div>
     </div>
   )
 }
 
-/**
- * Bar 2 notification queue.
- * Collapsed: renders the latest single entry (`h-9`).
- * Expanded: displays up to 5 entries in one viewport (`max-h-[180px]`, latest at top) with compact scroll.
- */
+/** Expandable notification queue component. */
 export const SessionNotifications = ({
   entries,
   defaultExpanded = false,
+  className,
 }: {
   readonly entries: ReadonlyArray<SessionNotificationEntry>
   readonly defaultExpanded?: boolean
+  readonly className?: string
 }) => {
   const [expanded, setExpanded] = useState(defaultExpanded)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -374,124 +387,49 @@ export const SessionNotifications = ({
       ref={containerRef}
       data-slot="session-notifications"
       data-expanded={expanded ? "true" : "false"}
-      className="bg-muted/30 relative flex h-9 shrink-0 items-stretch border-b text-xs"
+      className={cn(
+        "bg-muted/30 hover:bg-accent/45 relative flex h-9 shrink-0 cursor-pointer items-stretch gap-1 border-b pe-3 text-xs transition-colors",
+        expanded && "bg-accent/40",
+        className,
+      )}
       onClick={handleBarClick}
     >
       {expanded ? (
-        <div className="text-muted-foreground flex min-w-0 flex-1 items-center gap-2 px-3">
-          <BellIcon className={cn("size-3.5 shrink-0", bellToneClass)} />
-          <span className="font-medium text-foreground">Session notifications</span>
-          <span className={cn("tabular-nums", bellToneClass)}>({entries.length})</span>
+        <div className={cn("flex min-w-0 flex-1 items-center gap-2 ps-3", bellToneClass)}>
+          <BellIcon className="size-3.5 shrink-0" />
+          <span className="font-medium">Notifications</span>
+          <span className="tabular-nums">({entries.length})</span>
         </div>
       ) : latest !== undefined ? (
         <NotificationEntryRow entry={latest} />
       ) : (
-        <span className="text-muted-foreground flex flex-1 items-center px-3">No notifications</span>
+        <span className="text-muted-foreground flex flex-1 items-center ps-3">No notifications</span>
       )}
 
-      <button
-        type="button"
-        aria-expanded={expanded}
-        aria-label={expanded ? "Collapse session notifications" : `Expand session notifications (${entries.length})`}
-        title={expanded ? "Collapse notifications" : `Session notifications (${entries.length})`}
-        onClick={() => setExpanded((open) => !open)}
-        className={cn(
-          "hover:bg-accent/70 focus-visible:bg-accent/70 text-muted-foreground hover:text-foreground flex h-full shrink-0 items-center gap-1.5 px-2.5 outline-none transition-colors",
-          expanded && "bg-accent/70 text-foreground",
-        )}
-      >
-        <BellIcon className={cn("size-3.5 shrink-0", expanded ? "text-foreground" : bellToneClass)} />
-        {entries.length > 1 && (
-          <span className={cn("text-[11px] font-medium tabular-nums", expanded ? "text-foreground" : bellToneClass)}>
-            {entries.length}
-          </span>
-        )}
-      </button>
-
-      {expanded && (
-        <div
-          role="region"
-          aria-label="Session notifications"
-          data-slot="session-notifications-list"
-          className="bg-popover text-popover-foreground scrollbar-compact absolute inset-x-0 top-full z-30 max-h-[185px] overflow-y-auto border-b shadow-md divide-y divide-border/60"
+      {!expanded && (
+        <span
+          aria-hidden="true"
+          className="flex h-full w-10 shrink-0 items-center justify-center gap-1 select-none"
         >
-          {entries.map((entry) => (
-            <div key={entry.id} className="hover:bg-accent/35 flex h-9 items-stretch transition-colors">
-              <NotificationEntryRow entry={entry} onActionComplete={() => setExpanded(false)} />
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-/** Compact queue drawer button shown on Session/Checkpoint stats bars when non-activity alerts exist. */
-const StatsQueueToggle = ({
-  entries,
-}: {
-  readonly entries: ReadonlyArray<SessionNotificationEntry>
-}) => {
-  const [expanded, setExpanded] = useState(false)
-  const containerRef = useRef<HTMLDivElement>(null)
-  const alertCount = entries.filter((entry) => entry.kind !== "activity").length
-
-  useEffect(() => {
-    if (!expanded) return
-    const onPointerDown = (event: PointerEvent) => {
-      if (containerRef.current !== null && !containerRef.current.contains(event.target as Node)) {
-        setExpanded(false)
-      }
-    }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.stopPropagation()
-        setExpanded(false)
-      }
-    }
-    document.addEventListener("pointerdown", onPointerDown)
-    document.addEventListener("keydown", onKeyDown)
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown)
-      document.removeEventListener("keydown", onKeyDown)
-    }
-  }, [expanded])
-
-  if (alertCount === 0) return null
-
-  const hasDestructive = entries.some((entry) => entry.kind === "notice" && entry.tone === "destructive")
-  const hasWarning = entries.some((entry) => entry.kind === "notice" && entry.tone === "warning")
-  const bellToneClass = hasDestructive ? "text-destructive" : hasWarning ? "text-warning" : "text-sidebar-primary"
-
-  return (
-    <div ref={containerRef} className="flex h-full shrink-0 items-stretch">
-      <button
-        type="button"
-        aria-expanded={expanded}
-        aria-label={`Session notifications (${alertCount})`}
-        title={`Session notifications (${alertCount})`}
-        onClick={() => setExpanded((open) => !open)}
-        className={cn(
-          "hover:bg-accent/70 focus-visible:bg-accent/70 text-foreground flex h-full shrink-0 items-center gap-1.5 px-2.5 text-xs outline-none transition-colors",
-          expanded && "bg-accent/70",
-        )}
-      >
-        <BellIcon className={cn("size-3.5 shrink-0", expanded ? "text-foreground" : bellToneClass)} />
-        <span className={cn("text-[11px] font-medium tabular-nums", expanded ? "text-foreground" : bellToneClass)}>
-          {alertCount}
+          <BellIcon className={cn("size-3.5 shrink-0", bellToneClass)} />
+          {entries.length > 1 && (
+            <span className={cn("text-[11px] font-medium tabular-nums", bellToneClass)}>
+              {entries.length}
+            </span>
+          )}
         </span>
-      </button>
+      )}
 
       {expanded && (
         <div
           role="region"
-          aria-label="Session notifications"
+          aria-label="Notifications"
           data-slot="session-notifications-list"
-          className="bg-popover text-popover-foreground scrollbar-compact absolute inset-x-0 top-full z-30 max-h-[185px] overflow-y-auto border-b shadow-md divide-y divide-border/60"
+          className="bg-popover text-popover-foreground scrollbar-compact absolute inset-x-0 top-full z-30 max-h-[185px] cursor-default overflow-y-auto border-b shadow-md divide-y divide-border/60"
         >
           {entries.map((entry) => (
-            <div key={entry.id} className="hover:bg-accent/35 flex h-9 items-stretch transition-colors">
-              <NotificationEntryRow entry={entry} onActionComplete={() => setExpanded(false)} />
+            <div key={entry.id} className="hover:bg-accent/35 flex min-h-9 items-stretch transition-colors">
+              <NotificationEntryRow entry={entry} padRightForBell onActionComplete={() => setExpanded(false)} />
             </div>
           ))}
         </div>
@@ -500,109 +438,138 @@ const StatsQueueToggle = ({
   )
 }
 
-/** Persistent second header bar on Session showing high-value timeline stats and an expandable breakdown popover. */
-export const SessionStatsBar = ({
+/** Secondary-window panel body for Session insights. */
+export const SessionInsightsPanel = ({
   entries,
-  notifications = [],
 }: {
   readonly entries: ReadonlyArray<SemanticPageEntry>
-  readonly notifications?: ReadonlyArray<SessionNotificationEntry>
 }) => {
   const stats = useMemo(() => computeSessionStats(entries), [entries])
 
   return (
-    <div
-      data-slot="session-stats-bar"
-      className="bg-muted/30 relative flex h-9 shrink-0 items-stretch border-b text-xs"
-    >
-      <Popover>
-        <PopoverTrigger
-          render={
-            <button
-              type="button"
-              className="hover:bg-accent/70 focus-visible:bg-accent/70 flex h-full min-w-0 flex-1 items-center gap-3 overflow-hidden rounded-none px-3 text-start outline-none transition-colors"
-            />
-          }
-        >
-          <span className="text-foreground flex shrink-0 items-center gap-1.5 font-medium tabular-nums">
-            <MessageSquareIcon className="text-muted-foreground size-3.5 shrink-0" />
-            {stats.totalMessages} {stats.totalMessages === 1 ? "msg" : "msgs"}
-            <span className="text-muted-foreground font-normal">
-              ({stats.userMessages} user · {stats.agentMessages} agent)
-            </span>
-          </span>
+    <div data-slot="session-insights-panel" className="flex flex-col gap-4">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-muted-foreground text-xs tabular-nums">
+          {stats.totalMessages} {stats.totalMessages === 1 ? "message" : "messages"} ({stats.userMessages} user · {stats.agentMessages} agent)
+        </span>
+        <span className="text-muted-foreground tabular-nums text-[11px]">
+          {formatTokens(stats.estimatedTokens, true)} · {stats.thoughts} thoughts
+        </span>
+      </div>
 
-          <span className="bg-border h-3.5 w-px shrink-0" aria-hidden="true" />
-
-          <span className="flex min-w-0 items-center gap-1.5 truncate tabular-nums">
-            <WrenchIcon className="text-muted-foreground size-3.5 shrink-0" />
-            <span className="font-medium text-foreground shrink-0">
-              {stats.toolCalls} {stats.toolCalls === 1 ? "tool" : "tools"}
-            </span>
-            {stats.mostUsedTool !== null && (
-              <span className="text-muted-foreground truncate">
-                · top <code className="font-mono text-[11px] text-foreground">{stats.mostUsedTool.name}</code> ({stats.mostUsedTool.count})
-              </span>
-            )}
-            {stats.failedTools > 0 && (
-              <span className="text-destructive shrink-0 font-medium">· {stats.failedTools} failed</span>
-            )}
-          </span>
-
-          <span className="bg-border hidden h-3.5 w-px shrink-0 sm:inline-block" aria-hidden="true" />
-
-          <span className="text-muted-foreground hidden shrink-0 items-center gap-1.5 tabular-nums sm:flex">
-            <BarChart3Icon className="size-3.5 shrink-0" />
-            <span>~{stats.estimatedTokens.toLocaleString()} est. tokens</span>
-            <ChevronRightIcon className="text-muted-foreground/60 size-3 shrink-0" />
-          </span>
-        </PopoverTrigger>
-        <PopoverContent align="start" className="w-[min(28rem,calc(100vw-2rem))] gap-3 p-3.5">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-xs font-semibold text-foreground">Session insights</span>
-            <span className="text-muted-foreground tabular-nums text-[11px]">
-              ~{stats.estimatedTokens.toLocaleString()} est. tokens · {stats.thoughts} thoughts
-            </span>
+      {stats.topTools.length > 0 && (
+        <div className="flex flex-col gap-1.5 border-t pt-3">
+          <span className="text-muted-foreground text-[11px] font-medium uppercase tracking-wider">Tool calls</span>
+          <div className="flex flex-col gap-1">
+            {stats.topTools.slice(0, 12).map((tool) => (
+              <div key={tool.name} className="flex items-center justify-between gap-2 text-xs">
+                <code className="truncate font-mono text-[11px] text-foreground">{tool.name}</code>
+                <span className="text-muted-foreground shrink-0 tabular-nums">
+                  {tool.count}
+                  {tool.failed > 0 && <span className="text-destructive"> ({tool.failed} failed)</span>}
+                </span>
+              </div>
+            ))}
           </div>
+        </div>
+      )}
 
-          {stats.topTools.length > 0 && (
-            <div className="flex flex-col gap-1.5">
-              <span className="text-muted-foreground text-[11px] font-medium uppercase tracking-wider">Tool calls</span>
-              <div className="flex flex-col gap-1">
-                {stats.topTools.slice(0, 8).map((tool) => (
-                  <div key={tool.name} className="flex items-center justify-between gap-2 text-xs">
-                    <code className="truncate font-mono text-[11px] text-foreground">{tool.name}</code>
-                    <span className="text-muted-foreground shrink-0 tabular-nums">
-                      {tool.count}
-                      {tool.failed > 0 && <span className="text-destructive"> ({tool.failed} failed)</span>}
-                    </span>
-                  </div>
-                ))}
+      {stats.byKind.length > 0 && (
+        <div className="flex flex-col gap-1.5 border-t pt-3">
+          <span className="text-muted-foreground text-[11px] font-medium uppercase tracking-wider">Estimated by block type</span>
+          <div className="flex flex-col gap-1">
+            {stats.byKind.map((row) => (
+              <div key={row.kind} className="flex items-center justify-between gap-2 text-xs tabular-nums">
+                <span className="text-foreground">
+                  {row.label} <span className="text-muted-foreground">({row.count})</span>
+                </span>
+                <span className="font-mono text-[11px] text-muted-foreground">{formatTokens(row.tokens, true)}</span>
               </div>
-            </div>
-          )}
-
-          {stats.byKind.length > 0 && (
-            <div className="flex flex-col gap-1.5 border-t pt-2.5">
-              <span className="text-muted-foreground text-[11px] font-medium uppercase tracking-wider">Estimated tokens by block type</span>
-              <div className="flex flex-col gap-1">
-                {stats.byKind.map((row) => (
-                  <div key={row.kind} className="flex items-center justify-between gap-2 text-xs tabular-nums">
-                    <span className="text-foreground">
-                      {row.label} <span className="text-muted-foreground">({row.count})</span>
-                    </span>
-                    <span className="font-mono text-[11px] text-muted-foreground">~{row.tokens.toLocaleString()}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </PopoverContent>
-      </Popover>
-      <StatsQueueToggle entries={notifications} />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
+
+/** Compact Session stats trigger rendered inside ViewPanel (or standalone SessionStatsBar). */
+const SessionStatsContent = ({
+  entries,
+  secondaryWindowOpen = false,
+  onToggleSecondaryWindow,
+}: {
+  readonly entries: ReadonlyArray<SemanticPageEntry>
+  readonly secondaryWindowOpen?: boolean
+  readonly onToggleSecondaryWindow?: (() => void) | undefined
+}) => {
+  const stats = useMemo(() => computeSessionStats(entries), [entries])
+
+  return (
+    <button
+      type="button"
+      aria-expanded={onToggleSecondaryWindow !== undefined ? secondaryWindowOpen : undefined}
+      onClick={onToggleSecondaryWindow}
+      className={cn(
+        "hover:bg-accent/70 focus-visible:bg-accent/70 flex h-full min-w-0 flex-1 items-center gap-2.5 overflow-hidden rounded-none px-2.5 text-start outline-none transition-colors",
+        secondaryWindowOpen && "bg-accent/55",
+      )}
+    >
+      <span className="text-foreground flex shrink-0 items-center gap-1.5 font-medium tabular-nums">
+        <MessageSquareIcon className="text-muted-foreground size-3.5 shrink-0" />
+        {stats.totalMessages} {stats.totalMessages === 1 ? "msg" : "msgs"}
+        <span className="text-muted-foreground hidden font-normal lg:inline">
+          ({stats.userMessages} user · {stats.agentMessages} agent)
+        </span>
+      </span>
+
+      <span className="bg-border h-3.5 w-px shrink-0" aria-hidden="true" />
+
+      <span className="flex min-w-0 items-center gap-1.5 truncate tabular-nums">
+        <WrenchIcon className="text-muted-foreground size-3.5 shrink-0" />
+        <span className="font-medium text-foreground shrink-0">
+          {stats.toolCalls} {stats.toolCalls === 1 ? "tool" : "tools"}
+        </span>
+        {stats.mostUsedTool !== null && (
+          <span className="text-muted-foreground hidden truncate xl:inline">
+            · top <code className="font-mono text-[11px] text-foreground">{stats.mostUsedTool.name}</code> ({stats.mostUsedTool.count})
+          </span>
+        )}
+        {stats.failedTools > 0 && (
+          <span className="text-destructive shrink-0 font-medium">· {stats.failedTools} failed</span>
+        )}
+      </span>
+
+      <span className="bg-border h-3.5 w-px shrink-0" aria-hidden="true" />
+
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span className="text-muted-foreground flex shrink-0 items-center gap-1 tabular-nums" />
+          }
+        >
+          <BarChart3Icon className="size-3.5 shrink-0" />
+          <span>{formatTokens(stats.estimatedTokens, true)}</span>
+        </TooltipTrigger>
+        <TooltipContent>{formatTokensTooltip(stats.estimatedTokens, true)}</TooltipContent>
+      </Tooltip>
+    </button>
+  )
+}
+
+/** Standalone Session stats strip. */
+export const SessionStatsBar = ({
+  entries,
+}: {
+  readonly entries: ReadonlyArray<SemanticPageEntry>
+}) => (
+  <div
+    data-slot="session-stats-bar"
+    className="bg-muted/30 relative flex h-9 shrink-0 items-stretch border-b text-xs"
+  >
+    <SessionStatsContent entries={entries} />
+  </div>
+)
 
 const CheckpointDistributionBar = ({
   segments,
@@ -613,7 +580,7 @@ const CheckpointDistributionBar = ({
 }) => (
   <div
     className={cn("bg-muted flex overflow-hidden rounded-full border border-border/60", className)}
-    aria-label="Semantic token distribution"
+    aria-label="Context breakdown"
   >
     {segments.map((segment) => (
       <span
@@ -623,207 +590,341 @@ const CheckpointDistributionBar = ({
           backgroundColor: segment.colorToken,
         }}
         className="h-full border-e border-background/50 last:border-e-0"
-        title={`${segment.label}${segment.detail ? ` (${segment.detail})` : ""}: ~${segment.tokens.toLocaleString()} est. tokens (${Math.round(segment.share * 100)}%)`}
+        title={`${segment.label}${segment.detail ? ` (${segment.detail})` : ""}: ${formatTokens(segment.tokens, true)} (${Math.round(segment.share * 100)}%)`}
       />
     ))}
   </div>
 )
 
-/** Persistent second header bar on Checkpoint showing window size, stacked distribution bar, and 3-group breakdown popover. */
-export const CheckpointStatsBar = ({
+/** Secondary-window panel body for Checkpoint window context breakdown and snapshot selection. */
+export const CheckpointInsightsPanel = ({
   context,
+  contexts = [],
+  latestContextId = null,
+  isHistorical = false,
+  onSelectContext,
   entries,
   usage,
-  notifications = [],
 }: {
   readonly context: ModelCallContext | null
+  readonly contexts?: ReadonlyArray<ModelCallContextSummary>
+  readonly latestContextId?: string | null
+  readonly isHistorical?: boolean
+  readonly onSelectContext?: ((contextId: string | null) => void) | undefined
   readonly entries: ReadonlyArray<SemanticPageEntry>
   readonly usage: ReadonlyArray<{ readonly modelCallId: string; readonly providerUsage: unknown }>
-  readonly notifications?: ReadonlyArray<SessionNotificationEntry>
+}) => {
+  const stats = useMemo(() => computeCheckpointStats(context, entries, usage), [context, entries, usage])
+  const orderedSnapshots = useMemo(() => [...contexts].reverse(), [contexts])
+
+  if (stats === null) {
+    return (
+      <p className="text-muted-foreground text-xs">
+        No retained checkpoint window yet.
+      </p>
+    )
+  }
+
+  return (
+    <div data-slot="checkpoint-insights-panel" className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div>
+          <p className="text-xs font-semibold text-foreground">
+            Checkpoint window {stats.windowPosition} · {formatTokens(stats.windowTokens)}
+          </p>
+          <p className="text-muted-foreground text-[11px] tabular-nums">
+            {formatFullTime(stats.committedAt)}
+            {stats.coverage === "partial" ? ` · partial (${stats.unavailableCount} unmeasured)` : ""}
+          </p>
+        </div>
+        {isHistorical && onSelectContext !== undefined && (
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            className="h-6 gap-1 px-2 text-[11px]"
+            onClick={() => onSelectContext(null)}
+          >
+            <RotateCcwIcon className="size-3" />
+            Latest
+          </Button>
+        )}
+      </div>
+
+      {stats.groups.length > 0 && (
+        <div className="flex flex-col gap-2.5 border-t pt-3">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-muted-foreground text-[11px] font-medium uppercase tracking-wider">
+              Context breakdown
+            </span>
+            <span className="text-muted-foreground text-[10px]">est. · 1T ≈ 4 chars</span>
+          </div>
+          <CheckpointDistributionBar segments={stats.segments} className="h-3.5 w-full" />
+          <div className="flex flex-col gap-2 pt-1">
+            {stats.groups.map((group) => (
+              <div key={group.id} className="flex flex-col gap-1">
+                <div className="flex items-center justify-between gap-2 text-xs tabular-nums">
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    {group.subgroups.length === 0 && (
+                      <span
+                        className="size-2 shrink-0 rounded-full"
+                        style={{ backgroundColor: group.colorToken }}
+                        aria-hidden="true"
+                      />
+                    )}
+                    <span className="truncate font-semibold text-foreground">{group.label}</span>
+                    {group.detail !== undefined && (
+                      <span className="text-muted-foreground shrink-0 text-[11px]">({group.detail})</span>
+                    )}
+                  </span>
+                  <span className="font-mono text-[11px] font-medium text-foreground">
+                    {Math.round(group.share * 100)}%{" "}
+                    <span className="text-muted-foreground font-normal">({formatTokens(group.tokens, true)})</span>
+                  </span>
+                </div>
+                {group.subgroups.length > 0 && (
+                  <div className="flex flex-col gap-1 ps-3.5">
+                    {group.subgroups.map((subgroup) => (
+                      <div key={subgroup.id} className="flex items-center justify-between gap-2 text-xs tabular-nums">
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <span
+                            className="size-2 shrink-0 rounded-full"
+                            style={{ backgroundColor: subgroup.colorToken }}
+                            aria-hidden="true"
+                          />
+                          <span className="truncate text-foreground/90">{subgroup.label}</span>
+                          {subgroup.detail !== undefined && (
+                            <span className="text-muted-foreground truncate text-[11px]">({subgroup.detail})</span>
+                          )}
+                        </span>
+                        <span className="text-muted-foreground shrink-0 font-mono text-[11px]">
+                          {Math.round(subgroup.share * 100)}% ({formatTokens(subgroup.tokens, true)})
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {orderedSnapshots.length > 1 && onSelectContext !== undefined && (
+        <div className="flex flex-col gap-1.5 border-t pt-3">
+          <span className="text-muted-foreground text-[11px] font-medium uppercase tracking-wider">
+            Snapshots
+          </span>
+          <div className="flex flex-col gap-0.5">
+            {orderedSnapshots.map((snapshot) => {
+              const selected = snapshot.id === stats.contextId
+              const isLatest = snapshot.id === latestContextId
+              return (
+                <button
+                  key={snapshot.id}
+                  type="button"
+                  onClick={() => onSelectContext(isLatest ? null : snapshot.id)}
+                  className={cn(
+                    "hover:bg-accent/70 focus-visible:bg-accent/70 flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-start text-xs outline-none transition-colors",
+                    selected && "bg-accent/60 font-medium text-foreground",
+                  )}
+                >
+                  <span className="flex min-w-0 items-center gap-1.5 tabular-nums">
+                    <span className="text-foreground">Window {snapshot.windowPosition}</span>
+                    <span className="text-muted-foreground">· {formatCompactTime(snapshot.committedAt)}</span>
+                    {isLatest && (
+                      <Badge variant="secondary" className="px-1.5 py-0 text-[10px] font-normal">
+                        Latest
+                      </Badge>
+                    )}
+                  </span>
+                  <span className="text-muted-foreground flex shrink-0 items-center gap-1.5 text-[11px] tabular-nums">
+                    <span>{snapshot.itemCount} blocks</span>
+                    {selected && <CheckIcon className="text-ring size-3 shrink-0" />}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Compact Checkpoint window stats trigger rendered inside ViewPanel (or standalone CheckpointStatsBar). */
+const CheckpointStatsContent = ({
+  context,
+  isHistorical = false,
+  onSelectContext,
+  entries,
+  usage,
+  secondaryWindowOpen = false,
+  onToggleSecondaryWindow,
+}: {
+  readonly context: ModelCallContext | null
+  readonly isHistorical?: boolean
+  readonly onSelectContext?: ((contextId: string | null) => void) | undefined
+  readonly entries: ReadonlyArray<SemanticPageEntry>
+  readonly usage: ReadonlyArray<{ readonly modelCallId: string; readonly providerUsage: unknown }>
+  readonly secondaryWindowOpen?: boolean
+  readonly onToggleSecondaryWindow?: (() => void) | undefined
 }) => {
   const stats = useMemo(() => computeCheckpointStats(context, entries, usage), [context, entries, usage])
 
   if (stats === null) {
     return (
-      <div
-        data-slot="checkpoint-stats-bar"
-        className="bg-muted/30 text-muted-foreground relative flex h-9 shrink-0 items-stretch border-b text-xs"
-      >
-        <span className="flex flex-1 items-center px-3">No retained checkpoint window yet</span>
-        <StatsQueueToggle entries={notifications} />
-      </div>
+      <span className="text-muted-foreground flex h-full flex-1 items-center px-2.5">
+        No retained checkpoint window yet
+      </span>
     )
   }
 
   return (
-    <div
-      data-slot="checkpoint-stats-bar"
-      className="bg-muted/30 relative flex h-9 shrink-0 items-stretch border-b text-xs"
-    >
-      <Popover>
-        <PopoverTrigger
-          render={
-            <button
-              type="button"
-              className="hover:bg-accent/70 focus-visible:bg-accent/70 flex h-full min-w-0 flex-1 items-center gap-3 overflow-hidden rounded-none px-3 text-start outline-none transition-colors"
-            />
-          }
-        >
-          <span className="flex shrink-0 items-center gap-1.5 font-medium text-foreground tabular-nums">
+    <div className="flex h-full min-w-0 flex-1 items-stretch">
+      <button
+        type="button"
+        aria-expanded={onToggleSecondaryWindow !== undefined ? secondaryWindowOpen : undefined}
+        onClick={onToggleSecondaryWindow}
+        className={cn(
+          "hover:bg-accent/70 focus-visible:bg-accent/70 flex h-full min-w-0 flex-1 items-center gap-2.5 overflow-hidden rounded-none px-2.5 text-start outline-none transition-colors",
+          secondaryWindowOpen && "bg-accent/55",
+        )}
+      >
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span className="flex shrink-0 items-center gap-1.5 font-medium text-foreground tabular-nums" />
+            }
+          >
             <LayersIcon className="text-muted-foreground size-3.5 shrink-0" />
-            <span>
-              {stats.windowTokensSource === "provider"
-                ? `${stats.windowTokens.toLocaleString()} tokens`
-                : `~${stats.windowTokens.toLocaleString()} est. tokens`}
-            </span>
-            {stats.providerOutputTokens !== null && (
-              <span className="text-muted-foreground hidden font-normal md:inline">
-                / {stats.providerOutputTokens.toLocaleString()} out
-              </span>
-            )}
+            <span>{formatTokens(stats.windowTokens)}</span>
             {stats.coverage === "partial" && (
-              <span className="text-warning inline-flex items-center gap-0.5 text-[11px] font-normal" title={`${stats.unavailableCount} unmeasured contribution(s)`}>
+              <span className="text-warning inline-flex items-center gap-0.5 text-[11px] font-normal">
                 <AlertTriangleIcon className="size-3" />
                 partial
               </span>
             )}
-          </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            {formatTokensTooltip(stats.windowTokens)}
+            {stats.coverage === "partial" ? ` · ${stats.unavailableCount} unmeasured` : ""}
+          </TooltipContent>
+        </Tooltip>
 
-          {stats.segments.length > 0 && (
-            <>
-              <span className="bg-border h-3.5 w-px shrink-0" aria-hidden="true" />
-              <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
-                <CheckpointDistributionBar segments={stats.segments} className="h-2.5 min-w-20 max-w-64 flex-1" />
-                <span className="text-muted-foreground hidden truncate text-[11px] lg:inline">
-                  {stats.groups
-                    .map((group) => `${group.label} ${Math.round(group.share * 100)}%`)
-                    .join(" · ")}
-                </span>
-              </div>
-            </>
-          )}
-
-          <span className="text-muted-foreground ml-auto flex shrink-0 items-center gap-1 text-[11px] tabular-nums">
-            <span className="hidden sm:inline">Window {stats.windowPosition}</span>
-            <ChevronRightIcon className="text-muted-foreground/60 size-3 shrink-0" />
-          </span>
-        </PopoverTrigger>
-
-        <PopoverContent align="start" initialFocus={false} className="w-[min(36rem,calc(100vw-2rem))] gap-3.5 p-4">
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <div>
-              <p className="text-xs font-semibold text-foreground">Checkpoint window {stats.windowPosition}</p>
-              <p className="text-muted-foreground text-[11px] tabular-nums">
-                {stats.windowTokensSource === "provider"
-                  ? `${stats.windowTokens.toLocaleString()} provider input tokens`
-                  : `~${stats.windowTokens.toLocaleString()} estimated tokens`}{" "}
-                · {stats.coverage} coverage
-                {stats.unavailableCount > 0 ? ` · ${stats.unavailableCount} unmeasured` : ""} · {formatFullTime(stats.committedAt)}
-              </p>
+        {stats.segments.length > 0 && (
+          <>
+            <span className="bg-border h-3.5 w-px shrink-0" aria-hidden="true" />
+            <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+              <CheckpointDistributionBar segments={stats.segments} className="h-2 min-w-16 max-w-44 flex-1" />
+              <span className="text-muted-foreground hidden truncate text-[11px] xl:inline">
+                {stats.groups
+                  .map((group) => `${group.label} ${Math.round(group.share * 100)}%`)
+                  .join(" · ")}
+              </span>
             </div>
-            <code className="text-muted-foreground font-mono text-[10px]">{stats.contextId}</code>
-          </div>
+          </>
+        )}
 
-          {stats.groups.length > 0 && (
-            <div className="flex flex-col gap-2.5">
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="text-muted-foreground text-[11px] font-medium uppercase tracking-wider">
-                  Estimated semantic distribution
-                </span>
-                <span className="text-muted-foreground text-[10px]">1 token ≈ 4 chars</span>
-              </div>
-              <CheckpointDistributionBar segments={stats.segments} className="h-3.5 w-full" />
-              <div className="flex flex-col gap-2 border-t pt-2.5">
-                {stats.groups.map((group) => (
-                  <div key={group.id} className="flex flex-col gap-1">
-                    <div className="flex items-center justify-between gap-2 text-xs tabular-nums">
-                      <span className="flex min-w-0 items-center gap-1.5">
-                        {group.subgroups.length === 0 && (
-                          <span
-                            className="size-2 shrink-0 rounded-full"
-                            style={{ backgroundColor: group.colorToken }}
-                            aria-hidden="true"
-                          />
-                        )}
-                        <span className="truncate font-semibold text-foreground">{group.label}</span>
-                        {group.detail !== undefined && (
-                          <span className="text-muted-foreground shrink-0 text-[11px]">({group.detail})</span>
-                        )}
-                      </span>
-                      <span className="font-mono text-[11px] font-medium text-foreground">
-                        {Math.round(group.share * 100)}%{" "}
-                        <span className="text-muted-foreground font-normal">(~{group.tokens.toLocaleString()})</span>
-                      </span>
-                    </div>
-                    {group.subgroups.length > 0 && (
-                      <div className="flex flex-col gap-1 ps-3.5">
-                        {group.subgroups.map((subgroup) => (
-                          <div key={subgroup.id} className="flex items-center justify-between gap-2 text-xs tabular-nums">
-                            <span className="flex min-w-0 items-center gap-1.5">
-                              <span
-                                className="size-2 shrink-0 rounded-full"
-                                style={{ backgroundColor: subgroup.colorToken }}
-                                aria-hidden="true"
-                              />
-                              <span className="truncate text-foreground/90">{subgroup.label}</span>
-                              {subgroup.detail !== undefined && (
-                                <span className="text-muted-foreground truncate text-[11px]">({subgroup.detail})</span>
-                              )}
-                            </span>
-                            <span className="text-muted-foreground shrink-0 font-mono text-[11px]">
-                              {Math.round(subgroup.share * 100)}% (~{subgroup.tokens.toLocaleString()})
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="flex flex-col gap-1.5 border-t pt-2.5">
-            <span className="text-muted-foreground text-[11px] font-medium uppercase tracking-wider">
-              Provider-reported usage
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span className="text-muted-foreground ml-auto flex shrink-0 items-center gap-1 text-[11px] tabular-nums" />
+            }
+          >
+            <span className="hidden sm:inline">
+              Window {stats.windowPosition} · {formatCompactTime(stats.committedAt)}
             </span>
-            {stats.providerUsage.length === 0 ? (
-              <p className="text-muted-foreground text-xs">Unknown; the provider reported no usage.</p>
-            ) : (
-              <div className="flex flex-col gap-2">
-                {stats.providerUsage.map((entry) => (
-                  <div key={entry.modelCallId} className="flex flex-col gap-1">
-                    <span className="text-muted-foreground font-mono text-[10px]">{entry.modelCallId}</span>
-                    <Table>
-                      <TableBody>
-                        {entry.metrics.map((metric) => (
-                          <TableRow key={metric.key}>
-                            <TableCell className="py-1 font-mono text-xs text-muted-foreground">{metric.key}</TableCell>
-                            <TableCell className="py-1 text-right font-mono text-xs tabular-nums">{metric.value}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </PopoverContent>
-      </Popover>
-      <StatsQueueToggle entries={notifications} />
+          </TooltipTrigger>
+          <TooltipContent>{formatFullTime(stats.committedAt)}</TooltipContent>
+        </Tooltip>
+      </button>
+
+      {isHistorical && onSelectContext !== undefined && (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                onClick={() => onSelectContext(null)}
+                className="hover:bg-accent/70 focus-visible:bg-accent/70 text-sidebar-primary flex h-full shrink-0 items-center gap-1 border-s border-border/70 px-2 text-[11px] font-medium outline-none transition-colors"
+              />
+            }
+          >
+            <RotateCcwIcon className="size-3 shrink-0" />
+            <span>Latest</span>
+          </TooltipTrigger>
+          <TooltipContent>Return to latest checkpoint window snapshot</TooltipContent>
+        </Tooltip>
+      )}
     </div>
   )
 }
 
-/** Constant two-bar workspace header: Bar 1 = session title + Views dropdown; Bar 2 = SessionNotifications / view stats. */
+/** Standalone Checkpoint window stats strip. */
+export const CheckpointStatsBar = ({
+  context,
+  isHistorical = false,
+  onSelectContext,
+  entries,
+  usage,
+}: {
+  readonly context: ModelCallContext | null
+  readonly isHistorical?: boolean
+  readonly onSelectContext?: ((contextId: string | null) => void) | undefined
+  readonly entries: ReadonlyArray<SemanticPageEntry>
+  readonly usage: ReadonlyArray<{ readonly modelCallId: string; readonly providerUsage: unknown }>
+}) => (
+  <div
+    data-slot="checkpoint-stats-bar"
+    className="bg-muted/30 relative flex h-9 shrink-0 items-stretch border-b text-xs"
+  >
+    <CheckpointStatsContent
+      context={context}
+      isHistorical={isHistorical}
+      onSelectContext={onSelectContext}
+      entries={entries}
+      usage={usage}
+    />
+  </div>
+)
+
+/** View-owned inset panel slot inside the primary header bar. */
+export const ViewPanel = ({
+  children,
+  className,
+}: {
+  readonly children: ReactNode
+  readonly className?: string
+}) => (
+  <div
+    data-slot="view-panel"
+    className={cn(
+      "bg-muted/40 border-border/60 flex h-7 min-w-0 flex-1 items-stretch overflow-hidden rounded-lg border text-xs",
+      className,
+    )}
+  >
+    {children}
+  </div>
+)
+
+/**
+ * Primary workspace header bar (`44px` on desktop) hosting session title, view-owned `ViewPanel`,
+ * View switcher, and reserved Secondary Window toggle slot, plus a conditional `SessionNotifications`
+ * secondary bar whenever actionable alerts exist. On narrow mobile viewports, `ViewPanel` drops
+ * to a compact strip below the primary bar so title and controls stay readable.
+ */
 export const WorkspaceHeader = ({
   title,
   currentView,
   onViewChange,
+  view,
+  onReveal,
   notifications,
   semanticEntries,
   checkpointContext,
+  isHistoricalContext = false,
+  onSelectContext,
   checkpointUsage,
   sidebarPinned,
   onToggleSidebar,
@@ -832,13 +933,20 @@ export const WorkspaceHeader = ({
   attentionCount,
   needsHuman,
   shortcuts,
+  hasSecondaryContent = false,
+  secondaryWindowOpen = false,
+  onToggleSecondaryWindow,
 }: {
   readonly title: string
   readonly currentView: ViewName
   readonly onViewChange: (next: ViewName) => void
+  readonly view?: SessionView | undefined
+  readonly onReveal?: (target: string) => void
   readonly notifications: ReadonlyArray<SessionNotificationEntry>
   readonly semanticEntries: ReadonlyArray<SemanticPageEntry>
   readonly checkpointContext: ModelCallContext | null
+  readonly isHistoricalContext?: boolean
+  readonly onSelectContext?: ((contextId: string | null) => void) | undefined
   readonly checkpointUsage: ReadonlyArray<{ readonly modelCallId: string; readonly providerUsage: unknown }>
   readonly sidebarPinned: boolean
   readonly onToggleSidebar: () => void
@@ -847,9 +955,33 @@ export const WorkspaceHeader = ({
   readonly attentionCount: number
   readonly needsHuman: boolean
   readonly shortcuts: ShortcutPreferences
+  readonly hasSecondaryContent?: boolean
+  readonly secondaryWindowOpen?: boolean
+  readonly onToggleSecondaryWindow?: () => void
 }) => {
   const activeViewLabel = VIEWS.find((entry) => entry.value === currentView)?.label ?? "Chat"
   const shortcutHint = shortcuts.viewModifier === "alt" ? "Alt+I" : "Ctrl+I"
+
+  const viewPanelContent =
+    currentView === "chat" ? (
+      <ActivityPreviewContent view={view} onReveal={onReveal ?? (() => {})} />
+    ) : currentView === "session" ? (
+      <SessionStatsContent
+        entries={semanticEntries}
+        secondaryWindowOpen={secondaryWindowOpen}
+        onToggleSecondaryWindow={onToggleSecondaryWindow}
+      />
+    ) : (
+      <CheckpointStatsContent
+        context={checkpointContext}
+        isHistorical={isHistoricalContext}
+        onSelectContext={onSelectContext}
+        entries={semanticEntries}
+        usage={checkpointUsage}
+        secondaryWindowOpen={secondaryWindowOpen}
+        onToggleSecondaryWindow={onToggleSecondaryWindow}
+      />
+    )
 
   return (
     <div
@@ -876,7 +1008,7 @@ export const WorkspaceHeader = ({
               />
             }
           >
-            {sidebarPinned ? <PanelLeftIcon className="size-4" /> : <PanelLeftDashedIcon className="size-4" />}
+            <SidebarPaneIcon className="size-4" />
             {attentionCount > 0 && (
               <span className="bg-destructive text-destructive-foreground absolute -end-0.5 -top-0.5 flex min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-medium">
                 {attentionCount}
@@ -886,7 +1018,7 @@ export const WorkspaceHeader = ({
           <TooltipContent>{sidebarPinned ? "Toggle sidebar" : "Dock sidebar (hover to preview)"}</TooltipContent>
         </Tooltip>
 
-        <div className="flex min-w-0 flex-1 items-center gap-2">
+        <div className="flex min-w-0 shrink items-center gap-2 md:max-w-[14rem] lg:max-w-[18rem]">
           <h2 className="truncate text-sm font-medium text-foreground" title={title}>
             {title}
           </h2>
@@ -898,44 +1030,78 @@ export const WorkspaceHeader = ({
           )}
         </div>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <button
-                type="button"
-                aria-label="View"
-                title={`Switch view (${shortcutHint})`}
-                className="hover:bg-accent/70 data-[popup-open]:bg-accent/70 focus-visible:ring-ring/50 inline-flex h-7 shrink-0 items-center rounded-md px-2.5 text-xs font-medium text-foreground outline-none transition-colors focus-visible:ring-2"
-              />
-            }
-          >
-            <span>{activeViewLabel}</span>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" sideOffset={6} className="min-w-44 rounded-xl p-1 shadow-lg">
-            {VIEWS.map((entry) => (
-              <DropdownMenuItem
-                key={entry.value}
-                className="flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-xs"
-                onClick={() => onViewChange(entry.value)}
+        <div className="hidden min-w-0 flex-1 items-center justify-center px-2 md:flex">
+          <ViewPanel className="max-w-2xl">{viewPanelContent}</ViewPanel>
+        </div>
+
+        <div className="ml-auto flex shrink-0 items-center gap-1 md:ml-0">
+          <DropdownMenu>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <DropdownMenuTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label="View"
+                        className="hover:bg-accent/70 data-[popup-open]:bg-accent/70 focus-visible:ring-ring/50 inline-flex h-7 min-w-24 shrink-0 items-center justify-center rounded-md px-2.5 text-xs font-medium text-foreground outline-none transition-colors focus-visible:ring-2"
+                      />
+                    }
+                  />
+                }
               >
-                <span>{entry.label}</span>
-                {entry.value === currentView && <CheckIcon className="text-ring size-3.5 shrink-0" />}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+                <span>{activeViewLabel}</span>
+              </TooltipTrigger>
+              <TooltipContent>Switch view ({shortcutHint})</TooltipContent>
+            </Tooltip>
+            <DropdownMenuContent align="end" sideOffset={6} className="min-w-44 rounded-xl p-1 shadow-lg">
+              {VIEWS.map((entry) => (
+                <DropdownMenuItem
+                  key={entry.value}
+                  className="flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-xs"
+                  onClick={() => onViewChange(entry.value)}
+                >
+                  <span>{entry.label}</span>
+                  {entry.value === currentView && <CheckIcon className="text-ring size-3.5 shrink-0" />}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <div
+            data-slot="secondary-window-toggle-slot"
+            className="flex h-7 w-10 shrink-0 items-center justify-center"
+          >
+            {hasSecondaryContent && !secondaryWindowOpen && onToggleSecondaryWindow !== undefined && (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="Open secondary window"
+                      aria-expanded={false}
+                      aria-keyshortcuts="Control+."
+                      data-slot="secondary-window-toggle"
+                      onClick={onToggleSecondaryWindow}
+                    />
+                  }
+                >
+                  <SecondaryWindowIcon className="size-4" />
+                </TooltipTrigger>
+                <TooltipContent>Open secondary window (Ctrl+.)</TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+        </div>
       </header>
 
-      {currentView === "chat" && <SessionNotifications entries={notifications} />}
-      {currentView === "session" && <SessionStatsBar entries={semanticEntries} notifications={notifications} />}
-      {currentView === "checkpoint" && (
-        <CheckpointStatsBar
-          context={checkpointContext}
-          entries={semanticEntries}
-          usage={checkpointUsage}
-          notifications={notifications}
-        />
-      )}
+      <div className="bg-muted/30 flex h-9 shrink-0 items-stretch border-b text-xs md:hidden">
+        {viewPanelContent}
+      </div>
+
+      {notifications.length > 0 && <SessionNotifications entries={notifications} />}
     </div>
   )
 }

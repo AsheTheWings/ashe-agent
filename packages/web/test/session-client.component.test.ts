@@ -932,6 +932,32 @@ describe("session client", () => {
     expect(view(client).pending.map((input) => input.inputId)).toEqual(["i6"])
     expect(texts(view(client)).slice(0, 11).at(-1)).toBe("mark:clearing")
   })
+
+  test("reloadSemantic restarts from the current revision on stale-revision conflict without setting client error", async () => {
+    const { server, client } = await signedIn()
+    await client.open(SESSION)
+    let pageCalls = 0
+    const prevAnswer = server.answer
+    server.answer = (request) => {
+      if (request.method === "session.semantics.page") {
+        pageCalls += 1
+        const object = request.params.object as "entries" | "turns" | "contexts"
+        if (object === "entries" && pageCalls === 1) {
+          return { result: { object: "entries", revision: "rev-1", items: [], nextCursor: null, latestModelCallContextId: null } }
+        }
+        if (object === "turns" && request.params.revision === "rev-1") {
+          return { error: { code: ErrorCode.conflict, message: "the semantic page revision is stale; restart from the current revision" } }
+        }
+        return { result: { object, revision: "rev-2", items: [], nextCursor: null, latestModelCallContextId: "ctx-2" } }
+      }
+      return prevAnswer?.(request)
+    }
+
+    await client.reloadSemantic(SESSION)
+    expect(client.store.getState().error).toBeNull()
+    expect(client.store.getState().semantic[SESSION]?.revision).toBe("rev-2")
+    expect(client.store.getState().semantic[SESSION]?.latestModelCallContextId).toBe("ctx-2")
+  })
 })
 
 describe("GitHub browser sign-in", () => {

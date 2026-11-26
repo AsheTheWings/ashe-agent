@@ -3,9 +3,32 @@ import {
   estimateText,
   type ContextMediaProjection,
   type ModelCallContext,
+  type ModelCallContextItem,
+  type OfferedToolDefinition,
   type SemanticEntry,
   type SemanticPageEntry,
 } from "@ashe-agent/protocol"
+
+/** Formats a token count compactly (`754`, `~754`, `4.7K`, `79.1K`, `1.2M`). */
+export const formatTokens = (tokens: number, estimated = false): string => {
+  const prefix = estimated ? "~" : ""
+  const abs = Math.abs(tokens)
+  if (abs < 1_000) return `${prefix}${tokens}`
+  if (abs < 1_000_000) {
+    const k = Math.round((tokens / 1_000) * 10) / 10
+    if (Math.abs(k) >= 1_000) {
+      const m = Math.round((tokens / 1_000_000) * 10) / 10
+      return `${prefix}${Number.isInteger(m) ? m.toFixed(0) : m.toFixed(1)}M`
+    }
+    return `${prefix}${Number.isInteger(k) ? k.toFixed(0) : k.toFixed(1)}K`
+  }
+  const m = Math.round((tokens / 1_000_000) * 10) / 10
+  return `${prefix}${Number.isInteger(m) ? m.toFixed(0) : m.toFixed(1)}M`
+}
+
+/** Exact human-readable token label for tooltips (e.g. `4,710 tokens` or `~754 estimated tokens`). */
+export const formatTokensTooltip = (tokens: number, estimated = false): string =>
+  `${estimated ? "~" : ""}${tokens.toLocaleString()} ${estimated ? "estimated " : ""}${tokens === 1 ? "token" : "tokens"}`
 
 export type SessionToolStat = {
   readonly name: string
@@ -42,7 +65,7 @@ const KIND_LABELS: Record<SemanticEntry["kind"], string> = {
   "agent-tool": "Tool calls",
 }
 
-const estimateEntryTokens = (item: SemanticPageEntry): number => {
+export const estimateEntryTokens = (item: SemanticPageEntry): number => {
   if (item.body !== null) return Math.ceil(item.body.byteLength / 4)
   const { entry } = item
   switch (entry.kind) {
@@ -262,6 +285,30 @@ const estimateMediaTokens = (projections: ReadonlyArray<ContextMediaProjection>)
 
 const byteTokens = (bytes: number): number => (bytes > 0 ? Math.max(1, Math.ceil(bytes / 4)) : 0)
 
+/** Estimates tokens for one offered tool definition schema. */
+export const estimateToolDefinitionTokens = (tool: OfferedToolDefinition): number =>
+  estimateStructured({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+  })
+
+/** Estimates tokens contributed by one ModelCallContext item (0 for opaque thoughts). */
+export const estimateContextItemTokens = (item: ModelCallContextItem): number => {
+  switch (item.kind) {
+    case "system-message":
+    case "developer-message":
+    case "agent-message":
+      return byteTokens(item.byteLength)
+    case "user-message":
+      return byteTokens(item.byteLength) + estimateMediaTokens(item.attachments)
+    case "agent-thought":
+      return item.opaque ? 0 : byteTokens(item.byteLength)
+    case "agent-tool":
+      return byteTokens(item.inputByteLength) + byteTokens(item.resultByteLength) + estimateMediaTokens(item.resultMedia)
+  }
+}
+
 /**
  * Computes Checkpoint window size (provider-reported when available) and the
  * estimated 3-group semantic distribution (`Harness`, `Agent output`, `User messages`).
@@ -292,11 +339,7 @@ export const computeCheckpointStats = (
   let hasOpaqueReplay = false
 
   for (const tool of context.tools) {
-    toolDefTokens += estimateStructured({
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-    })
+    toolDefTokens += estimateToolDefinitionTokens(tool)
   }
 
   for (const item of context.items) {
