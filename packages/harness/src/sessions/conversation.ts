@@ -271,6 +271,7 @@ const semanticEntryFromRow = (row: SemanticRow): SemanticEntry | null => {
   if (row.kind === "user") {
     const content = decodeContent(row) as {
       readonly text?: string
+      readonly sender?: MessageSender
       readonly attachments?: ReadonlyArray<{
         readonly attachmentId: string
         readonly contentId: string
@@ -283,6 +284,7 @@ const semanticEntryFromRow = (row: SemanticRow): SemanticEntry | null => {
     return {
       ...base,
       kind: "user",
+      ...(content.sender === undefined ? {} : { sender: content.sender }),
       parts: [
         ...(content.text === undefined || content.text === "" ? [] : [{ kind: "text" as const, text: content.text }]),
         ...(content.attachments ?? []).map((attachment) => ({

@@ -45,7 +45,7 @@ describe("bounded semantic reads", () => {
       await server.start()
       const client = await connect(server.url, token)
       const sessionId = await createSession(client)
-      const large = "context ".repeat(3_000)
+      const large = "context ".repeat(9_000)
       model.next(callTools([{ name: "big", args: {} }]), say("complete", { inputTokens: 1_234 }))
       await client.request("session.input", { sessionId, text: large })
       await waitFor("the turn", async () =>
@@ -60,6 +60,7 @@ describe("bounded semantic reads", () => {
       const userEntry = first.result.items.find((item: { entry: { kind: string } }) => item.entry.kind === "user")
       expect(userEntry.body).toMatchObject({ referenceId: userEntry.entry.id })
       expect(userEntry.entry.parts).toEqual([])
+      expect(userEntry.entry.sender).toMatchObject({ kind: "token", name: "semantic-pages" })
       const firstPage = await client.request("session.semantics.page", { sessionId, object: "entries", limit: 2 })
       expect(firstPage.result.nextCursor).toBeString()
       const nextPage = await client.request("session.semantics.page", {
@@ -79,6 +80,7 @@ describe("bounded semantic reads", () => {
       })
       expect(body.error).toBeUndefined()
       expect(body.result.entry.parts[0].text).toBe(large)
+      expect(body.result.entry.sender).toMatchObject({ kind: "token", name: "semantic-pages" })
 
       const tool = first.result.items.find((item: { entry: { kind: string } }) => item.entry.kind === "agent-tool")
       expect(tool.entry.tool.captures.length).toBeGreaterThan(0)
@@ -289,6 +291,47 @@ describe("bounded semantic reads", () => {
         limit: 1,
       })
       expect(stale.error?.code).toBe(-32005)
+    } finally {
+      await server.cleanup()
+    }
+  }, 30_000)
+
+  test("exposes peer-session sender identity on user semantic entries", async () => {
+    const model = new FakeModel()
+    const server = new TestServer({ shell: "deny" }, {
+      models,
+      runner: agentRunner({ port: model, models }),
+      modelPort: model,
+      tools: () => testTools(),
+    })
+    const token = server.token("semantic-peer")
+    try {
+      await server.start()
+      const client = await connect(server.url, token)
+      const sourceSessionId = await createSession(client)
+      const targetSessionId = await createSession(client)
+      model.next(
+        callTools([{ name: "session_message", args: { sessionId: targetSessionId, text: "hello peer" } }]),
+        say("messaged peer"),
+      )
+      model.next(say("received peer"))
+      await client.request("session.input", { sessionId: sourceSessionId, text: "notify peer" })
+      await waitFor("both sessions finish", async () => {
+        const hub = await server.hub()
+        const sourceDone = hub.store.eventsAfter(sourceSessionId, 0).some((event) => event.event.type === "RUN_FINISHED")
+        const targetDone = hub.store.eventsAfter(targetSessionId, 0).some((event) => event.event.type === "RUN_FINISHED")
+        return sourceDone && targetDone ? true : undefined
+      })
+      const targetPage = await client.request("session.semantics.page", { sessionId: targetSessionId, object: "entries", limit: 10 })
+      expect(targetPage.error).toBeUndefined()
+      expect(Schema.decodeUnknownExit(SemanticPage)(targetPage.result)._tag).toBe("Success")
+      const peerUserEntry = targetPage.result.items.find((item: { entry: { kind: string } }) => item.entry.kind === "user")
+      expect(peerUserEntry.entry.sender).toEqual({
+        kind: "session",
+        sessionId: sourceSessionId,
+        agentTitle: "untitled",
+        modelId: models[0]!.id,
+      })
     } finally {
       await server.cleanup()
     }

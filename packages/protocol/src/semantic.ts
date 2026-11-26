@@ -4,6 +4,7 @@ import {
   AgentTitle,
   Count,
   Id,
+  MessageSender,
   ModelSettings,
   SelectionPatch,
   Seq,
@@ -176,7 +177,12 @@ export const SemanticEntry = Schema.Union([
     kind: Schema.Literal("developer"),
     components: Schema.Array(SemanticDeveloperComponent),
   }),
-  Schema.Struct({ ...entryFields, kind: Schema.Literal("user"), parts: Schema.Array(UserContentPart) }),
+  Schema.Struct({
+    ...entryFields,
+    kind: Schema.Literal("user"),
+    sender: Schema.optionalKey(MessageSender),
+    parts: Schema.Array(UserContentPart),
+  }),
   Schema.Struct({
     ...entryFields,
     kind: Schema.Literal("agent"),

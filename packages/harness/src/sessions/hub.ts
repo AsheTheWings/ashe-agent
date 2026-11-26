@@ -412,7 +412,7 @@ const historyFingerprint = (
     .digest("hex")
 
 /** Bodies larger than this are returned by reference instead of inline in a page. */
-const SEMANTIC_INLINE_BODY_BYTES = 8 * 1024
+const SEMANTIC_INLINE_BODY_BYTES = 64 * 1024
 
 const omitEntryBody = (entry: SemanticEntry): SemanticEntry => {
   switch (entry.kind) {
