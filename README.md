@@ -113,6 +113,8 @@ method (**Continue with GitHub** or, in development, the password form).
   developer components, and model switching.
 - [Web client](docs/web-client.md): the built-in backend, three views,
   composer recovery, inbox, signing in, and browser state.
+- [Design system](DESIGN.md): web client visual tokens, layout rules,
+  component primitives, and interaction guidelines.
 - [Telemetry](docs/telemetry.md): the traces, metrics, and logs the server
   emits, and where it exports them.
 - [Trust model](docs/trust-model.md): what the agent can reach and what

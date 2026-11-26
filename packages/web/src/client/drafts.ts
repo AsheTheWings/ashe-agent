@@ -59,16 +59,30 @@ const empty = (): DraftRecord => ({ version: 1, active: null, submissions: [], r
 const key = (authority: string, sessionId: string, writerId: string) => `${PREFIX}:${authority}:${sessionId}:${writerId}`
 
 /** The current page's writer identity; a reload always allocates a new one. */
-export const newWriterId = () => crypto.randomUUID()
+import { randomId } from "./types.ts"
+
+export const newWriterId = () => randomId()
 
 export class DraftStore {
   readonly writerId = newWriterId()
+  private readonly listeners = new Set<(authority: string, sessionId: string) => void>()
 
   constructor(
     private readonly storage: Storage,
     private readonly hints: Storage,
     private readonly now: () => number = Date.now,
   ) {}
+
+  subscribe(listener: (authority: string, sessionId: string) => void): () => void {
+    this.listeners.add(listener)
+    return () => {
+      this.listeners.delete(listener)
+    }
+  }
+
+  private notify(authority: string, sessionId: string) {
+    for (const listener of this.listeners) listener(authority, sessionId)
+  }
 
   private readRecord(authority: string, sessionId: string, writerId: string): DraftRecord | null {
     const raw = this.storage.getItem(key(authority, sessionId, writerId))
@@ -96,6 +110,7 @@ export class DraftStore {
     try {
       this.storage.setItem(key(authority, sessionId, this.writerId), JSON.stringify(record))
       this.remember(authority, sessionId)
+      this.notify(authority, sessionId)
       return { ok: true }
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : "browser storage is unavailable" }
@@ -135,7 +150,7 @@ export class DraftStore {
     const record = this.load(authority, sessionId)
     const active: Draft = {
       version: DRAFT_FORMAT,
-      id: record.active?.id ?? crypto.randomUUID(),
+      id: record.active?.id ?? randomId(),
       authority,
       sessionId,
       writerId: this.writerId,
@@ -208,7 +223,7 @@ export class DraftStore {
     const record = this.load(authority, sessionId)
     const active: Draft = {
       ...source,
-      id: crypto.randomUUID(),
+      id: randomId(),
       authority,
       sessionId,
       writerId: this.writerId,
@@ -265,7 +280,7 @@ export class DraftStore {
 
 export const newDraft = (authority: string, sessionId: string, writerId: string, now: number): Draft => ({
   version: DRAFT_FORMAT,
-  id: crypto.randomUUID(),
+  id: randomId(),
   authority,
   sessionId,
   writerId,
