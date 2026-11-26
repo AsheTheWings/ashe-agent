@@ -6,6 +6,7 @@ import { DiagnosticError, exportDiagnostics, parseDiagnostics } from "./diagnost
 import { readMigrationStatus, type Migration } from "./migrations.ts"
 import type { WebStore } from "./store.ts"
 import { WebStoreError } from "./store.ts"
+import { isSpaRoute } from "../shared/routes.ts"
 import {
   WEB_DIAGNOSTICS_PATH,
   WEB_HEALTH_PATH,
@@ -150,7 +151,8 @@ export class WebServer {
 
   private staticAsset(pathname: string, root: string | null): Response {
     if (root === null) return new Response("the web application is not built", { status: 503 })
-    const relative = pathname === "/" ? "/index.html" : pathname
+    const shell = isSpaRoute(pathname)
+    const relative = shell ? "/index.html" : pathname
     let decoded: string
     try {
       decoded = decodeURIComponent(relative)
@@ -161,7 +163,7 @@ export class WebServer {
     if (!path.startsWith(`${root}${sep}`) || !existsSync(path) || !statSync(path).isFile()) return new Response("not found", { status: 404 })
     const type = contentTypes[extname(path).toLowerCase()]
     if (type === undefined) return new Response("not found", { status: 404 })
-    const cache = pathname === "/" || pathname === "/index.html" || !hashed(pathname) ? "no-cache" : "public, max-age=31536000, immutable"
+    const cache = shell || pathname === "/index.html" || !hashed(pathname) ? "no-cache" : "public, max-age=31536000, immutable"
     return new Response(readFileSync(path), { headers: { "content-type": type, "cache-control": cache, ...securityHeaders } })
   }
 
