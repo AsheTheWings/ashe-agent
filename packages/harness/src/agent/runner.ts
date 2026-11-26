@@ -1,5 +1,5 @@
 import { AIMessage, type AIMessageChunk } from "@langchain/core/messages"
-import type { SessionEventBody } from "@ashe-agent/protocol"
+import type { ModelCallContextItem, SessionEventBody } from "@ashe-agent/protocol"
 import { context as otelContext } from "@opentelemetry/api"
 import { Effect } from "effect"
 import { RESERVE } from "../context/constants.ts"
@@ -516,15 +516,42 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
       }
       projectedResults.set(item.entryId, parts)
     }
-    const renderedGroups: Array<{ readonly sourceEntryIds: ReadonlyArray<string>; readonly rendered: string }> = []
     const renderedMessages: Array<{ readonly sourceEntryIds: ReadonlyArray<string>; readonly rendered: string }> = []
-    const messages = renderWindow(window.harness, window.items, turn.model, model.imageInput, turn.agentTitle, (sourceEntryIds, rendered) =>
-      renderedGroups.push({ sourceEntryIds: [...sourceEntryIds], rendered }),
+    const harnessDigest = contentDigest(window.harness)
+    context.storeContent(harnessDigest, window.harness)
+    const contextItems: Array<ModelCallContextItem> = [
+      {
+        kind: "system-message",
+        sourceEntryId: window.systemEntryId ?? null,
+        contentId: harnessDigest,
+        byteLength: Buffer.byteLength(window.harness),
+      },
+    ]
+    const messages = renderWindow(
+      window.harness,
+      window.items,
+      turn.model,
+      model.imageInput,
+      turn.agentTitle,
+      undefined,
       projectedAttachments,
       model.pdfInput,
       projectedResults,
       (sourceEntryIds, rendered) => renderedMessages.push({ sourceEntryIds: [...sourceEntryIds], rendered }),
+      (item) => contextItems.push(item),
+      window.thoughtEntryIds,
     )
+    for (const content of projectedResults.values()) {
+      if (typeof content === "string") continue
+      for (const part of content) {
+        if (part.representation === undefined) continue
+        context.storeContent(
+          part.representation.contentId,
+          part.type === "text" ? part.text : Buffer.from(part.data, "base64"),
+          part.representation.mediaType,
+        )
+      }
+    }
     // The context limit, checked before each model call: an estimate reaching the checkpoint window size.
     const measurement = measureCall(REQUEST_INSTRUCTIONS, messages, specs, {
       ...(options.imageTokens === undefined ? {} : { imageTokens: options.imageTokens }),
@@ -555,7 +582,6 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
     const chunks: Array<AIMessageChunk> = []
     const modelCallId = crypto.randomUUID()
     const inputBoundaryId = crypto.randomUUID()
-    const instructionDigest = contentDigest(REQUEST_INSTRUCTIONS)
     const providerRendered = retainRendered(
       context,
       JSON.stringify({ instructions: REQUEST_INSTRUCTIONS, messages, tools: specs }),
@@ -567,7 +593,7 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
       ordinal: modelCallOrdinal,
       windowPosition: window.position,
       request: {
-        version: 1,
+        version: 2,
         instructions: REQUEST_INSTRUCTIONS,
         measurement,
         providerInput: {
@@ -578,158 +604,12 @@ const loop = async (options: AgentOptions, context: TurnContext, events: TurnEve
           byteLength: providerRendered.byteLength,
           messageCount: messages.length,
         },
-        contributions: [
-          {
-            position: 0,
-            kind: "instruction",
-            sourceEntryId: null,
-            representation: {
-              representationId: instructionDigest,
-              contentId: instructionDigest,
-              mediaType: "text/plain",
-              digest: instructionDigest,
-              transformation: "system-block",
-            },
-            transformation: "system-block",
-            rendered: retainRendered(context, REQUEST_INSTRUCTIONS, "ashe-agent/instruction@1"),
-          },
-          {
-            position: 500,
-            kind: "message" as const,
-            sourceEntryId: null,
-            representation: {
-              representationId: contentDigest(window.harness),
-              contentId: contentDigest(window.harness),
-              mediaType: "text/plain",
-              digest: contentDigest(window.harness),
-              transformation: "harness-system",
-            },
-            transformation: "harness-system",
-            rendered: retainRendered(context, window.harness, "ashe-agent/system@1"),
-          },
-          ...renderedGroups.flatMap((group, index) => {
-            const groupItems = group.sourceEntryIds.flatMap((entryId) => {
-              const item = window.items.find((candidate) => candidate.entryId === entryId)
-              return item === undefined ? [] : [item]
-            })
-            const first = groupItems[0]
-            if (first === undefined) return []
-            const transformation =
-              first.kind === "result" && first.cleared
-                ? "context-result-cleared"
-                : groupItems.some((item) => item.runId !== null && (item.agentTitle !== turn.agentTitle || item.model !== turn.model))
-                  ? "foreign-transcript"
-                  : first.kind === "component"
-                    ? "developer-block"
-                    : first.kind === "user"
-                      ? "user-block"
-                      : first.kind === "assistant"
-                        ? "native-replay"
-                        : "tool-result"
-            const itemContribution = {
-              position: (index + 1) * 1_000,
-              kind: "message" as const,
-              sourceEntryId: first.entryId,
-              sourceEntryIds: group.sourceEntryIds,
-              representation: {
-                representationId: first.representationId,
-                contentId: first.contentId,
-                mediaType: first.contentFormat,
-                digest: first.representationId,
-                transformation,
-              },
-              transformation,
-              rendered: retainRendered(context, group.rendered, "ashe-agent/window@1"),
-            }
-            let attachmentOffset = 0
-            const attachments = groupItems.flatMap((item) =>
-              item.kind === "user"
-                ? (projectedAttachments.get(item.entryId)?.contributions ?? (item.attachments ?? []).map((attachment) => ({
-                    representation: {
-                      representationId: attachment.representationId,
-                      contentId: attachment.contentId,
-                      mediaType: attachment.mediaType,
-                      digest: attachment.digest,
-                      transformation: "attachment-original",
-                    },
-                    transformation: "attachment-original",
-                  }))).map((attachment) => ({
-                    position: (index + 1) * 1_000 + ++attachmentOffset,
-                    kind: "message" as const,
-                    sourceEntryId: item.entryId,
-                    representation: attachment.representation,
-                    transformation: attachment.transformation,
-                    rendered: {
-                      representationId: attachment.representation.representationId,
-                      contentId: attachment.representation.contentId,
-                      mediaType: attachment.representation.mediaType,
-                      digest: attachment.representation.digest,
-                      renderer: "ashe-agent/original@1",
-                    },
-                  }))
-                : [],
-            )
-            const results = groupItems.flatMap((item) => {
-              if (item.kind !== "result") return []
-              const content = projectedResults.get(item.entryId)
-              if (typeof content === "string" || content === undefined) return []
-              let partOffset = 0
-              return content.flatMap((part) => {
-                const representation = part.representation
-                if (representation === undefined) return []
-                context.storeContent(
-                  representation.contentId,
-                  part.type === "text" ? part.text : Buffer.from(part.data, "base64"),
-                  representation.mediaType,
-                )
-                return [{
-                  position: (index + 1) * 1_000 + ++partOffset,
-                  kind: "message" as const,
-                  sourceEntryId: item.entryId,
-                  representation,
-                  transformation: representation.transformation ?? "model-projection",
-                  rendered: part.type === "text"
-                    ? retainRendered(context, part.text, "ashe-agent/projection@1")
-                    : {
-                        representationId: representation.representationId,
-                        contentId: representation.contentId,
-                        mediaType: representation.mediaType,
-                        digest: representation.digest,
-                        renderer: "ashe-agent/projection@1",
-                      },
-                }]
-              })
-            })
-            return [itemContribution, ...attachments, ...results]
-          }),
-          ...specs.map((spec, index) => ({
-            position: 1_000_000 + index,
-            kind: "tool-definition" as const,
-            name: spec.name,
-            description: spec.description,
-            parameters: spec.parameters,
-            rendered: retainRendered(context, JSON.stringify(spec), "ashe-agent/tool-definition@1"),
-          })),
-          ...renderedMessages.map((message, index) => {
-            const rendered = JSON.stringify(messages[index])
-            const representationId = contentDigest(rendered)
-            return {
-              position: 2_000_000 + index,
-              kind: "message" as const,
-              sourceEntryId: null,
-              sourceEntryIds: message.sourceEntryIds,
-              representation: {
-                representationId,
-                contentId: representationId,
-                mediaType: "application/json",
-                digest: representationId,
-                transformation: "provider-message",
-              },
-              transformation: "provider-message",
-              rendered: retainRendered(context, rendered, "ashe-agent/provider-message@1"),
-            }
-          }),
-        ],
+        tools: specs.map((spec) => ({
+          name: spec.name,
+          description: spec.description,
+          parameters: spec.parameters,
+        })),
+        items: contextItems,
       },
       offeredTools: specs,
     })

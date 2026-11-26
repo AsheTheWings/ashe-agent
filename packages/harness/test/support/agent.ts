@@ -94,16 +94,29 @@ const chunk = (fields: AIMessageChunkFields) =>
   new AIMessageChunk({ response_metadata: { model_provider: "openai" }, ...fields })
 
 // The declared field type omits usage, which streamed chunks carry.
-const usageChunk = (inputTokens: number): AIMessageChunk =>
+const usageChunk = (options: {
+  readonly inputTokens: number
+  readonly reasoningTokens?: number
+  readonly cachedTokens?: number
+}): AIMessageChunk =>
   new AIMessageChunk({
     content: [],
     response_metadata: { model_provider: "openai" },
-    usage_metadata: { input_tokens: inputTokens, output_tokens: 1, total_tokens: inputTokens + 1 },
+    usage_metadata: {
+      input_tokens: options.inputTokens,
+      output_tokens: 1,
+      total_tokens: options.inputTokens + 1,
+      ...(options.cachedTokens === undefined ? {} : { input_token_details: { cache_read: options.cachedTokens } }),
+      ...(options.reasoningTokens === undefined ? {} : { output_token_details: { reasoning: options.reasoningTokens } }),
+    },
   } as unknown as AIMessageChunkFields)
 
 /** A reply of text, optionally after reasoning carrying encrypted content, reporting `inputTokens`. */
 export const say =
-  (text: string, options: { reasoning?: string; inputTokens?: number } = {}): Reply =>
+  (
+    text: string,
+    options: { reasoning?: string; inputTokens?: number; reasoningTokens?: number; cachedTokens?: number } = {},
+  ): Reply =>
   async function* () {
     if (options.reasoning !== undefined) {
       yield chunk({
@@ -112,7 +125,11 @@ export const say =
       })
     }
     yield chunk({ content: [{ type: "text", text, index: 0 }] })
-    yield usageChunk(options.inputTokens ?? 1_000)
+    yield usageChunk({
+      inputTokens: options.inputTokens ?? 1_000,
+      ...(options.reasoningTokens === undefined ? {} : { reasoningTokens: options.reasoningTokens }),
+      ...(options.cachedTokens === undefined ? {} : { cachedTokens: options.cachedTokens }),
+    })
   }
 
 let callCount = 0
@@ -126,7 +143,7 @@ export const callTools = (calls: ReadonlyArray<{ name: string; args: unknown; id
         tool_call_chunks: [{ type: "tool_call_chunk", index, id: call.id ?? `call_${call.name}_${nextCall()}`, name: call.name, args: JSON.stringify(call.args) }],
       })
     }
-    yield usageChunk(options.inputTokens ?? 1_000)
+    yield usageChunk({ inputTokens: options.inputTokens ?? 1_000 })
   }
 
 const nextCall = () => (callCount += 1)

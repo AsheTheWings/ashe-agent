@@ -91,7 +91,13 @@ export interface TurnContext {
   /** Persists an event of the turn and sends it to every subscriber. */
   readonly emit: (body: SessionEventBody) => SessionEvent
   /** The session's current checkpoint window: its harness instructions and its items. */
-  readonly window: () => { readonly position: number; readonly harness: string; readonly items: ReadonlyArray<Item> }
+  readonly window: () => {
+    readonly position: number
+    readonly harness: string
+    readonly systemEntryId?: string | null
+    readonly thoughtEntryIds?: ReadonlyMap<string, string>
+    readonly items: ReadonlyArray<Item>
+  }
   /** The tools the session's rules leave offered now. */
   readonly tools: () => ReadonlyArray<Tool>
   /** Freezes a model call's request before it is sent and records that it started. */
@@ -416,13 +422,13 @@ const SEMANTIC_INLINE_BODY_BYTES = 64 * 1024
 
 const omitEntryBody = (entry: SemanticEntry): SemanticEntry => {
   switch (entry.kind) {
-    case "system":
+    case "system-message":
       return { ...entry, content: { ...entry.content, text: "" } }
-    case "developer":
+    case "developer-message":
       return { ...entry, components: entry.components.map((component) => ({ ...component, text: "" })) }
-    case "user":
+    case "user-message":
       return { ...entry, parts: [] }
-    case "agent":
+    case "agent-message":
       return { ...entry, parts: [] }
     case "agent-thought":
       return { ...entry, text: "" }
@@ -1288,14 +1294,14 @@ export class SessionHub {
         contextMaintenance: turn.contextWorkflowId !== null,
       })),
       entries: this.store.conversation.semanticEntries(sessionId),
-      boundaries: this.store.conversation.semanticBoundaries(sessionId),
+      contexts: this.store.conversation.semanticContexts(sessionId),
     }
   }
 
   /** One bounded, revision-bound page of a semantic collection. */
   semanticPage(
     sessionId: string,
-    object: "turns" | "entries" | "boundaries",
+    object: "turns" | "entries" | "contexts",
     requestedRevision: string | undefined,
     cursor: string | undefined,
     limit = 50,
@@ -1310,11 +1316,11 @@ export class SessionHub {
     }
     const after = (() => {
       if (cursor === undefined) return 0
-      const match = /^(turns|entries|boundaries):(\d+)$/.exec(cursor)
+      const match = /^(turns|entries|contexts):(\d+)$/.exec(cursor)
       if (match === null || match[1] !== object) throw invalid("the semantic page cursor does not name this collection")
       return Number(match[2])
     })()
-    const latestSuccessfulBoundaryId = this.conversation.latestBoundaryId(sessionId)
+    const latestModelCallContextId = this.conversation.latestContextId(sessionId)
     if (object === "turns") {
       const all = this.store.turns(sessionId).filter((turn) => turn.position > after)
       const page = all.slice(0, limit)
@@ -1336,7 +1342,7 @@ export class SessionHub {
           contextMaintenance: turn.contextWorkflowId !== null,
         })),
         nextCursor: all.length > page.length ? `turns:${page.at(-1)!.position}` : null,
-        latestSuccessfulBoundaryId,
+        latestModelCallContextId,
       }
     }
     if (object === "entries") {
@@ -1355,29 +1361,30 @@ export class SessionHub {
               }
         }),
         nextCursor: all.length > page.length ? `entries:${page.at(-1)!.position}` : null,
-        latestSuccessfulBoundaryId,
+        latestModelCallContextId,
       }
     }
-    const all = this.store.conversation.semanticBoundaries(sessionId)
+    const all = this.store.conversation.semanticContexts(sessionId)
     const page = all.slice(after, after + limit)
     return {
       object,
       revision,
-      items: page.map((boundary) => {
-        const body = this.conversation.boundaryBodyRef(sessionId, boundary.id)
-        if (body === null) throw new IntegrityFailure(`boundary ${boundary.id} has no retained body`)
+      items: page.map((context) => {
+        const body = this.conversation.contextBodyRef(sessionId, context.id)
+        if (body === null) throw new IntegrityFailure(`context ${context.id} has no retained body`)
         return {
-          id: boundary.id,
-          modelCallId: boundary.modelCallId,
-          turnId: boundary.turnId,
-          windowPosition: boundary.windowPosition,
-          committedAt: boundary.committedAt,
-          contributionCount: boundary.contributions.length,
-          body: { contentId: body.contentId, referenceId: boundary.id, byteLength: body.byteLength },
+          id: context.id,
+          modelCallId: context.modelCallId,
+          turnId: context.turnId,
+          windowPosition: context.windowPosition,
+          committedAt: context.committedAt,
+          itemCount: context.items.length,
+          toolCount: context.tools.length,
+          body: { contentId: body.contentId, referenceId: context.id, byteLength: body.byteLength },
         }
       }),
-      nextCursor: all.length > after + page.length ? `boundaries:${after + page.length}` : null,
-      latestSuccessfulBoundaryId,
+      nextCursor: all.length > after + page.length ? `contexts:${after + page.length}` : null,
+      latestModelCallContextId,
     }
   }
 
@@ -1388,11 +1395,20 @@ export class SessionHub {
     return { entry }
   }
 
-  /** One full successful request boundary whose body a page summarized. */
-  semanticBoundary(sessionId: string, manifestId: string) {
-    const boundary = this.store.conversation.semanticBoundary(sessionId, manifestId)
-    if (boundary === null) throw notFound(`retained boundary ${manifestId}`)
-    return { boundary }
+  /** One full successful model call context by context identity or generating model call identity. */
+  semanticContext(sessionId: string, selector: { readonly contextId: string } | { readonly modelCallId: string }) {
+    const context =
+      "contextId" in selector
+        ? this.store.conversation.semanticContext(sessionId, selector.contextId)
+        : this.store.conversation.semanticContextForCall(sessionId, selector.modelCallId)
+    if (context === null) {
+      throw notFound(
+        "contextId" in selector
+          ? `retained context ${selector.contextId}`
+          : `retained context for call ${selector.modelCallId}`,
+      )
+    }
+    return { context }
   }
 
   /** Stored provider counts for the requested calls, never reconstructed estimates. */
@@ -1587,7 +1603,7 @@ export class SessionHub {
         restorePending,
       },
       userTurnIds: turns.filter((turn) => turn.userMessageIds.length > 0).map((turn) => turn.runId),
-      latestSuccessfulBoundaryId: this.conversation.latestBoundaryId(sessionId),
+      latestModelCallContextId: this.conversation.latestContextId(sessionId),
       attention: this.actions.attentionForSession(sessionId),
     }
   }
@@ -2874,7 +2890,13 @@ export class SessionHub {
       emit: (body) => this.emit(sessionId, body),
       window: () => {
         const window = this.conversation.currentWindow(sessionId)!
-        return { position: window.position, harness: window.harnessInstructions, items: this.conversation.items(sessionId, window.position) }
+        return {
+          position: window.position,
+          harness: window.harnessInstructions,
+          systemEntryId: window.systemEntryId,
+          thoughtEntryIds: this.conversation.windowThoughtEntries(sessionId, window.position),
+          items: this.conversation.items(sessionId, window.position),
+        }
       },
       tools: () => {
         const tools = this.offeredTools(rules(), sessionId)

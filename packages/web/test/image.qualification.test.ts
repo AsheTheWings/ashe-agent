@@ -97,7 +97,7 @@ beforeAll(async () => {
           pending: [],
           execution: { activeTurnId: null, activity: "idle", canResume: false, canRewind: false, canFork: false, contextWorkflowActive: false, restorePending: false },
           userTurnIds: [],
-          latestSuccessfulBoundaryId: null,
+          latestModelCallContextId: null,
           attention: [],
         })
         else respond({})

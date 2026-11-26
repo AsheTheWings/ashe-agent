@@ -18,9 +18,12 @@ instructions and a list of items. An item is a developer component, a
 user message, an assistant message, or a tool result. A session's first
 checkpoint window is built when the session is created: its harness
 instructions, from `packages/harness/src/context/harness.md`, and its
-seed, the developer components that open it. Every model call of a turn
-sends the whole window, rendered for the turn's model. A context turn
-builds each later checkpoint window, as
+seed, the developer components that open it. Each checkpoint window also
+retains its harness instructions as a canonical `system-message` semantic
+entry, referenced by each model call context's leading `system-message`
+item.
+Every model call of a turn sends the whole window, rendered for the
+turn's model. A context turn builds each later checkpoint window, as
 [later checkpoint windows](#later-checkpoint-windows) explains.
 
 Creation fails, naming what is too large, its estimated tokens, and its
@@ -99,15 +102,21 @@ transcript keeps compatible representations and makes only an incompatible
 representation an explicit placeholder. [Content](content.md) owns the
 routing, derived representations, and failure behavior.
 
-Each model call records a request manifest with the ordered contributions that
-formed its input. Only a successfully committed call's manifest is a retained
-successful-request boundary; a failed, cancelled, or interrupted attempt cannot
-replace the last successful boundary. A measurement names its purpose,
+Each model call records its request payload and semantic `ModelCallContext`
+(ordered `system-message`, `developer-message`, `user-message`,
+`agent-thought`, `agent-message`, and `agent-tool` items plus offered tool
+definitions). Foreign-owner turns appear in the model call context as a
+synthesized `developer-message` `transcript` component, while the fixed
+one-line provider `instructions` field and auxiliary calls stay internal to
+harness wire storage. Only a successfully committed session call's context is
+exposed to clients; a failed, cancelled, or interrupted attempt cannot replace
+the last successful context. A measurement names its purpose,
 execution or analysis, and the representation identities of its instructions,
-messages, attachments, and tool definitions. Opaque encrypted provider replay
-state contributes unavailable coverage. Provider input, output, and total usage
-are persisted separately on the model call; product state, not either number,
-decides correctness or readiness.
+messages, attachments, and tool definitions. Opaque encrypted or signed
+provider reasoning replay state contributes unavailable coverage, while
+plaintext-only reasoning items are measured directly. Provider input, output,
+total, reasoning, and cached token usage are persisted separately on the model
+call; product state, not either number, decides correctness or readiness.
 
 When adjoining developer components or user messages become one provider
 message, that message's measurement names every source representation. The

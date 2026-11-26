@@ -10,8 +10,9 @@ copy a consistent dump instead.
 
 ## Conversation state
 
-A session's canonical history is its ordered `session_entries`: developer,
-user, agent, thought, and tool entries, each with an immutable content
+A session's canonical history is its ordered `session_entries`:
+`system-message`, `developer-message`, `user-message`, `agent-message`,
+`agent-thought`, and `agent-tool` entries, each with an immutable content
 reference, authorship, local or inherited ownership, and the title and
 model that established it. `window_entries` records which entries each
 checkpoint window includes. The content store keeps immutable bytes by
@@ -36,18 +37,21 @@ made at session creation, such as the first window and its seed, name no
 turn.
 
 `model_calls` records each request's ordinal, checkpoint window, offered
-tool definitions, lifecycle outcome, and provider replay payload.
-`request_manifests` freezes the ordered input contribution references
-before a request; only calls with a successful outcome are eligible as a
-successful boundary. Each manifest records the renderer and digest of its
-provider input and each contribution's transformation. Successful
-compaction, research, and handoff requests use the same records. `agent_tools`
+tool definitions, lifecycle outcome, provider replay payload, and nullable
+provider usage counts (`input`, `output`, `total`, `reasoning`, `cached`).
+`request_manifests` freezes the request's wire payload (`providerInput` and
+fixed `instructions`) alongside its ordered semantic `ModelCallContext` items
+and offered tools before a request; only session calls with a successful
+outcome are exposed as a `ModelCallContext`. Successful compaction, research,
+and handoff requests record wire manifests internally without appearing in
+client-facing session contexts. `agent_tools`
 holds one lifecycle row per owned tool invocation, with its provider call id,
 structured arguments, start and settlement times, result, and outcome. Its
 model call and parent invocation have session-scoped foreign keys; migrated
 legacy rows without a recorded call carry an explicit unavailable marker.
 `request_manifest_rendered` retains the immutable rendered provider input and
-each contribution's rendered representation.
+retained system-instruction or media content referenced by `ModelCallContext`
+items.
 `context_result_replacements` records a clearing as a replacement over the
 retained result.
 
@@ -71,9 +75,9 @@ reference from another session is not found. Tool media resolves through
 its semantic entry and retained part bytes. The result reports availability and every
 representation's kind, media type, digest, byte length, optional filename,
 source page, transformation, and bounded renderer metadata alongside its
-bytes. Attachment references resolve their original and derived
-representations, entry references resolve the retained entry content, and
-manifest references resolve provider messages and rendered contributions.
+bytes. Attachment references resolve their original and derived representations, entry
+references resolve the retained entry content, and manifest references resolve
+retained provider messages and `ModelCallContext` system/media content.
 
 `content_references` binds a history-owned tool result to the full captured
 bytes in the session's `references/` directory. `attachment_representations`

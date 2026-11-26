@@ -156,7 +156,7 @@ export class FileState {
         UNION SELECT result_ref FROM agent_tools WHERE result_ref IS NOT NULL
         UNION SELECT json_extract(c.data, '$.component.sources.userInstructions.sha256')
           FROM session_entries e JOIN contents c ON c.sha256 = e.content_sha256
-          WHERE e.kind = 'developer'
+          WHERE e.kind = 'developer-message'
             AND json_extract(c.data, '$.component.sources.userInstructions.sha256') IS NOT NULL
         UNION SELECT replacement_ref FROM context_result_replacements
         UNION SELECT body_ref FROM request_manifests

@@ -18,12 +18,7 @@ import {
   XCircleIcon,
   XIcon,
 } from "lucide-react"
-import type { ModelInputManifest, SemanticPageEntry } from "@ashe-agent/protocol"
-import { barX, defineChart } from "@tanstack/charts"
-import { scaleBand } from "@tanstack/charts/scales/band"
-import { scaleLinear } from "@tanstack/charts/scales/linear"
-import { tooltip } from "@tanstack/charts/tooltip"
-import { Chart } from "@tanstack/charts/react"
+import type { ModelCallContext, SemanticPageEntry } from "@ashe-agent/protocol"
 import { cn } from "cn"
 import { Badge } from "@/components/ui/badge.tsx"
 import { Button } from "@/components/ui/button.tsx"
@@ -609,59 +604,44 @@ export const SessionStatsBar = ({
   )
 }
 
-const CheckpointBreakdownChart = ({ segments }: { readonly segments: ReadonlyArray<CheckpointSegment> }) => {
-  const chartData = useMemo(
-    () =>
-      segments.slice(0, 12).map((segment) => ({
-        label: segment.label.length > 26 ? `${segment.label.slice(0, 25)}…` : segment.label,
-        tokens: segment.tokens,
-      })),
-    [segments],
-  )
+const CheckpointDistributionBar = ({
+  segments,
+  className,
+}: {
+  readonly segments: ReadonlyArray<CheckpointSegment>
+  readonly className?: string
+}) => (
+  <div
+    className={cn("bg-muted flex overflow-hidden rounded-full border border-border/60", className)}
+    aria-label="Semantic token distribution"
+  >
+    {segments.map((segment) => (
+      <span
+        key={segment.id}
+        style={{
+          width: `${Math.max(segment.share * 100, 1.5)}%`,
+          backgroundColor: segment.colorToken,
+        }}
+        className="h-full border-e border-background/50 last:border-e-0"
+        title={`${segment.label}${segment.detail ? ` (${segment.detail})` : ""}: ~${segment.tokens.toLocaleString()} est. tokens (${Math.round(segment.share * 100)}%)`}
+      />
+    ))}
+  </div>
+)
 
-  const definition = useMemo(
-    () =>
-      defineChart({
-        marks: [
-          barX(chartData, {
-            x: "tokens",
-            y: "label",
-            fill: "var(--chart-1)",
-            radius: 4,
-            maxThickness: 18,
-          }),
-        ],
-        scales: {
-          x: { scale: scaleLinear, nice: true, grid: true, axis: { label: "Est. tokens" } },
-          y: { scale: () => scaleBand<string>().padding(0.28) },
-        },
-        tooltip,
-      }),
-    [chartData],
-  )
-
-  if (typeof window === "undefined" || chartData.length === 0) return null
-  const height = Math.max(96, Math.min(260, chartData.length * 24 + 34))
-  return (
-    <div className="[&_*]:outline-none">
-      <Chart ariaLabel="Token distribution across semantic components" definition={definition} height={height} className="w-full" />
-    </div>
-  )
-}
-
-/** Persistent second header bar on Checkpoint showing token stats, semantic distribution bar, and detailed popover. */
+/** Persistent second header bar on Checkpoint showing window size, stacked distribution bar, and 3-group breakdown popover. */
 export const CheckpointStatsBar = ({
-  manifest,
+  context,
   entries,
   usage,
   notifications = [],
 }: {
-  readonly manifest: ModelInputManifest | null
+  readonly context: ModelCallContext | null
   readonly entries: ReadonlyArray<SemanticPageEntry>
   readonly usage: ReadonlyArray<{ readonly modelCallId: string; readonly providerUsage: unknown }>
   readonly notifications?: ReadonlyArray<SessionNotificationEntry>
 }) => {
-  const stats = useMemo(() => computeCheckpointStats(manifest, entries, usage), [entries, manifest, usage])
+  const stats = useMemo(() => computeCheckpointStats(context, entries, usage), [context, entries, usage])
 
   if (stats === null) {
     return (
@@ -669,7 +649,7 @@ export const CheckpointStatsBar = ({
         data-slot="checkpoint-stats-bar"
         className="bg-muted/30 text-muted-foreground relative flex h-9 shrink-0 items-stretch border-b text-xs"
       >
-        <span className="flex flex-1 items-center px-3">No retained checkpoint boundary yet</span>
+        <span className="flex flex-1 items-center px-3">No retained checkpoint window yet</span>
         <StatsQueueToggle entries={notifications} />
       </div>
     )
@@ -691,52 +671,32 @@ export const CheckpointStatsBar = ({
         >
           <span className="flex shrink-0 items-center gap-1.5 font-medium text-foreground tabular-nums">
             <LayersIcon className="text-muted-foreground size-3.5 shrink-0" />
-            <span>{stats.knownSubtotal.toLocaleString()} est. tokens</span>
+            <span>
+              {stats.windowTokensSource === "provider"
+                ? `${stats.windowTokens.toLocaleString()} tokens`
+                : `~${stats.windowTokens.toLocaleString()} est. tokens`}
+            </span>
+            {stats.providerOutputTokens !== null && (
+              <span className="text-muted-foreground hidden font-normal md:inline">
+                / {stats.providerOutputTokens.toLocaleString()} out
+              </span>
+            )}
             {stats.coverage === "partial" && (
-              <span className="text-warning inline-flex items-center gap-0.5 text-[11px] font-normal" title={`${stats.unavailableCount} unavailable contribution(s)`}>
+              <span className="text-warning inline-flex items-center gap-0.5 text-[11px] font-normal" title={`${stats.unavailableCount} unmeasured contribution(s)`}>
                 <AlertTriangleIcon className="size-3" />
                 partial
               </span>
             )}
           </span>
 
-          {(stats.providerInputTokens !== null || stats.providerOutputTokens !== null) && (
-            <>
-              <span className="bg-border hidden h-3.5 w-px shrink-0 md:inline-block" aria-hidden="true" />
-              <span className="text-muted-foreground hidden shrink-0 tabular-nums md:inline">
-                Provider:{" "}
-                <span className="text-foreground font-medium">
-                  {stats.providerInputTokens !== null ? `${stats.providerInputTokens.toLocaleString()} in` : "—"}
-                  {stats.providerOutputTokens !== null ? ` / ${stats.providerOutputTokens.toLocaleString()} out` : ""}
-                </span>
-              </span>
-            </>
-          )}
-
           {stats.segments.length > 0 && (
             <>
               <span className="bg-border h-3.5 w-px shrink-0" aria-hidden="true" />
               <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
-                <div
-                  className="bg-muted flex h-2.5 min-w-20 max-w-64 flex-1 overflow-hidden rounded-full border border-border/60"
-                  aria-label="Semantic token distribution"
-                >
-                  {stats.segments.map((segment) => (
-                    <span
-                      key={segment.id}
-                      style={{
-                        width: `${Math.max(segment.share * 100, 1.5)}%`,
-                        backgroundColor: segment.colorToken,
-                      }}
-                      className="h-full border-e border-background/50 last:border-e-0"
-                      title={`${segment.label}${segment.detail ? ` (${segment.detail})` : ""}: ~${segment.tokens.toLocaleString()} tokens (${Math.round(segment.share * 100)}%)`}
-                    />
-                  ))}
-                </div>
+                <CheckpointDistributionBar segments={stats.segments} className="h-2.5 min-w-20 max-w-64 flex-1" />
                 <span className="text-muted-foreground hidden truncate text-[11px] lg:inline">
-                  {stats.segments
-                    .slice(0, 3)
-                    .map((segment) => `${segment.label} ${Math.round(segment.share * 100)}%`)
+                  {stats.groups
+                    .map((group) => `${group.label} ${Math.round(group.share * 100)}%`)
                     .join(" · ")}
                 </span>
               </div>
@@ -754,40 +714,71 @@ export const CheckpointStatsBar = ({
             <div>
               <p className="text-xs font-semibold text-foreground">Checkpoint window {stats.windowPosition}</p>
               <p className="text-muted-foreground text-[11px] tabular-nums">
-                {stats.knownSubtotal.toLocaleString()} known tokens · {stats.coverage} coverage
-                {stats.unavailableCount > 0 ? ` · ${stats.unavailableCount} unavailable` : ""} · {formatFullTime(stats.committedAt)}
+                {stats.windowTokensSource === "provider"
+                  ? `${stats.windowTokens.toLocaleString()} provider input tokens`
+                  : `~${stats.windowTokens.toLocaleString()} estimated tokens`}{" "}
+                · {stats.coverage} coverage
+                {stats.unavailableCount > 0 ? ` · ${stats.unavailableCount} unmeasured` : ""} · {formatFullTime(stats.committedAt)}
               </p>
             </div>
-            <code className="text-muted-foreground font-mono text-[10px]">{stats.boundaryId}</code>
+            <code className="text-muted-foreground font-mono text-[10px]">{stats.contextId}</code>
           </div>
 
-          {stats.segments.length > 0 && (
-            <div className="flex flex-col gap-2">
-              <span className="text-muted-foreground text-[11px] font-medium uppercase tracking-wider">
-                Estimated semantic distribution
-              </span>
-              <CheckpointBreakdownChart segments={stats.segments} />
-              <div className="scrollbar-compact max-h-44 overflow-y-auto border-t pt-2">
-                <div className="flex flex-col gap-1">
-                  {stats.segments.map((segment) => (
-                    <div key={segment.id} className="flex items-center justify-between gap-2 text-xs tabular-nums">
+          {stats.groups.length > 0 && (
+            <div className="flex flex-col gap-2.5">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-muted-foreground text-[11px] font-medium uppercase tracking-wider">
+                  Estimated semantic distribution
+                </span>
+                <span className="text-muted-foreground text-[10px]">1 token ≈ 4 chars</span>
+              </div>
+              <CheckpointDistributionBar segments={stats.segments} className="h-3.5 w-full" />
+              <div className="flex flex-col gap-2 border-t pt-2.5">
+                {stats.groups.map((group) => (
+                  <div key={group.id} className="flex flex-col gap-1">
+                    <div className="flex items-center justify-between gap-2 text-xs tabular-nums">
                       <span className="flex min-w-0 items-center gap-1.5">
-                        <span
-                          className="size-2 shrink-0 rounded-full"
-                          style={{ backgroundColor: segment.colorToken }}
-                          aria-hidden="true"
-                        />
-                        <span className="truncate font-medium text-foreground">{segment.label}</span>
-                        {segment.detail !== undefined && (
-                          <span className="text-muted-foreground shrink-0 text-[11px]">({segment.detail})</span>
+                        {group.subgroups.length === 0 && (
+                          <span
+                            className="size-2 shrink-0 rounded-full"
+                            style={{ backgroundColor: group.colorToken }}
+                            aria-hidden="true"
+                          />
+                        )}
+                        <span className="truncate font-semibold text-foreground">{group.label}</span>
+                        {group.detail !== undefined && (
+                          <span className="text-muted-foreground shrink-0 text-[11px]">({group.detail})</span>
                         )}
                       </span>
-                      <span className="text-muted-foreground shrink-0 font-mono text-[11px]">
-                        ~{segment.tokens.toLocaleString()} ({Math.round(segment.share * 100)}%)
+                      <span className="font-mono text-[11px] font-medium text-foreground">
+                        {Math.round(group.share * 100)}%{" "}
+                        <span className="text-muted-foreground font-normal">(~{group.tokens.toLocaleString()})</span>
                       </span>
                     </div>
-                  ))}
-                </div>
+                    {group.subgroups.length > 0 && (
+                      <div className="flex flex-col gap-1 ps-3.5">
+                        {group.subgroups.map((subgroup) => (
+                          <div key={subgroup.id} className="flex items-center justify-between gap-2 text-xs tabular-nums">
+                            <span className="flex min-w-0 items-center gap-1.5">
+                              <span
+                                className="size-2 shrink-0 rounded-full"
+                                style={{ backgroundColor: subgroup.colorToken }}
+                                aria-hidden="true"
+                              />
+                              <span className="truncate text-foreground/90">{subgroup.label}</span>
+                              {subgroup.detail !== undefined && (
+                                <span className="text-muted-foreground truncate text-[11px]">({subgroup.detail})</span>
+                              )}
+                            </span>
+                            <span className="text-muted-foreground shrink-0 font-mono text-[11px]">
+                              {Math.round(subgroup.share * 100)}% (~{subgroup.tokens.toLocaleString()})
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -832,7 +823,7 @@ export const WorkspaceHeader = ({
   onViewChange,
   notifications,
   semanticEntries,
-  checkpointManifest,
+  checkpointContext,
   checkpointUsage,
   sidebarPinned,
   onToggleSidebar,
@@ -847,7 +838,7 @@ export const WorkspaceHeader = ({
   readonly onViewChange: (next: ViewName) => void
   readonly notifications: ReadonlyArray<SessionNotificationEntry>
   readonly semanticEntries: ReadonlyArray<SemanticPageEntry>
-  readonly checkpointManifest: ModelInputManifest | null
+  readonly checkpointContext: ModelCallContext | null
   readonly checkpointUsage: ReadonlyArray<{ readonly modelCallId: string; readonly providerUsage: unknown }>
   readonly sidebarPinned: boolean
   readonly onToggleSidebar: () => void
@@ -939,7 +930,7 @@ export const WorkspaceHeader = ({
       {currentView === "session" && <SessionStatsBar entries={semanticEntries} notifications={notifications} />}
       {currentView === "checkpoint" && (
         <CheckpointStatsBar
-          manifest={checkpointManifest}
+          context={checkpointContext}
           entries={semanticEntries}
           usage={checkpointUsage}
           notifications={notifications}

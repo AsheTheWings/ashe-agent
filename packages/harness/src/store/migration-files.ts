@@ -34,6 +34,8 @@ import m0033 from "../../migrations/0033_model_provider_usage.sql" with { type: 
 import m0034 from "../../migrations/0034_input_receipts.sql" with { type: "text" }
 import m0035 from "../../migrations/0035_history_operations.sql" with { type: "text" }
 import m0036 from "../../migrations/0036_harness_identity.sql" with { type: "text" }
+import m0037 from "../../migrations/0037_semantic_entry_kinds.sql" with { type: "text" }
+import m0038 from "../../migrations/0038_model_call_usage_details.sql" with { type: "text" }
 
 /**
  * The migration directory `packages/harness/migrations`, embedded so a
@@ -77,4 +79,6 @@ export const migrationFiles: ReadonlyArray<{ readonly file: string; readonly sql
   { file: "0034_input_receipts.sql", sql: m0034 },
   { file: "0035_history_operations.sql", sql: m0035 },
   { file: "0036_harness_identity.sql", sql: m0036 },
+  { file: "0037_semantic_entry_kinds.sql", sql: m0037 },
+  { file: "0038_model_call_usage_details.sql", sql: m0038 },
 ]

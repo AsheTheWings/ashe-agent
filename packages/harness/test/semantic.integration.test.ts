@@ -130,6 +130,8 @@ describe("semantic history migrations", () => {
         "0034_input_receipts.sql",
         "0035_history_operations.sql",
         "0036_harness_identity.sql",
+        "0037_semantic_entry_kinds.sql",
+        "0038_model_call_usage_details.sql",
       ])
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([])
       const store = new SessionStore(db, runDir)
@@ -206,6 +208,8 @@ describe("semantic history migrations", () => {
         "0034_input_receipts.sql",
         "0035_history_operations.sql",
         "0036_harness_identity.sql",
+        "0037_semantic_entry_kinds.sql",
+        "0038_model_call_usage_details.sql",
       ])
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([])
       const columns = db.query<{ name: string }, []>("PRAGMA table_info(agent_tools)").all().map((column) => column.name)
@@ -454,8 +458,10 @@ describe("retained attachments and uploads", () => {
       expect(user.kind === "user" ? user.attachments : undefined).toMatchObject([{ attachmentId: attachment, name: "fork.txt" }])
       const manifest = h.hub.store.conversation.successfulManifests(id)[0]!.manifest as any
       expect(
-        manifest.contributions.some(
-          (part: any) => part.representation?.contentId === digest,
+        manifest.items.some(
+          (item: any) =>
+            item.kind === "user-message" &&
+            item.attachments.some((att: any) => att.kind === "representation" && att.content.contentId === digest),
         ),
       ).toBe(true)
       h.db
@@ -559,27 +565,27 @@ describe("model request boundaries on real persistence", () => {
       const run = h.hub.store.turns(id)[0]!.runId
       const original = h.hub.semantics(id)
       expect(Schema.decodeUnknownExit(SemanticHistory)(original)._tag).toBe("Success")
-      expect(original.boundaries).toHaveLength(2)
+      expect(original.contexts).toHaveLength(2)
       expect(original.turns).toHaveLength(1)
       expect(original.entries.some((entry) =>
         entry.kind === "agent-tool" &&
         entry.tool.result?.content.some((part) => part.kind === "text" && part.text === "echoed boundary")
       )).toBe(true)
-      expect(original.boundaries.every((boundary) => boundary.contributions[0]?.position === 0)).toBe(true)
+      expect(original.contexts.every((context) => context.items[0]?.kind === "system-message")).toBe(true)
 
       const fork = h.hub.fork(id, run).id
       await h.restart()
       const copied = h.hub.semantics(fork)
       expect(Schema.decodeUnknownExit(SemanticHistory)(copied)._tag).toBe("Success")
-      expect(copied.boundaries.map((boundary) => boundary.modelCallId)).toEqual(
-        original.boundaries.map((boundary) => boundary.modelCallId),
+      expect(copied.contexts.map((context) => context.modelCallId)).toEqual(
+        original.contexts.map((context) => context.modelCallId),
       )
 
       h.model.next(say("rewound"))
       await h.hub.rewind(id, run, undefined, h.sender)
       await waitFor("the rewound turn to settle", () => (!h.hub.isRunning(id) ? true : undefined))
-      expect(h.hub.semantics(id).boundaries).toHaveLength(1)
-      expect(h.hub.semantics(fork).boundaries).toHaveLength(2)
+      expect(h.hub.semantics(id).contexts).toHaveLength(1)
+      expect(h.hub.semantics(fork).contexts).toHaveLength(2)
     } finally {
       await h.cleanup()
     }
@@ -626,13 +632,16 @@ describe("model request boundaries on real persistence", () => {
       const successful = h.hub.store.conversation.successfulManifests(id)
       expect(successful).toHaveLength(2)
       for (const [index, entry] of successful.entries()) {
-        const manifest = entry.manifest as { version: number; contributions: Array<Record<string, any>> }
-        expect(manifest.version).toBe(1)
-        expect(manifest.contributions[0]).toMatchObject({ kind: "instruction", sourceEntryId: null })
-        const positions = manifest.contributions.map((part) => part.position as number)
-        expect(positions).toEqual([...positions].sort((left, right) => left - right))
-        expect(manifest.contributions.some((part) => part.kind === "tool-definition" && part.name === "echo")).toBe(true)
+        const manifest = entry.manifest as {
+          version: number
+          tools: Array<{ name: string }>
+          items: Array<Record<string, any>>
+        }
+        expect(manifest.version).toBe(2)
+        expect(manifest.items[0]).toMatchObject({ kind: "system-message" })
+        expect(manifest.tools.some((tool) => tool.name === "echo")).toBe(true)
         expect(manifest).not.toHaveProperty("messages")
+        expect(manifest).not.toHaveProperty("contributions")
         const measurement = (manifest as any).measurement as {
           purpose: string
           contributions: Array<{ basis: string; representationIds: Array<string> }>
@@ -640,10 +649,6 @@ describe("model request boundaries on real persistence", () => {
         expect(measurement.purpose).toBe("execution")
         for (const contribution of measurement.contributions) {
           if (contribution.basis !== "unavailable") expect(contribution.representationIds.length).toBeGreaterThan(0)
-        }
-        for (const part of manifest.contributions) {
-          expect(h.hub.store.conversation.contentBytes(part.rendered.contentId)).not.toBeNull()
-          expect(part.transformation).not.toBeNull()
         }
         const providerInput = (manifest as any).providerInput
         const renderedProvider = JSON.parse(
@@ -657,22 +662,9 @@ describe("model request boundaries on real persistence", () => {
         expect(providerInput.digest).toBe(
           new Bun.CryptoHasher("sha256").update(JSON.stringify(renderedProvider)).digest("hex"),
         )
-        const grouped = manifest.contributions.find(
-          (part) => part.transformation !== "provider-message" && (part.sourceEntryIds?.length ?? 0) > 1,
-        )
-        if (grouped !== undefined) {
-          const groupedText = Buffer.from(h.hub.store.conversation.contentBytes(grouped.rendered.contentId)!).toString("utf8")
-          expect(JSON.stringify(renderedProvider)).toContain(JSON.stringify(groupedText).slice(1, -1))
-        }
       }
       const firstUser = h.hub.store.conversation.items(id, 1).find((item) => item.kind === "user")!
-      expect((successful[0]!.manifest as any).contributions.some((part: any) => part.sourceEntryId === firstUser.entryId)).toBe(true)
-      const firstUserContribution = (successful[0]!.manifest as any).contributions.find(
-        (part: any) => part.sourceEntryId === firstUser.entryId,
-      )
-      expect(
-        Buffer.from(h.hub.store.conversation.contentBytes(firstUserContribution.rendered.contentId)!).toString("utf8"),
-      ).toBe("<user>\nfirst\n</user>")
+      expect((successful[0]!.manifest as any).items.some((item: any) => item.kind === "user-message" && item.sourceEntryId === firstUser.entryId)).toBe(true)
       const boundaries = h.db
         .query<{ manifest_id: string }, [string]>("SELECT manifest_id FROM request_manifests WHERE session_id = ? ORDER BY rowid")
         .all(id)
@@ -742,22 +734,16 @@ describe("model request boundaries on real persistence", () => {
       const users = h.hub.store.conversation.turnItems(id, turn.runId).filter((item) => item.kind === "user")
       expect(users).toHaveLength(2)
       const manifest = h.hub.store.conversation.latestSuccessfulManifest(id)!.manifest as any
-      const harness = manifest.contributions.find((part: any) => part.transformation === "harness-system").representation.representationId
-      const providerMessage = manifest.contributions.find(
-        (part: any) => part.transformation === "provider-message" && users.every((user) => part.sourceEntryIds.includes(user.entryId)),
-      ).representation.representationId
-      const represented = new Set<string>(
-        manifest.contributions.flatMap((part: any) => [part.representation?.representationId, ...(part.representationIds ?? [])]).filter(Boolean),
-      )
+      const systemItem = manifest.items.find((item: any) => item.kind === "system-message")
+      expect(systemItem).toBeDefined()
       const message = manifest.measurement.contributions.find(
         (part: any) =>
           part.basis === "ashe-agent-text-v1" &&
           users.every((user) => part.representationIds.includes(user.representationId)),
       )
       expect(message).toBeDefined()
-      expect(manifest.measurement.contributions.some((part: any) => part.representationIds?.includes(harness))).toBe(true)
-      expect(message.representationIds).toContain(providerMessage)
-      expect(message.representationIds.every((representation: string) => represented.has(representation))).toBe(true)
+      expect(manifest.measurement.contributions.some((part: any) => part.representationIds?.includes(systemItem.contentId))).toBe(true)
+      expect(users.every((user) => manifest.items.some((item: any) => item.kind === "user-message" && item.sourceEntryId === user.entryId))).toBe(true)
     } finally {
       await h.cleanup()
     }
@@ -1046,7 +1032,7 @@ describe("native history after restart and rewind", () => {
       const thought = db
         .query<{ content: Uint8Array; format: string }, [string]>(
           `SELECT c.data AS content, c.format FROM session_entries e JOIN contents c ON c.sha256 = e.content_sha256
-            WHERE e.session_id = ? AND e.kind = 'thought'`,
+            WHERE e.session_id = ? AND e.kind = 'agent-thought'`,
         )
         .get("history-session")!
       expect(JSON.parse(Buffer.from(thought.content).toString("utf8"))).toMatchObject({ kind: "thought", text: "visible thought" })

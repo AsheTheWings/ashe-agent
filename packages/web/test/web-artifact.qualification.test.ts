@@ -167,12 +167,12 @@ beforeAll(async () => {
           pending: [],
           execution: { activeTurnId: null, activity: "idle", canResume: false, canRewind: false, canFork: false, contextWorkflowActive: false, restorePending: false },
           userTurnIds: [],
-          latestSuccessfulBoundaryId: null,
+          latestModelCallContextId: null,
           attention: [],
         })
         else if (request.method === "session.semantics.page") {
           const object = (request.params as { object?: string }).object ?? "entries"
-          respond({ object, revision: "rev-artifact", items: [], nextCursor: null, latestSuccessfulBoundaryId: null })
+          respond({ object, revision: "rev-artifact", items: [], nextCursor: null, latestModelCallContextId: null })
         }
         else respond({})
       },

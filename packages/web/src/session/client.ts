@@ -20,8 +20,8 @@ import {
   type SemanticEntry,
   type SemanticPageEntry,
   type Turn,
-  type BoundarySummary,
-  type ModelInputManifest,
+  type ModelCallContext,
+  type ModelCallContextSummary,
   type ModelCallUsage,
   type HistoryOperationResult,
   type MethodName,
@@ -66,8 +66,8 @@ export type ClientState = {
         readonly revision: string
         readonly turns: ReadonlyArray<Turn>
         readonly entries: ReadonlyArray<SemanticPageEntry>
-        readonly boundaries: ReadonlyArray<BoundarySummary>
-        readonly latestSuccessfulBoundaryId: string | null
+        readonly contexts: ReadonlyArray<ModelCallContextSummary>
+        readonly latestModelCallContextId: string | null
       }
     >
   >
@@ -833,14 +833,14 @@ export class SessionClient {
       turns.push(...page.items)
       cursor = page.nextCursor
     }
-    const boundariesFirst = await this.call("session.semantics.page", { sessionId, object: "boundaries", revision, limit: 200 })
-    if (boundariesFirst.object !== "boundaries") throw new Error("the harness returned the wrong boundary page")
-    const boundaries = [...boundariesFirst.items]
-    cursor = boundariesFirst.nextCursor
+    const contextsFirst = await this.call("session.semantics.page", { sessionId, object: "contexts", revision, limit: 200 })
+    if (contextsFirst.object !== "contexts") throw new Error("the harness returned the wrong context page")
+    const contexts = [...contextsFirst.items]
+    cursor = contextsFirst.nextCursor
     while (cursor !== null) {
-      const page = await this.call("session.semantics.page", { sessionId, object: "boundaries", revision, cursor, limit: 200 })
-      if (page.object !== "boundaries") throw new Error("the harness returned the wrong boundary page")
-      boundaries.push(...page.items)
+      const page = await this.call("session.semantics.page", { sessionId, object: "contexts", revision, cursor, limit: 200 })
+      if (page.object !== "contexts") throw new Error("the harness returned the wrong context page")
+      contexts.push(...page.items)
       cursor = page.nextCursor
     }
     this.set({
@@ -850,8 +850,8 @@ export class SessionClient {
           revision,
           turns,
           entries,
-          boundaries,
-          latestSuccessfulBoundaryId: firstEntries.latestSuccessfulBoundaryId,
+          contexts,
+          latestModelCallContextId: firstEntries.latestModelCallContextId,
         },
       },
     })
@@ -861,8 +861,8 @@ export class SessionClient {
     return (await this.call("session.semantics.body", { sessionId, entryId, contentId })).entry
   }
 
-  async semanticBoundary(sessionId: string, manifestId: string): Promise<ModelInputManifest> {
-    return (await this.call("session.semantics.boundary", { sessionId, manifestId })).boundary
+  async semanticContext(sessionId: string, contextId: string): Promise<ModelCallContext> {
+    return (await this.call("session.semantics.context", { sessionId, contextId })).context
   }
 
   async modelUsage(sessionId: string, modelCallIds: ReadonlyArray<string>): Promise<ReadonlyArray<ModelCallUsage>> {

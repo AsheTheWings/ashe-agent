@@ -110,7 +110,10 @@ describe("sessions", () => {
       expect(first.error).toBeUndefined()
       const history = first.result
       expect(Schema.decodeUnknownExit(SemanticHistory)(history)._tag).toBe("Success")
-      expect(history.boundaries).toHaveLength(2)
+      expect(history.contexts).toHaveLength(2)
+      const firstSystem = history.entries.find((entry: { kind: string }) => entry.kind === "system-message")
+      expect(firstSystem).toBeDefined()
+      expect(firstSystem.ownership).toEqual({ kind: "local" })
       const runId = runIds(view)[0]!
       const forked = await forkSession(client, { sessionId: id, runId })
       expect(forked.error).toBeUndefined()
@@ -121,8 +124,14 @@ describe("sessions", () => {
       const copied = await afterRestart.request("session.semantics", { sessionId: forkId })
       expect(copied.error).toBeUndefined()
       expect(Schema.decodeUnknownExit(SemanticHistory)(copied.result)._tag).toBe("Success")
-      expect(copied.result.boundaries.map((boundary: { modelCallId: string }) => boundary.modelCallId)).toEqual(
-        history.boundaries.map((boundary: { modelCallId: string }) => boundary.modelCallId),
+      const inheritedSystem = copied.result.entries.find((entry: { kind: string }) => entry.kind === "system-message")
+      expect(inheritedSystem.ownership).toEqual({
+        kind: "inherited",
+        sourceSessionId: id,
+        sourceEntryId: firstSystem.id,
+      })
+      expect(copied.result.contexts.map((context: { modelCallId: string }) => context.modelCallId)).toEqual(
+        history.contexts.map((context: { modelCallId: string }) => context.modelCallId),
       )
 
       const source = await SessionView.open(server.url, token, id)
@@ -132,8 +141,8 @@ describe("sessions", () => {
       await source.waitFor("the rewound turn", (value) =>
         value.events.some((event) => event.event.type === "RUN_FINISHED" && event.event.runId !== runId))
       const afterRewind = await afterRestart.request("session.semantics", { sessionId: id })
-      expect(afterRewind.result.boundaries).toHaveLength(1)
-      expect((await afterRestart.request("session.semantics", { sessionId: forkId })).result.boundaries).toHaveLength(2)
+      expect(afterRewind.result.contexts).toHaveLength(1)
+      expect((await afterRestart.request("session.semantics", { sessionId: forkId })).result.contexts).toHaveLength(2)
 
       model.next(
         failWith(new ModelCallError("context_length_exceeded", true)),
@@ -155,7 +164,11 @@ describe("sessions", () => {
           .map((turn: { id: string }) => turn.id),
       )
       expect(contextTurns.size).toBeGreaterThan(0)
-      expect(withContext.result.boundaries.some((boundary: { turnId: string }) => contextTurns.has(boundary.turnId))).toBe(true)
+      expect(withContext.result.contexts.some((context: { turnId: string }) => contextTurns.has(context.turnId))).toBe(true)
+      const systemEntries = withContext.result.entries.filter((entry: { kind: string }) => entry.kind === "system-message")
+      expect(systemEntries).toHaveLength(2)
+      expect(systemEntries[0].turnId).toBeNull()
+      expect(contextTurns.has(systemEntries[1].turnId)).toBe(true)
     } finally {
       await server.cleanup()
     }
@@ -242,7 +255,7 @@ describe("sessions", () => {
       await view.waitFor("the media turn", (value) => finishedRuns(value) === 1)
       const semantics = await client.request("session.semantics", { sessionId: id })
       expect(semantics.error).toBeUndefined()
-      const user = semantics.result.entries.find((entry: any) => entry.kind === "user")
+      const user = semantics.result.entries.find((entry: any) => entry.kind === "user-message")
       const attachment = user.parts.find((part: any) => part.kind === "attachment")
       const tools = semantics.result.entries.filter((entry: any) => entry.kind === "agent-tool")
       const fileTool = tools.find((entry: any) => entry.tool.name === "file_read")
@@ -282,17 +295,23 @@ describe("sessions", () => {
         fileMedia.content.representationId,
       )
       await readReference(id, imageMedia.content.contentId, imageResultTool.id, imageBytes)
-      const contributionReferences = semantics.result.boundaries.flatMap((boundary: any) =>
-        boundary.contributions
-          .filter((contribution: any) => contribution.representation !== undefined)
-          .map((contribution: any) => ({ boundary: boundary.id, representation: contribution.representation })),
+      const contextReferences = semantics.result.contexts.flatMap((context: any) =>
+        context.items.flatMap((item: any) => {
+          if (item.kind === "system-message") return [{ contextId: context.id, contentId: item.contentId }]
+          if (item.kind === "user-message") {
+            return item.attachments
+              .filter((att: any) => att.kind === "representation")
+              .map((att: any) => ({ contextId: context.id, contentId: att.content.contentId }))
+          }
+          return []
+        }),
       )
-      expect(contributionReferences.length).toBeGreaterThan(0)
-      for (const reference of contributionReferences) {
+      expect(contextReferences.length).toBeGreaterThan(0)
+      for (const reference of contextReferences) {
         const result = await client.request("content.get", {
           sessionId: id,
-          contentId: reference.representation.contentId,
-          referenceId: reference.boundary,
+          contentId: reference.contentId,
+          referenceId: reference.contextId,
         })
         expect(result.error).toBeUndefined()
         expect(result.result.content.available).toBe(true)
@@ -302,7 +321,7 @@ describe("sessions", () => {
         server,
         `INSERT INTO contents (sha256, data, format) VALUES ('${unrelatedContent}', cast('outside manifest' AS BLOB), 'text/plain')`,
       )
-      const manifestId = semantics.result.boundaries[0].id
+      const manifestId = semantics.result.contexts[0].id
       expect((await client.request("content.get", {
         sessionId: id,
         contentId: unrelatedContent,

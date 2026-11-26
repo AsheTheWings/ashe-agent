@@ -1259,7 +1259,10 @@ export class ContextTurns {
       this.host.commit(sessionId, (append) => {
         const now = this.host.now()
         if (sources.instructions !== null) this.conversation.putContent(sources.instructions.sha256, sources.instructions.text)
-        const window = this.conversation.insertWindow(sessionId, turn.runId, sources.harness, now)
+        const window = this.conversation.insertWindow(sessionId, turn.runId, sources.harness, now, {
+          model: turn.model,
+          agentTitle: turn.agentTitle,
+        })
         for (const component of seed.components) {
           this.conversation.appendItem(sessionId, window.position, { runId: turn.runId, model: turn.model, agentTitle: turn.agentTitle }, { kind: "component", component })
         }

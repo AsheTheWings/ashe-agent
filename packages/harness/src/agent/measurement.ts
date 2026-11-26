@@ -8,7 +8,7 @@ import {
 import type { ProjectedAttachment } from "../content/media.ts"
 import type { Item } from "../sessions/conversation.ts"
 import type { ToolSpec } from "./model.ts"
-import type { ToolContent } from "./window.ts"
+import { inspectReplayedReasoning, type ToolContent } from "./window.ts"
 
 /** Representation identities the recorded model-facing request carries. */
 export interface MeasurementEvidence {
@@ -72,14 +72,16 @@ export const renderedMessageEvidence = (options: {
 }
 
 const contentText = (message: BaseMessage): string => {
-  if (typeof message.content === "string") return message.content
-  return message.content.flatMap((part) => {
+  const reasoning = inspectReplayedReasoning(message)
+  const plainReasoning = reasoning.present && !reasoning.opaque ? reasoning.plaintext : ""
+  if (typeof message.content === "string") return `${message.content}${plainReasoning}`
+  const text = message.content.flatMap((part) => {
     if (typeof part !== "object") return []
     if (part.type === "text" && typeof part.text === "string") return [part.text]
     if (part.type === "input_text" && typeof part.text === "string") return [part.text]
-    if (part.type === "reasoning" && typeof part.reasoning === "string") return [part.reasoning]
     return []
   }).join("")
+  return `${text}${plainReasoning}`
 }
 
 const media = (message: BaseMessage): { images: number; pdfs: number } => {
@@ -101,11 +103,18 @@ const media = (message: BaseMessage): { images: number; pdfs: number } => {
   return { images, pdfs }
 }
 
+const KNOWN_ASSISTANT_KWARGS = new Set([
+  "reasoning",
+  "tool_calls",
+  "mediaRepresentations",
+  "__openai_function_call_ids__",
+  "__openai_custom_tool_call_ids__",
+])
+
 const opaqueProviderState = (message: BaseMessage): boolean => {
+  if (inspectReplayedReasoning(message).opaque) return true
   const kwargs = message.additional_kwargs ?? {}
-  const reasoning = kwargs.reasoning as { readonly encrypted_content?: unknown } | undefined
-  if (reasoning?.encrypted_content !== undefined) return true
-  return Object.keys(kwargs).some((key) => key !== "reasoning" && key !== "tool_calls" && key !== "mediaRepresentations")
+  return Object.keys(kwargs).some((key) => !KNOWN_ASSISTANT_KWARGS.has(key))
 }
 
 /** The shared estimate of one model call's recorded model-facing contributions. */

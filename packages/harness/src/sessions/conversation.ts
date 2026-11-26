@@ -2,9 +2,12 @@ import type { Database } from "bun:sqlite"
 import { AIMessage, mapChatMessagesToStoredMessages, mapStoredMessagesToChatMessages, type StoredMessage } from "@langchain/core/messages"
 import type {
   AgentTool,
+  ContextMediaProjection,
   InputMode,
   MessageSender,
-  ModelInputManifest,
+  ModelCallContext,
+  ModelCallContextItem,
+  OfferedToolDefinition,
   RepresentationRef,
   SemanticEntry,
   SelectionPatch,
@@ -58,6 +61,7 @@ export interface CheckpointWindow {
   readonly runId: string | null
   readonly harnessInstructions: string
   readonly harnessContentId: string | null
+  readonly systemEntryId: string | null
 }
 
 export type WaitingEntry =
@@ -173,9 +177,9 @@ const itemFromRow = (row: EntryRow, cleared: boolean): Item | null => {
     contentFormat: row.format,
     representationId: row.cleared_ref ?? row.content_sha256,
   }
-  if (row.kind === "developer") return { ...base, ...(decodeContent(row) as Extract<ItemBody, { kind: "component" }>) }
-  if (row.kind === "user") return { ...base, ...(decodeContent(row) as Extract<ItemBody, { kind: "user" }>) }
-  if (row.kind === "agent") {
+  if (row.kind === "developer-message") return { ...base, ...(decodeContent(row) as Extract<ItemBody, { kind: "component" }>) }
+  if (row.kind === "user-message") return { ...base, ...(decodeContent(row) as Extract<ItemBody, { kind: "user" }>) }
+  if (row.kind === "agent-message") {
     if (row.format === LEGACY_ASSISTANT_FORMAT) {
       const stored = decodeContent(row) as StoredMessage
       return { ...base, kind: "assistant", message: mapStoredMessagesToChatMessages([stored])[0] as AIMessage }
@@ -192,7 +196,7 @@ const itemFromRow = (row: EntryRow, cleared: boolean): Item | null => {
       }),
     }
   }
-  if (row.kind === "tool" && row.result_ref !== null) {
+  if (row.kind === "agent-tool" && row.result_ref !== null) {
     const result = JSON.parse(Buffer.from(row.content).toString("utf8")) as {
       readonly content?: ToolContent
       readonly callId?: string
@@ -253,12 +257,12 @@ const semanticEntryFromRow = (row: SemanticRow): SemanticEntry | null => {
         },
     createdAt: row.created_at,
   }
-  if (row.kind === "developer") {
+  if (row.kind === "developer-message") {
     const component = (decodeContent(row) as { readonly component?: Component }).component
     if (component === undefined) return null
     return {
       ...base,
-      kind: "developer",
+      kind: "developer-message",
       components: [{
         id: row.entry_id,
         type: component.type,
@@ -268,7 +272,7 @@ const semanticEntryFromRow = (row: SemanticRow): SemanticEntry | null => {
       }],
     }
   }
-  if (row.kind === "user") {
+  if (row.kind === "user-message") {
     const content = decodeContent(row) as {
       readonly text?: string
       readonly sender?: MessageSender
@@ -283,7 +287,7 @@ const semanticEntryFromRow = (row: SemanticRow): SemanticEntry | null => {
     }
     return {
       ...base,
-      kind: "user",
+      kind: "user-message",
       ...(content.sender === undefined ? {} : { sender: content.sender }),
       parts: [
         ...(content.text === undefined || content.text === "" ? [] : [{ kind: "text" as const, text: content.text }]),
@@ -302,7 +306,7 @@ const semanticEntryFromRow = (row: SemanticRow): SemanticEntry | null => {
       ],
     }
   }
-  if (row.kind === "agent") {
+  if (row.kind === "agent-message") {
     const content = decodeContent(row) as AssistantContent
     const parts = typeof content.content === "string" || content.content === undefined
       ? [{ kind: "text" as const, text: content.content ?? content.text }]
@@ -311,13 +315,13 @@ const semanticEntryFromRow = (row: SemanticRow): SemanticEntry | null => {
             ? [{ kind: "text" as const, text: part.text }]
             : [],
         )
-    return { ...base, kind: "agent", modelCallId: row.model_call_id, parts }
+    return { ...base, kind: "agent-message", modelCallId: row.model_call_id, parts }
   }
-  if (row.kind === "thought") {
+  if (row.kind === "agent-thought") {
     const content = decodeContent(row) as { readonly text?: string }
     return { ...base, kind: "agent-thought", modelCallId: row.model_call_id, text: content.text ?? "" }
   }
-  if (row.kind === "tool") {
+  if (row.kind === "agent-tool") {
     const argumentsValue = row.arguments === null
       ? null
       : (JSON.parse(Buffer.from(row.arguments).toString("utf8")) as { readonly arguments?: unknown }).arguments ?? null
@@ -373,10 +377,10 @@ const semanticEntryFromRow = (row: SemanticRow): SemanticEntry | null => {
     }
     return { ...base, kind: "agent-tool", tool }
   }
-  if (row.kind === "system") {
+  if (row.kind === "system-message") {
     return {
       ...base,
-      kind: "system",
+      kind: "system-message",
       content: { id: row.entry_id, kind: "text", text: thisText(row.content) },
     }
   }
@@ -422,7 +426,7 @@ export class Conversation {
     sessionId: string,
     window: number,
     owner: { readonly runId: string; readonly model: string | null; readonly agentTitle?: string } | null,
-    kind: "developer" | "user" | "agent" | "thought" | "tool",
+    kind: "developer-message" | "user-message" | "agent-message" | "agent-thought" | "agent-tool",
     content: unknown,
     options: { readonly format?: string; readonly modelCallId?: string | null } = {},
   ): { readonly entryId: string; readonly position: number; readonly contentId: string } {
@@ -461,7 +465,7 @@ export class Conversation {
       .query<EntryRow, (string | number)[]>(query)
       .all(...params)
       .flatMap((row) => {
-        if (row.kind === "thought") return []
+        if (row.kind === "agent-thought") return []
         const item = itemFromRow(row, row.cleared === 1)
         return item === null ? [] : [item]
       })
@@ -509,15 +513,31 @@ export class Conversation {
       .get(sessionId)
     if (row === null) return null
     const harness = row.harness_content_sha256 === null ? null : this.content(row.harness_content_sha256)
+    const systemEntryId =
+      this.db
+        .query<{ entry_id: string }, [string, number]>(
+          `SELECT e.entry_id FROM session_entries e
+            JOIN window_entries w ON w.session_id = e.session_id AND w.entry_id = e.entry_id
+            WHERE e.session_id = ? AND w.window_position = ? AND e.kind = 'system-message'
+            ORDER BY e.position LIMIT 1`,
+        )
+        .get(sessionId, row.position)?.entry_id ?? null
     return {
       position: row.position,
       runId: row.run_id,
       harnessInstructions: harness ?? row.harness_instructions,
       harnessContentId: row.harness_content_sha256,
+      systemEntryId,
     }
   }
 
-  insertWindow(sessionId: string, runId: string | null, harnessInstructions: string, createdAt: number): CheckpointWindow {
+  insertWindow(
+    sessionId: string,
+    runId: string | null,
+    harnessInstructions: string,
+    createdAt: number,
+    owner: { readonly model: string | null; readonly agentTitle?: string } | null = null,
+  ): CheckpointWindow {
     const position =
       (this.db.query<{ p: number | null }, [string]>("SELECT max(position) AS p FROM checkpoint_windows WHERE session_id = ?").get(sessionId)?.p ?? 0) + 1
     const contentId = new Bun.CryptoHasher("sha256").update(harnessInstructions).digest("hex")
@@ -529,7 +549,44 @@ export class Conversation {
           VALUES (?, ?, ?, ?, ?, ?)`,
       )
       .run(sessionId, position, runId, harnessInstructions, contentId, createdAt)
-    return { position, runId, harnessInstructions, harnessContentId: contentId }
+    const profile = this.sessionProfile(sessionId)
+    const entryId = crypto.randomUUID()
+    const entryPosition = this.nextPosition(sessionId)
+    this.db
+      .query(
+        `INSERT INTO session_entries
+          (session_id, entry_id, position, owner_turn_id, kind, content_sha256, model_call_id,
+           agent_title, model_id, authorship_session_id, ownership_kind, created_at)
+          VALUES (?, ?, ?, ?, 'system-message', ?, NULL, ?, ?, ?, 'local', ?)`,
+      )
+      .run(
+        sessionId,
+        entryId,
+        entryPosition,
+        runId,
+        contentId,
+        owner?.agentTitle ?? profile.agentTitle,
+        owner?.model ?? profile.modelId,
+        sessionId,
+        createdAt,
+      )
+    this.db
+      .query("INSERT INTO window_entries (session_id, window_position, entry_id) VALUES (?, ?, ?)")
+      .run(sessionId, position, entryId)
+    return { position, runId, harnessInstructions, harnessContentId: contentId, systemEntryId: entryId }
+  }
+
+  /** Maps producing `model_call_id` to its `agent-thought` entry id within a window. */
+  windowThoughtEntries(sessionId: string, window: number): ReadonlyMap<string, string> {
+    const rows = this.db
+      .query<{ model_call_id: string; entry_id: string }, [string, number]>(
+        `SELECT e.model_call_id, e.entry_id FROM session_entries e
+          JOIN window_entries w ON w.session_id = e.session_id AND w.entry_id = e.entry_id
+          WHERE e.session_id = ? AND w.window_position = ? AND e.kind = 'agent-thought' AND e.model_call_id IS NOT NULL
+          ORDER BY e.position`,
+      )
+      .all(sessionId, window)
+    return new Map(rows.map((row) => [row.model_call_id, row.entry_id]))
   }
 
   items(sessionId: string, window: number): ReadonlyArray<Item> {
@@ -596,13 +653,27 @@ export class Conversation {
     const request = call.request as {
       readonly providerInput?: { readonly contentId?: string }
       readonly contributions?: ReadonlyArray<{ readonly rendered?: { readonly contentId?: string } }>
+      readonly items?: ReadonlyArray<ModelCallContextItem>
     }
     if (request.providerInput?.contentId !== undefined) rendered.add(request.providerInput.contentId)
     for (const contribution of request.contributions ?? []) {
       if (contribution.rendered?.contentId !== undefined) rendered.add(contribution.rendered.contentId)
     }
+    for (const item of request.items ?? []) {
+      if (item.kind === "system-message") rendered.add(item.contentId)
+      else if (item.kind === "user-message") {
+        for (const attachment of item.attachments) {
+          if (attachment.kind === "representation") rendered.add(attachment.content.contentId)
+        }
+      } else if (item.kind === "agent-tool") {
+        for (const media of item.resultMedia) {
+          if (media.kind === "representation") rendered.add(media.content.contentId)
+        }
+      }
+    }
     const retain = this.db.query(
-      "INSERT OR IGNORE INTO request_manifest_rendered (session_id, manifest_id, content_ref) VALUES (?, ?, ?)",
+      `INSERT OR IGNORE INTO request_manifest_rendered (session_id, manifest_id, content_ref)
+        SELECT ?, ?, sha256 FROM contents WHERE sha256 = ?`,
     )
     for (const contentRef of rendered) retain.run(sessionId, call.inputBoundaryId, contentRef)
   }
@@ -661,12 +732,15 @@ export class Conversation {
         readonly input_tokens?: number
         readonly output_tokens?: number
         readonly total_tokens?: number
+        readonly input_token_details?: { readonly cache_read?: number }
+        readonly output_token_details?: { readonly reasoning?: number }
       }
     }).usage_metadata
     this.db
       .query(
         `UPDATE model_calls SET ended_at = ?, outcome = 'success', provider_replay_ref = ?,
-           provider_input_tokens = ?, provider_output_tokens = ?, provider_total_tokens = ?
+           provider_input_tokens = ?, provider_output_tokens = ?, provider_total_tokens = ?,
+           provider_reasoning_tokens = ?, provider_cached_tokens = ?
           WHERE session_id = ? AND model_call_id = ?`,
       )
       .run(
@@ -675,6 +749,8 @@ export class Conversation {
         usage?.input_tokens ?? null,
         usage?.output_tokens ?? null,
         usage?.total_tokens ?? null,
+        usage?.output_token_details?.reasoning ?? null,
+        usage?.input_token_details?.cache_read ?? null,
         sessionId,
         modelCallId,
       )
@@ -703,8 +779,8 @@ export class Conversation {
     return this.successfulManifests(sessionId).at(-1) ?? null
   }
 
-  /** The latest successful request boundary's manifest identity. */
-  latestBoundaryId(sessionId: string): string | null {
+  /** The latest successful model call context's identity. */
+  latestContextId(sessionId: string): string | null {
     return (
       this.db
         .query<{ manifest_id: string }, [string]>(
@@ -748,20 +824,25 @@ export class Conversation {
     return this.semanticEntries(sessionId).find((entry) => entry.id === entryId) ?? null
   }
 
-  /** One successful boundary by manifest identity, or null when this session does not own it. */
-  semanticBoundary(sessionId: string, manifestId: string): ModelInputManifest | null {
-    return this.semanticBoundaries(sessionId).find((boundary) => boundary.id === manifestId) ?? null
+  /** One successful model call context by identity, or null when this session does not own it. */
+  semanticContext(sessionId: string, contextId: string): ModelCallContext | null {
+    return this.semanticContexts(sessionId).find((context) => context.id === contextId) ?? null
   }
 
-  /** The retained body identity and size of one request manifest. */
-  boundaryBodyRef(sessionId: string, manifestId: string): { readonly contentId: string; readonly byteLength: number } | null {
+  /** One successful model call context by generating model call identity, or null when this session does not own it. */
+  semanticContextForCall(sessionId: string, modelCallId: string): ModelCallContext | null {
+    return this.semanticContexts(sessionId).find((context) => context.modelCallId === modelCallId) ?? null
+  }
+
+  /** The retained body identity and size of one model call context. */
+  contextBodyRef(sessionId: string, contextId: string): { readonly contentId: string; readonly byteLength: number } | null {
     const row = this.db
       .query<{ body_ref: string; byte_length: number }, [string, string]>(
         `SELECT r.body_ref, length(c.data) AS byte_length FROM request_manifests r
           JOIN contents c ON c.sha256 = r.body_ref
           WHERE r.session_id = ? AND r.manifest_id = ?`,
       )
-      .get(sessionId, manifestId)
+      .get(sessionId, contextId)
     return row === null ? null : { contentId: row.body_ref, byteLength: row.byte_length }
   }
 
@@ -802,6 +883,8 @@ export class Conversation {
       readonly inputTokens: number | null
       readonly outputTokens: number | null
       readonly totalTokens: number | null
+      readonly reasoningTokens: number | null
+      readonly cachedTokens: number | null
     }
   }> {
     const ids = JSON.stringify(modelCallIds)
@@ -811,8 +894,11 @@ export class Conversation {
         provider_input_tokens: number | null
         provider_output_tokens: number | null
         provider_total_tokens: number | null
+        provider_reasoning_tokens: number | null
+        provider_cached_tokens: number | null
       }, [string, string]>(
-        `SELECT model_call_id, provider_input_tokens, provider_output_tokens, provider_total_tokens
+        `SELECT model_call_id, provider_input_tokens, provider_output_tokens, provider_total_tokens,
+           provider_reasoning_tokens, provider_cached_tokens
           FROM model_calls WHERE session_id = ? AND model_call_id IN (SELECT value FROM json_each(?))
           ORDER BY started_at, rowid`,
       )
@@ -823,12 +909,14 @@ export class Conversation {
           inputTokens: row.provider_input_tokens,
           outputTokens: row.provider_output_tokens,
           totalTokens: row.provider_total_tokens,
+          reasoningTokens: row.provider_reasoning_tokens,
+          cachedTokens: row.provider_cached_tokens,
         },
       }))
   }
 
-  /** Successful request boundaries with their ordered contributions and attribution. */
-  semanticBoundaries(sessionId: string): ReadonlyArray<ModelInputManifest> {
+  /** Successful model call contexts with their ordered semantic items and offered tools. */
+  semanticContexts(sessionId: string): ReadonlyArray<ModelCallContext> {
     return this.db
       .query<{
         manifest_id: string
@@ -847,96 +935,24 @@ export class Conversation {
          ORDER BY m.started_at, m.rowid`,
       )
       .all(sessionId)
-      .flatMap((row) => {
+      .flatMap((row): Array<ModelCallContext> => {
         const request = JSON.parse(Buffer.from(row.body).toString("utf8")) as {
-          readonly measurement?: ModelInputManifest["measurement"]
-          readonly contributions?: ReadonlyArray<{
-            readonly position: number
-            readonly kind: string
-            readonly sourceEntryId?: string | null
-            readonly sourceEntryIds?: ReadonlyArray<string>
-            readonly representation?: RepresentationRef
-            readonly transformation?: string | null
-            readonly name?: string
-            readonly description?: string
-            readonly parameters?: unknown
-            readonly reason?: string
-            readonly rendered?: {
-              readonly representationId: string
-              readonly contentId: string
-              readonly mediaType?: string
-              readonly digest: string
-              readonly byteLength?: number
-              readonly renderer: string
-            }
-          }>
+          readonly measurement?: ModelCallContext["measurement"]
+          readonly tools?: ReadonlyArray<OfferedToolDefinition>
+          readonly items?: ReadonlyArray<ModelCallContextItem>
         }
-        if (request.measurement === undefined || request.contributions === undefined) return []
-        const contributions = request.contributions.flatMap((contribution): ModelInputManifest["contributions"] => {
-          if (contribution.kind === "tool-definition") {
-            if (contribution.rendered === undefined) return []
-            const rendered = this.renderedContribution(contribution.rendered)
-            return [{
-              position: contribution.position,
-              kind: "tool-definition",
-              name: contribution.name ?? "unknown",
-              description: contribution.description ?? "",
-              parameters: contribution.parameters ?? null,
-              rendered,
-            }]
-          }
-          if (contribution.kind === "placeholder") {
-            return [{
-              position: contribution.position,
-              kind: "placeholder",
-              sourceEntryId: contribution.sourceEntryId ?? null,
-              reason: contribution.reason ?? "unavailable",
-            }]
-          }
-          if (contribution.representation === undefined || contribution.rendered === undefined) return []
-          return [{
-            position: contribution.position,
-            kind: contribution.kind as "instruction" | "message" | "transcript",
-            sourceEntryId: contribution.sourceEntryId ?? null,
-            sourceEntryIds: [...(contribution.sourceEntryIds ?? [])],
-            representation: contribution.representation,
-            transformation: contribution.transformation ?? null,
-            rendered: this.renderedContribution(contribution.rendered),
-          }]
-        })
+        if (request.measurement === undefined || request.items === undefined) return []
         return [{
           id: row.manifest_id,
           modelCallId: row.model_call_id,
           turnId: row.turn_id,
           windowPosition: row.window_position,
           committedAt: row.committed_at,
-          contributions,
+          tools: [...(request.tools ?? [])],
+          items: [...request.items],
           measurement: request.measurement,
         }]
       })
-  }
-
-  private renderedContribution(rendered: {
-    readonly representationId: string
-    readonly contentId: string
-    readonly mediaType?: string
-    readonly digest: string
-    readonly byteLength?: number
-    readonly renderer: string
-  }) {
-    const format = this.db
-      .query<{ format: string }, [string]>("SELECT format FROM contents WHERE sha256 = ?")
-      .get(rendered.contentId)?.format
-    const byteLength = rendered.byteLength ?? this.contentBytes(rendered.contentId)?.byteLength
-    if (byteLength === undefined) throw new IntegrityFailure(`rendered contribution ${rendered.contentId} has no retained bytes`)
-    return {
-      representationId: rendered.representationId,
-      contentId: rendered.contentId,
-      mediaType: rendered.mediaType ?? format ?? "application/octet-stream",
-      digest: rendered.digest,
-      byteLength,
-      renderer: rendered.renderer,
-    }
   }
 
   clear(sessionId: string, runId: string, attempt: number, positions: ReadonlyArray<number>) {
@@ -977,7 +993,7 @@ export class Conversation {
     if (body.kind === "assistant") return this.appendAssistant(sessionId, window, owner!, body.message, null).item
     if (body.kind === "result") return this.appendToolResult(sessionId, window, owner!, body, null)
     const content = body.kind === "component" ? { kind: "component", component: body.component } : body
-    const entry = this.appendEntry(sessionId, window, owner, body.kind === "component" ? "developer" : "user", content)
+    const entry = this.appendEntry(sessionId, window, owner, body.kind === "component" ? "developer-message" : "user-message", content)
     const profile = this.sessionProfile(sessionId)
     return {
       ...body,
@@ -1010,12 +1026,12 @@ export class Conversation {
       additional_kwargs: message.additional_kwargs,
       response_metadata: message.response_metadata,
     }
-    const entry = this.appendEntry(sessionId, window, owner, "agent", content, { format: ASSISTANT_FORMAT, modelCallId })
+    const entry = this.appendEntry(sessionId, window, owner, "agent-message", content, { format: ASSISTANT_FORMAT, modelCallId })
     const thought = reasoningText(message)
-    if (thought !== "") this.appendEntry(sessionId, window, owner, "thought", { kind: "thought", text: thought }, { modelCallId })
+    if (thought !== "") this.appendEntry(sessionId, window, owner, "agent-thought", { kind: "thought", text: thought }, { modelCallId })
     const toolInvocationIds: Array<string> = []
     for (const call of message.tool_calls ?? []) {
-      const tool = this.appendEntry(sessionId, window, owner, "tool", { kind: "tool", arguments: call.args }, { modelCallId })
+      const tool = this.appendEntry(sessionId, window, owner, "agent-tool", { kind: "tool", arguments: call.args }, { modelCallId })
       toolInvocationIds.push(tool.entryId)
       this.db
         .query(
@@ -1085,7 +1101,7 @@ export class Conversation {
         sessionId,
         window,
         owner,
-        "tool",
+        "agent-tool",
         { kind: "result", callId: result.callId, name: result.name, content: result.content, outcome: result.outcome },
         { modelCallId },
       )
@@ -1324,7 +1340,7 @@ export class Conversation {
         JOIN contents c ON c.sha256 = e.content_sha256
         LEFT JOIN agent_tools a ON a.session_id = e.session_id AND a.entry_id = e.entry_id
         LEFT JOIN contents rc ON rc.sha256 = a.result_ref
-        WHERE e.session_id = ? AND e.entry_id = ? AND e.kind = 'tool'`,
+        WHERE e.session_id = ? AND e.entry_id = ? AND e.kind = 'agent-tool'`,
     ).get(sessionId, referenceId)
     if (row === null) return null
     const envelope = JSON.parse(Buffer.from(row.data).toString("utf8")) as { readonly content?: ToolContent }
@@ -1364,11 +1380,28 @@ export class Conversation {
           readonly representation?: { readonly contentId?: string }
           readonly rendered?: { readonly contentId?: string }
         }>
+        readonly items?: ReadonlyArray<ModelCallContextItem>
       }
-      return request.providerInput?.contentId === contentId ||
-        (request.contributions ?? []).some((contribution) =>
-          contribution.representation?.contentId === contentId ||
-          contribution.rendered?.contentId === contentId)
+      if (request.providerInput?.contentId === contentId) return true
+      if (
+        (request.contributions ?? []).some(
+          (contribution) =>
+            contribution.representation?.contentId === contentId ||
+            contribution.rendered?.contentId === contentId,
+        )
+      ) {
+        return true
+      }
+      return (request.items ?? []).some((item) => {
+        if (item.kind === "system-message") return item.contentId === contentId
+        if (item.kind === "user-message") {
+          return item.attachments.some((att) => att.kind === "representation" && att.content.contentId === contentId)
+        }
+        if (item.kind === "agent-tool") {
+          return item.resultMedia.some((media) => media.kind === "representation" && media.content.contentId === contentId)
+        }
+        return false
+      })
     } catch {
       return false
     }
@@ -1406,6 +1439,7 @@ export class Conversation {
           readonly byteLength?: number
         }
       }>
+      readonly items?: ReadonlyArray<ModelCallContextItem>
     }
     try {
       request = JSON.parse(Buffer.from(body.body).toString("utf8")) as typeof request
@@ -1437,6 +1471,22 @@ export class Conversation {
           representationId: contribution.representation.representationId,
           transformation: contribution.representation.transformation,
           metadata: { byteLength, format },
+        }
+      }
+    }
+    for (const item of request.items ?? []) {
+      if (item.kind === "system-message" && item.contentId === contentId) {
+        return { representationId: contentId, transformation: null, metadata: { byteLength, format } }
+      }
+      const mediaList: ReadonlyArray<ContextMediaProjection> =
+        item.kind === "user-message" ? item.attachments : item.kind === "agent-tool" ? item.resultMedia : []
+      for (const media of mediaList) {
+        if (media.kind === "representation" && media.content.contentId === contentId) {
+          return {
+            representationId: media.content.representationId,
+            transformation: media.content.transformation,
+            metadata: { byteLength, format },
+          }
         }
       }
     }
@@ -1553,10 +1603,12 @@ export class Conversation {
         `INSERT INTO model_calls
           (session_id, model_call_id, turn_id, ordinal, window_position, input_manifest_ref,
            offered_tools_ref, started_at, ended_at, outcome, provider_replay_ref,
-           provider_input_tokens, provider_output_tokens, provider_total_tokens)
+           provider_input_tokens, provider_output_tokens, provider_total_tokens,
+           provider_reasoning_tokens, provider_cached_tokens)
           SELECT ?, model_call_id, turn_id, ordinal, window_position, input_manifest_ref,
             offered_tools_ref, started_at, ended_at, outcome, provider_replay_ref,
-            provider_input_tokens, provider_output_tokens, provider_total_tokens
+            provider_input_tokens, provider_output_tokens, provider_total_tokens,
+            provider_reasoning_tokens, provider_cached_tokens
           FROM model_calls WHERE session_id = ? AND turn_id IN (SELECT value FROM json_each(?))`,
       )
       .run(target, source, kept)

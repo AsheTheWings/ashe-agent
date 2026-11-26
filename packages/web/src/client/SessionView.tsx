@@ -126,10 +126,10 @@ export const useAutoHydrateSemanticBody = (
 }
 
 export const SEMANTIC_BLOCK_LABEL: Readonly<Record<SemanticEntry["kind"], string>> = {
-  system: "SYSTEM-MESSAGE",
-  developer: "DEVELOPER-MESSAGE",
-  user: "USER-MESSAGE",
-  agent: "AGENT-MESSAGE",
+  "system-message": "SYSTEM-MESSAGE",
+  "developer-message": "DEVELOPER-MESSAGE",
+  "user-message": "USER-MESSAGE",
+  "agent-message": "AGENT-MESSAGE",
   "agent-thought": "AGENT-THOUGHT",
   "agent-tool": "AGENT-TOOL",
 }
@@ -199,13 +199,13 @@ const AgentIdentityMeta = ({
 
 const BlockKindIcon = ({ kind }: { readonly kind: SemanticEntry["kind"] }) => {
   switch (kind) {
-    case "system":
+    case "system-message":
       return <TerminalIcon className="text-muted-foreground size-3.5 shrink-0" />
-    case "developer":
+    case "developer-message":
       return <Code2Icon className="text-muted-foreground size-3.5 shrink-0" />
-    case "user":
+    case "user-message":
       return <UserIcon className="text-sidebar-primary size-3.5 shrink-0" />
-    case "agent":
+    case "agent-message":
       return <SparklesIcon className="text-foreground/80 size-3.5 shrink-0" />
     case "agent-thought":
       return <BrainIcon className="text-muted-foreground size-3.5 shrink-0" />
@@ -216,9 +216,9 @@ const BlockKindIcon = ({ kind }: { readonly kind: SemanticEntry["kind"] }) => {
 
 const blockLabelClass = (kind: SemanticEntry["kind"]): string => {
   switch (kind) {
-    case "user":
+    case "user-message":
       return "text-sidebar-primary"
-    case "agent":
+    case "agent-message":
       return "text-foreground"
     default:
       return "text-muted-foreground"
@@ -234,8 +234,8 @@ export const SemanticBlockHeader = ({
   readonly onOpenSession?: ((sessionId: string) => void) | undefined
   readonly extraRight?: ReactNode
 }) => {
-  const peerSender = entry.kind === "user" && entry.sender?.kind === "session" ? entry.sender : null
-  const showAuthor = entry.kind === "agent" || entry.kind === "agent-thought" || entry.kind === "agent-tool"
+  const peerSender = entry.kind === "user-message" && entry.sender?.kind === "session" ? entry.sender : null
+  const showAuthor = entry.kind === "agent-message" || entry.kind === "agent-thought" || entry.kind === "agent-tool"
 
   return (
     <div className="flex flex-wrap items-center gap-2 text-[11px]">
@@ -244,7 +244,7 @@ export const SemanticBlockHeader = ({
         <span className={cn("font-mono font-semibold tracking-wide", blockLabelClass(entry.kind))}>
           {SEMANTIC_BLOCK_LABEL[entry.kind]}
         </span>
-        {entry.kind === "system" && (
+        {entry.kind === "system-message" && (
           <span className="text-muted-foreground/80 font-normal">Harness instructions</span>
         )}
         {entry.kind === "agent-tool" && (
@@ -412,10 +412,10 @@ export const SemanticToolBody = ({ entry }: { readonly entry: SemanticToolEntry 
 }
 
 export const SemanticEntryContent = ({ entry }: { readonly entry: SemanticEntry }) => {
-  if (entry.kind === "system") {
+  if (entry.kind === "system-message") {
     return <PlainText text={entry.content.text} className="text-xs leading-relaxed text-foreground" />
   }
-  if (entry.kind === "developer") {
+  if (entry.kind === "developer-message") {
     return (
       <div className="flex flex-col divide-y divide-border/60">
         {entry.components.map((component) => (
@@ -432,7 +432,7 @@ export const SemanticEntryContent = ({ entry }: { readonly entry: SemanticEntry 
       </div>
     )
   }
-  if (entry.kind === "user") {
+  if (entry.kind === "user-message") {
     return (
       <div className="flex flex-col gap-2">
         {entry.parts.map((part, index) =>
@@ -448,7 +448,7 @@ export const SemanticEntryContent = ({ entry }: { readonly entry: SemanticEntry 
       </div>
     )
   }
-  if (entry.kind === "agent") {
+  if (entry.kind === "agent-message") {
     return (
       <div className="flex flex-col gap-2">
         {entry.parts.map((part, index) =>

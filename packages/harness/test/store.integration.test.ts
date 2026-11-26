@@ -91,7 +91,9 @@ describe("migrations on a real SQLite file", () => {
       )
       expect(db.query("SELECT * FROM api_tokens ORDER BY id").all()).toEqual(before.tokens)
       expect(db.query("SELECT * FROM events ORDER BY seq").all()).toEqual(before.events)
-      expect(db.query("SELECT * FROM session_entries ORDER BY position").all()).toEqual(before.entries)
+      expect(db.query("SELECT * FROM session_entries ORDER BY position").all()).toEqual(
+        before.entries.map((entry) => ({ ...(entry as Record<string, unknown>), kind: "system-message" })),
+      )
       expect(db.query("SELECT * FROM contents ORDER BY sha256").all()).toEqual(before.contents)
       expect(db.query("SELECT harness_id FROM harness_identity").all()).toHaveLength(1)
       expect(db.query("SELECT count(*) AS n FROM input_receipts").get()).toEqual({ n: 0 })
