@@ -51,64 +51,138 @@ validation, expiry, and renewal.
 
 ## Three views
 
-Chat is the first-open view for a session with no saved choice. It shows
-user messages in bubbles, grouping messages admitted by one turn, and
-assistant output inline. Session stacks typed semantic blocks in canonical
-order, including system and developer content, thoughts, tools, and
-inherited source provenance. Checkpoint window shows the latest successful
-model-input boundary with its contributions, transformations, offered tool
-definitions, estimate coverage, and provider usage kept separate.
+The base URL `/` renders the centered starter composer without creating a
+session yet; sending the first message creates the session on the harness and
+moves the browser URL to `/sessions/<sessionId>`. Each existing session lives
+at `/sessions/<sessionId>`, supporting direct navigation, page reloads, and
+browser Back/Forward history (with the backend serving the revalidated SPA
+shell for `/` and valid `/sessions/<sessionId>` paths while returning `404`
+for unknown paths).
 
-The header view selector names all three views. `Ctrl+I` cycles them even
-when the composer has focus; the header also offers `Alt+I` as an
-alternative and a type-to-compose switch. Each session
-remembers its last view and each view its scroll position in browser
-storage. A preview or attention reveal switches to Session and scrolls its
-matching block; ordinary incoming content does not change a retained reading
-position.
+Chat is the first-open view for a session with no saved choice. When a session
+has no messages yet, Chat centers a tall starter composer card with the attach,
+agent, model/effort, and send controls inside its bottom toolbar. Once messages
+exist, Chat shows user messages in bubbles, grouping messages admitted by one
+turn, and assistant output inline with safe GitHub Flavored Markdown rendering,
+keeping thoughts, tools, and developer blocks out of the conversation
+stream. Session displays full-width, horizontally padded, always-expanded
+canonical semantic blocks (`SYSTEM-MESSAGE`, `DEVELOPER-MESSAGE`,
+`USER-MESSAGE`, `AGENT-MESSAGE`, `AGENT-THOUGHT`, `AGENT-TOOL`) separated by
+horizontal dividers—omitting empty text-less agent carrier entries, showing
+agent/model identity on agent blocks and on peer-agent `USER-MESSAGE` entries
+(linked to the sender session), rendering `AGENT-TOOL` input and result in
+equal-height scrollable panes with formatted syntax-colored JSON (expanding
+slightly when a payload nearly fits to avoid tiny scrollbars) and semantic
+outcome badges, and automatically hydrating large retained bodies as they
+enter the viewport. Checkpoint window displays the latest successful
+model-input boundary's contributions with the same padded layout, semantic
+headers, formatted payloads, and automatic hydration.
+
+Every open session uses a constant two-bar header. The top bar shows the
+session title and the view selector dropdown (`Chat`, `Session`,
+`Checkpoint window`). The second bar adapts to the active view while
+holding a constant height:
+
+- **Chat:** renders `SessionNotifications`, a constant-height notification
+  queue that shows the latest entry when collapsed and expands to a
+  five-entry scrollable viewport (newest at top) on click. `ActivityPreview`
+  lives in that queue, showing the latest thought summary and latest tool
+  call with status even when idle; clicking a preview switches to Session
+  and scrolls its matching block. Resumable turns, waiting inputs, execution
+  notices, draft recovery, and composer status all enter `SessionNotifications`
+  so nothing renders above the composer.
+- **Session:** summarizes high-value session insights—total, user, and
+  agent message counts, tool call count and most-used tool, and
+  estimated token total—with a popover breakdown by tool and block kind,
+  plus a queue toggle when alerts are waiting.
+- **Checkpoint window:** summarizes the latest boundary's estimated
+  token total, coverage, separate provider-reported usage, and a
+  segmented distribution across semantic components (including individual
+  developer components), with a popover chart and provider usage table,
+  plus a queue toggle when alerts are waiting.
+
+`Ctrl+I` cycles views even when the composer has focus (`Alt+I` and
+type-to-compose are configurable in Settings). Each session remembers
+its last view and each view its scroll position in browser storage;
+ordinary incoming content does not change a retained reading position.
+
+The desktop sidebar supports docked (pinned, shifting the main area) and
+floating (hover-overlay from the left edge or top-left toggle without
+shifting the main area) modes, persisted in browser storage. Mobile uses
+a slide-over drawer. Non-empty recoverable drafts from other tabs appear
+as entries in `SessionNotifications`.
+
+## Settings and themes
+
+The sidebar footer opens the Settings dialog, which organizes workspace
+configuration into tabs:
+
+- **Appearance:** Light, Dark, or System mode, the warm stock palette,
+  six built-in palettes (including **Claude**), custom themes stored in
+  browser storage, light/dark half-mixing, JSON import/export, and the
+  live custom theme editor. Using a theme paints it immediately and
+  remembers the choice in browser storage. New custom themes start from
+  canvas and accent seeds that generate a full palette with every color
+  role editable, and preview live while restoring the stored theme on
+  cancel. Theme choices live only in the browser: blocked storage keeps
+  the stock palette for the page, a malformed stored library reads as
+  empty, and a missing selected theme falls back to stock.
+- **Shortcuts & Input:** View-cycle modifier (`Ctrl+I` or `Alt+I`) and
+  the type-to-compose switch.
+- **Session & Permissions:** Active session metadata (copyable session
+  ID, applied agent and model, workspace path, fork provenance) and
+  title-scoped permission grants, defaulting to the current agent and
+  clearing all grants for the selected agent after confirmation.
 
 ## Composer and recovery
 
-One fixed composer serves every view. It keeps text, attachments, title,
-model, reasoning effort, and delivery mode while views change. Send is
-always Send; a separate toggle selects Steer or Queue for the next
-submission. Stop appears beside Send while a turn runs and targets the
-observed turn identity. Continue appears only when owner observation says
-resume is eligible.
+One sticky composer overlays the bottom of every view over a soft top fade,
+with no banners or alerts above it. It keeps text, attachments (rendered as
+square thumbnail and document cards in a horizontally scrollable strip),
+agent profile, model, reasoning effort, and delivery mode while views
+change. Send is always Send; while a turn runs, Stop occupies the right-hand action
+slot targeting the observed turn identity when the draft is empty, Send
+replaces it once a submission is ready, and a Queue toggle selects Queue or
+Steer for the next submission. When owner observation says resume is eligible, a
+Continue entry appears in `SessionNotifications`.
 
-Requests for title, model, or effort stay local until Send or a confirmed
-rewind. An omitted field inherits the applied selection; an explicit null
-model and null effort remain distinct. The applied selection and the
-running turn's active selection are shown separately.
+Requests for agent, model, or effort stay local until Send or a
+confirmed rewind. An omitted field inherits the applied selection; an
+explicit null model and null effort remain distinct. When draft choices
+differ from the applied selection, the composer flags that they apply on
+the next send.
 
 Send detaches an immutable snapshot and its submission identity before the
 network call. The next draft is committed in the same browser storage
-write. Unknown acceptance remains visible and is reconciled through the
-harness receipt under the same identity; it is never replayed as a new
-submission. A definitely rejected submission can be restored without
-overwriting newer active text. Offline Send is disabled, and the client
-never builds a durable offline submission queue.
+write. Unknown acceptance remains visible in `SessionNotifications` and is
+reconciled through the harness receipt under the same identity; it is never
+replayed as a new submission. A definitely rejected submission can be
+restored without overwriting newer active text. Offline Send is disabled,
+and the client never builds a durable offline submission queue.
 
 Drafts are partitioned by verified `harnessId`, principal, session, and a
 fresh page-load writer identity. Another tab's saved record is an explicit
-recovery candidate, never a shared writer slot. Unsupported saved formats
-remain in storage and can be exported; no record is silently deleted.
-Blocked storage leaves the current in-memory draft editable with a
-persistent Not saved locally warning.
+recovery candidate in `SessionNotifications`, never a shared writer slot.
+Unsupported saved formats remain in storage and can be exported; no record
+is silently deleted. Blocked storage leaves the current in-memory draft
+editable with a persistent Not saved locally notice in `SessionNotifications`.
 
-Every view shows the shared read-only pending strip. Submitted user
-entries are labelled with their mode and expand to their preview. Pending
-developer work shows only an attributed count in Chat; full developer
-content stays in Session.
+Waiting inputs appear as entries in `SessionNotifications`. Submitted user
+entries are labelled with their mode and link to Session. Pending developer
+work shows only an attributed count; full developer content stays in Session.
 
 ## History and questions
 
-Rewind and fork controls appear only in Chat and use the harness-issued
-history scope. Rewind previews the target and later history and warns that
-it reruns immediately without rolling back external effects. Its text may
-be edited; original attachments remain attached and immutable. A stale
-scope keeps the edit and does not retarget another boundary. A fork opens
-an idle Chat view and copies neither the source draft nor synthetic input.
+Rewind, inline edit, and fork controls appear only in Chat and use the
+harness-issued history scope. Rewind previews the target and later history
+and warns that it reruns immediately without rolling back external effects.
+Clicking Edit transforms the user bubble in place with Cancel and Save
+controls to edit and rerun. Long user messages fold at 300px
+with a bottom fade and an inline Show more / Show less toggle. Sending a
+message expands elastic room at the bottom of Chat so the new user bubble
+pins near the top while the response streams beneath it. A stale scope
+keeps the edit and does not retarget another boundary. A fork opens an
+idle Chat view and copies neither the source draft nor synthetic input.
 
 Questions and permission requests stay inline in Chat. Only the browser
 whose connection owns the assigned action can answer. A steering message
@@ -116,26 +190,27 @@ resolves that browser's question as replied-by-message after input
 acceptance; Queue leaves it open. Plain message text never approves a
 permission request.
 
-Session details exposes title-scoped grants: it defaults to the current
-title, lists grants for the selected stored title, and clears all grants
-for that title after confirmation. It neither edits permission rules nor
-revokes an individual grant.
+Session permission grants are managed under **Settings → Session &
+Permissions**, which lists grants for the selected stored agent and
+clears all grants for that agent after confirmation. It neither edits
+permission rules nor revokes an individual grant.
 
 ## Attention and inbox
 
-The sidebar separates Working from Inbox using authoritative harness
-activity, eligible pending input, continuation, and assignment-validated
-human attention. A needs-human hint never forces a view switch by itself;
-its indicator opens Chat and reveals the request. An interaction assigned
-to another browser says so and cannot be claimed or completed here.
+The sidebar separates **Working**, **Inbox**, and a collapsible **Filed**
+section using authoritative harness activity, eligible pending input,
+continuation, and assignment-validated human attention. A needs-human
+hint never forces a view switch by itself; its indicator opens Chat and
+reveals the request. An interaction assigned to another browser says so
+and cannot be claimed or completed here.
 
 Organization supports pin, read/unread, snooze, filing/reopening, and
-conditional undo. Drag to the filing area or use the row menu; organization
-changes do not cancel input, answer a request, or alter execution. Explicit
-mark-unread advances a read generation so delayed visibility samples cannot
-clear it. Manual filing requires fresh quiescence. Inactivity filing
-defaults to three days and protects pinned, opted-out, working, attention,
-and currently snoozed sessions.
+conditional undo. Drag a session onto the **Filed** section or use the
+row menu; organization changes do not cancel input, answer a request, or
+alter execution. Explicit mark-unread advances a read generation so
+delayed visibility samples cannot clear it. Manual filing requires fresh
+quiescence. Inactivity filing defaults to three days and protects pinned,
+opted-out, working, attention, and currently snoozed sessions.
 
 Shared state uses a separate authenticated WebSocket with semantic
 commands, durable operation receipts, and ordered revisions. A revision gap
