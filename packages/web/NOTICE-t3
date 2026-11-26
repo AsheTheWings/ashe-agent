@@ -3,9 +3,9 @@ https://github.com/pingdotgg/t3code
 commit 2359643cffa6ba9ee84d6f2694b935de54a8013e
 LICENSE SHA-256 935d8f2af0c703f9c39517ee57cc4930b19d02d533be930b63f0e82f93614b43
 
-The inbox, composer, navigation, and activity interaction model is adapted
-from T3 Code under the following license. AsheAgent uses its own product
-identity and implementation.
+The inbox, composer, navigation, and activity interaction model, and the
+theme palettes and customization model, are adapted from T3 Code under the
+following license. AsheAgent uses its own product identity and implementation.
 
 MIT License
 
