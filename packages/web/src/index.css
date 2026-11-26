@@ -2,6 +2,7 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+@import "@fontsource/asimovian";
 @import "tw-shimmer";
 
 @custom-variant dark (&:is(.dark *));
@@ -9,6 +10,7 @@
 @theme inline {
     --font-heading: var(--font-sans);
     --font-sans: 'Geist Variable', sans-serif;
+    --font-brand: 'Asimovian', sans-serif;
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -26,6 +28,12 @@
     --color-input: var(--input);
     --color-border: var(--border);
     --color-destructive: var(--destructive);
+    --color-destructive-foreground: var(--destructive-foreground);
+    --color-positive: var(--positive);
+    --color-positive-background: var(--positive-background);
+    --color-warning: var(--warning);
+    --color-warning-background: var(--warning-background);
+    --color-tint: var(--tint);
     --color-accent-foreground: var(--accent-foreground);
     --color-accent: var(--accent);
     --color-muted-foreground: var(--muted-foreground);
@@ -52,12 +60,12 @@
     height: 0;
         }
   to {
-    height: var(--radix-collapsible-content-height, var(--collapsible-panel-height, auto));
+    height: var(--collapsible-panel-height, auto);
         }
     }
   @keyframes collapsible-up {
   from {
-    height: var(--radix-collapsible-content-height, var(--collapsible-panel-height, auto));
+    height: var(--collapsible-panel-height, auto);
         }
   to {
     height: 0;
@@ -66,84 +74,194 @@
 }
 
 :root {
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
-    --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
+    color-scheme: light;
+    --background: #f8f7f3;
+    --foreground: #292721;
+    --card: #fffefa;
+    --card-foreground: #292721;
+    --popover: #fffefa;
+    --popover-foreground: #292721;
+    --primary: #9c462e;
+    --primary-foreground: #fff9f5;
+    --secondary: #efede6;
+    --secondary-foreground: #292721;
+    --muted: #efede6;
+    --muted-foreground: #69665d;
+    --accent: #eae6dc;
+    --accent-foreground: #292721;
+    --destructive: #b43c2c;
+    --destructive-foreground: #fff9f7;
+    --positive: #2d6a4f;
+    --positive-background: #e6f2ec;
+    --warning: #9a5b13;
+    --warning-background: #f7eedc;
+    --tint: #f2e4da;
+    --border: #e1ddd3;
+    --input: #cfc9bc;
+    --ring: #ad543b;
+    --chart-1: #9c462e;
+    --chart-2: #3b6f75;
+    --chart-3: #b07a2c;
+    --chart-4: #6a5682;
+    --chart-5: #4c7c57;
+    --radius: 0.5rem;
+    --sidebar: #efeee8;
+    --sidebar-foreground: #292721;
+    --sidebar-primary: #9c462e;
+    --sidebar-primary-foreground: #fff9f5;
+    --sidebar-accent: #e4e0d5;
+    --sidebar-accent-foreground: #292721;
+    --sidebar-border: #dfdbd0;
+    --sidebar-ring: #ad543b;
+    --scrollbar-border: 30 3.3% 11.8%;
 }
 
 .dark {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
+    color-scheme: dark;
+    --background: #211f1b;
+    --foreground: #eeeae2;
+    --card: #2a2823;
+    --card-foreground: #eeeae2;
+    --popover: #2e2b26;
+    --popover-foreground: #eeeae2;
+    --primary: #e5a186;
+    --primary-foreground: #2c2019;
+    --secondary: #35312a;
+    --secondary-foreground: #eeeae2;
+    --muted: #302c26;
+    --muted-foreground: #b9b1a3;
+    --accent: #403a31;
+    --accent-foreground: #eeeae2;
+    --destructive: #e06c5c;
+    --destructive-foreground: #241412;
+    --positive: #74c69d;
+    --positive-background: #21362c;
+    --warning: #e6b566;
+    --warning-background: #3a3020;
+    --tint: #49342c;
+    --border: #423c33;
+    --input: #5a5144;
+    --ring: #e5a186;
+    --chart-1: #e5a186;
+    --chart-2: #76b6bd;
+    --chart-3: #e0b263;
+    --chart-4: #b19cd1;
+    --chart-5: #84be8f;
+    --sidebar: #282622;
+    --sidebar-foreground: #eeeae2;
+    --sidebar-primary: #e5a186;
+    --sidebar-primary-foreground: #2c2019;
+    --sidebar-accent: #38332b;
+    --sidebar-accent-foreground: #eeeae2;
+    --sidebar-border: #3d372e;
+    --sidebar-ring: #e5a186;
+    --scrollbar-border: 51 16.5% 84.5%;
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
-    }
+  }
+  html {
+    @apply font-sans antialiased;
+    scrollbar-width: thin;
+    scrollbar-color: hsla(var(--scrollbar-border) / 35%) transparent;
+  }
   body {
     @apply bg-background text-foreground;
-    }
-  html {
-    @apply font-sans;
-    }
+  }
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [role="menuitem"]:not([data-disabled]),
+  [role="option"]:not([data-disabled]),
+  [role="tab"]:not([disabled]),
+  summary {
+    cursor: pointer;
+  }
+  button:disabled,
+  [role="button"][aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+}
+
+.scrollbar-main {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: hsla(var(--scrollbar-border) / 35%) transparent;
+}
+
+.scrollbar-compact {
+  scrollbar-width: thin;
+  scrollbar-color: hsla(var(--scrollbar-border) / 35%) transparent;
+}
+
+/* Composer elevation, ring, hover (only outside interactive children), and focus states matching Claude. */
+.composer-card {
+  box-shadow:
+    0 0.25rem 1.25rem rgba(0, 0, 0, 0.035),
+    0 0 0 1px color-mix(in srgb, var(--foreground) 12%, transparent);
+}
+.dark .composer-card {
+  box-shadow:
+    0 0.25rem 1.25rem rgba(0, 0, 0, 0.14),
+    inset 0 0 0 1px color-mix(in srgb, var(--foreground) 9%, transparent);
+}
+@media (hover: hover) {
+  .composer-card:hover:not(:has(button:hover, a:hover, [role="button"]:hover, label:hover)) {
+    box-shadow:
+      0 0.25rem 1.25rem rgba(0, 0, 0, 0.035),
+      0 0 0 1px color-mix(in srgb, var(--foreground) 22%, transparent);
+  }
+  .dark .composer-card:hover:not(:has(button:hover, a:hover, [role="button"]:hover, label:hover)) {
+    box-shadow:
+      0 0.25rem 1.25rem rgba(0, 0, 0, 0.16),
+      inset 0 0 0 1px color-mix(in srgb, var(--foreground) 16%, transparent);
+  }
+}
+.composer-card:focus-within {
+  box-shadow:
+    0 0.25rem 1.25rem rgba(0, 0, 0, 0.075),
+    0 0 0 1px color-mix(in srgb, var(--foreground) 24%, transparent);
+}
+.dark .composer-card:focus-within {
+  box-shadow:
+    0 0.25rem 1.25rem rgba(0, 0, 0, 0.28),
+    inset 0 0 0 1px color-mix(in srgb, var(--foreground) 18%, transparent);
+}
+.composer-card[data-dragging="true"] {
+  box-shadow:
+    0 0.25rem 1.25rem rgba(0, 0, 0, 0.08),
+    0 0 0 2px color-mix(in srgb, var(--primary) 55%, transparent);
+}
+
+/* Soft eased page fade above the sticky composer dock so scrolled content dissolves smoothly. */
+.composer-dock-host {
+  position: relative;
+  background-color: var(--background);
+}
+.composer-dock-host::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  bottom: 100%;
+  height: 2.5rem;
+  z-index: -1;
+  pointer-events: none;
+  background-image: linear-gradient(
+    to top,
+    var(--background),
+    color-mix(in srgb, var(--background) 84%, transparent) 25%,
+    color-mix(in srgb, var(--background) 50%, transparent) 50%,
+    color-mix(in srgb, var(--background) 16%, transparent) 75%,
+    transparent
+  );
+}
+
+/* Suppress transitions while a theme paints so the palette swaps atomically. */
+.no-transitions *,
+.no-transitions *::before,
+.no-transitions *::after {
+  transition: none !important;
 }
 
 @custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
