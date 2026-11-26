@@ -13,6 +13,60 @@ const VIEW_KEY = "ashe-agent.web.views.v1"
 export const PREFS_KEY = "ashe-agent.web.new-session.v1"
 const SHORTCUTS_KEY = "ashe-agent.web.shortcuts.v1"
 const SIDEBAR_PINNED_KEY = "ashe-agent.web.sidebar-pinned.v1"
+const SIDEBAR_WIDTH_KEY = "ashe-agent.web.sidebar-width.v1"
+const SECONDARY_WINDOW_RATIO_KEY = "ashe-agent.web.secondary-window-ratio.v1"
+
+export const DEFAULT_SIDEBAR_WIDTH = 264
+export const MIN_SIDEBAR_WIDTH = 220
+export const MAX_SIDEBAR_WIDTH = 420
+
+export const clampSidebarWidth = (width: number): number =>
+  Math.round(Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width)))
+
+export const loadSidebarWidth = (): number => {
+  try {
+    const raw = window.localStorage.getItem(SIDEBAR_WIDTH_KEY)
+    if (raw === null) return DEFAULT_SIDEBAR_WIDTH
+    const parsed = Number(raw)
+    return Number.isFinite(parsed) ? clampSidebarWidth(parsed) : DEFAULT_SIDEBAR_WIDTH
+  } catch {
+    return DEFAULT_SIDEBAR_WIDTH
+  }
+}
+
+export const saveSidebarWidth = (width: number): void => {
+  try {
+    window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(clampSidebarWidth(width)))
+  } catch {
+    // Preference still applies for this tab when storage is blocked.
+  }
+}
+
+export const DEFAULT_SECONDARY_WINDOW_RATIO = 0.36
+export const MIN_SECONDARY_WINDOW_RATIO = 0.24
+export const MAX_SECONDARY_WINDOW_RATIO = 0.6
+
+export const clampSecondaryWindowRatio = (ratio: number): number =>
+  Math.min(MAX_SECONDARY_WINDOW_RATIO, Math.max(MIN_SECONDARY_WINDOW_RATIO, ratio))
+
+export const loadSecondaryWindowRatio = (): number => {
+  try {
+    const raw = window.localStorage.getItem(SECONDARY_WINDOW_RATIO_KEY)
+    if (raw === null) return DEFAULT_SECONDARY_WINDOW_RATIO
+    const parsed = Number(raw)
+    return Number.isFinite(parsed) ? clampSecondaryWindowRatio(parsed) : DEFAULT_SECONDARY_WINDOW_RATIO
+  } catch {
+    return DEFAULT_SECONDARY_WINDOW_RATIO
+  }
+}
+
+export const saveSecondaryWindowRatio = (ratio: number): void => {
+  try {
+    window.localStorage.setItem(SECONDARY_WINDOW_RATIO_KEY, clampSecondaryWindowRatio(ratio).toFixed(4))
+  } catch {
+    // Preference still applies for this tab when storage is blocked.
+  }
+}
 
 export const loadSidebarPinned = (): boolean => {
   try {
@@ -72,6 +126,45 @@ export const saveView = (sessionId: string, view: ViewName): void => {
 }
 
 export const formatFullTime = (value: number): string => new Date(value).toLocaleString()
+
+/** Human-readable full date and time for Session block headers (e.g. `Nov 26, 2026, 9:20 PM`). */
+export const formatHumanDateTime = (value: number): string =>
+  new Date(value).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  })
+
+/** Compact exact timestamp for inspection headers and snapshot labels (`3:51 PM` today, `Nov 24, 3:51 PM` earlier). */
+export const formatCompactTime = (value: number, now = Date.now()): string => {
+  const date = new Date(value)
+  const current = new Date(now)
+  const sameDay =
+    date.getFullYear() === current.getFullYear() &&
+    date.getMonth() === current.getMonth() &&
+    date.getDate() === current.getDate()
+  if (sameDay) {
+    return date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+  }
+  return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+}
+
+/** Friendly relative time awareness hint for Chat messages (e.g. `Just now`, `5 mins ago`, `2 hours ago`, `Yesterday`). */
+export const formatFriendlyRelativeTime = (value: number, now = Date.now()): string => {
+  const diff = Math.max(0, now - value)
+  const seconds = Math.floor(diff / 1000)
+  if (seconds < 45) return "Just now"
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return minutes === 1 ? "1 min ago" : `${minutes} mins ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return hours === 1 ? "1 hour ago" : `${hours} hours ago`
+  const days = Math.floor(hours / 24)
+  if (days === 1) return "Yesterday"
+  if (days < 7) return `${days} days ago`
+  return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+}
 
 export const formatRelativeTime = (value: number, now = Date.now()): string => {
   const diff = Math.max(0, now - value)

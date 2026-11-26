@@ -149,6 +149,8 @@ export class SessionClient {
   /** Live actions assigned to this connection, keyed by their session, name, and subject. */
   private readonly pendingActions = new Map<string, PendingAction>()
   private readonly unreconciledQuestions = new Map<string, PendingAction>()
+  /** Monotonic counter per session so superseded semantic reloads never overwrite newer state. */
+  private readonly semanticReloadSeq = new Map<string, number>()
   /** Bumped on sign-in and sign-out, so work of an earlier connection ends quietly. */
   private generation = 0
 
@@ -809,52 +811,84 @@ export class SessionClient {
     return observation
   }
 
-  /** Reads every bounded page of a session's semantic history under one revision. */
+  /** Reads every bounded page of a session's semantic history under one revision, restarting on stale revision conflicts. */
   async reloadSemantic(sessionId: string): Promise<void> {
-    if (this.connection === null || this.state.status !== "connected") return
-    const firstEntries = await this.call("session.semantics.page", { sessionId, object: "entries", limit: 200 })
-    if (firstEntries.object !== "entries") throw new Error("the harness returned the wrong semantic page")
-    const revision = firstEntries.revision
-    const entries = [...firstEntries.items]
-    let cursor = firstEntries.nextCursor
-    while (cursor !== null) {
-      const page = await this.call("session.semantics.page", { sessionId, object: "entries", revision, cursor, limit: 200 })
-      if (page.object !== "entries" || page.revision !== revision) throw new Error("the semantic page revision changed")
-      entries.push(...page.items)
-      cursor = page.nextCursor
+    const connection = this.connection
+    if (connection === null || this.state.status !== "connected") return
+    const seq = (this.semanticReloadSeq.get(sessionId) ?? 0) + 1
+    this.semanticReloadSeq.set(sessionId, seq)
+
+    const isCurrent = () =>
+      this.connection === connection &&
+      this.state.status === "connected" &&
+      this.semanticReloadSeq.get(sessionId) === seq
+
+    const maxAttempts = 3
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (!isCurrent()) return
+      try {
+        const firstEntries = await connection.request("session.semantics.page", { sessionId, object: "entries", limit: 200 })
+        if (!isCurrent()) return
+        if (firstEntries.object !== "entries") throw new Error("the harness returned the wrong semantic page")
+        const revision = firstEntries.revision
+        const entries = [...firstEntries.items]
+        let cursor = firstEntries.nextCursor
+        while (cursor !== null) {
+          const page = await connection.request("session.semantics.page", { sessionId, object: "entries", revision, cursor, limit: 200 })
+          if (!isCurrent()) return
+          if (page.object !== "entries" || page.revision !== revision) {
+            throw new ProtocolError({ code: ErrorCode.conflict, message: "the semantic page revision changed" })
+          }
+          entries.push(...page.items)
+          cursor = page.nextCursor
+        }
+        const turnsFirst = await connection.request("session.semantics.page", { sessionId, object: "turns", revision, limit: 200 })
+        if (!isCurrent()) return
+        if (turnsFirst.object !== "turns") throw new Error("the harness returned the wrong turn page")
+        const turns = [...turnsFirst.items]
+        cursor = turnsFirst.nextCursor
+        while (cursor !== null) {
+          const page = await connection.request("session.semantics.page", { sessionId, object: "turns", revision, cursor, limit: 200 })
+          if (!isCurrent()) return
+          if (page.object !== "turns") throw new Error("the harness returned the wrong turn page")
+          turns.push(...page.items)
+          cursor = page.nextCursor
+        }
+        const contextsFirst = await connection.request("session.semantics.page", { sessionId, object: "contexts", revision, limit: 200 })
+        if (!isCurrent()) return
+        if (contextsFirst.object !== "contexts") throw new Error("the harness returned the wrong context page")
+        const contexts = [...contextsFirst.items]
+        cursor = contextsFirst.nextCursor
+        while (cursor !== null) {
+          const page = await connection.request("session.semantics.page", { sessionId, object: "contexts", revision, cursor, limit: 200 })
+          if (!isCurrent()) return
+          if (page.object !== "contexts") throw new Error("the harness returned the wrong context page")
+          contexts.push(...page.items)
+          cursor = page.nextCursor
+        }
+        if (!isCurrent()) return
+        this.set({
+          semantic: {
+            ...this.state.semantic,
+            [sessionId]: {
+              revision,
+              turns,
+              entries,
+              contexts,
+              latestModelCallContextId: firstEntries.latestModelCallContextId,
+            },
+          },
+        })
+        return
+      } catch (error) {
+        if (error instanceof ProtocolError && error.code === ErrorCode.conflict) {
+          if (attempt + 1 < maxAttempts) continue
+          return
+        }
+        if (error instanceof ConnectionClosed || !isCurrent()) return
+        throw error
+      }
     }
-    const turnsFirst = await this.call("session.semantics.page", { sessionId, object: "turns", revision, limit: 200 })
-    if (turnsFirst.object !== "turns") throw new Error("the harness returned the wrong turn page")
-    const turns = [...turnsFirst.items]
-    cursor = turnsFirst.nextCursor
-    while (cursor !== null) {
-      const page = await this.call("session.semantics.page", { sessionId, object: "turns", revision, cursor, limit: 200 })
-      if (page.object !== "turns") throw new Error("the harness returned the wrong turn page")
-      turns.push(...page.items)
-      cursor = page.nextCursor
-    }
-    const contextsFirst = await this.call("session.semantics.page", { sessionId, object: "contexts", revision, limit: 200 })
-    if (contextsFirst.object !== "contexts") throw new Error("the harness returned the wrong context page")
-    const contexts = [...contextsFirst.items]
-    cursor = contextsFirst.nextCursor
-    while (cursor !== null) {
-      const page = await this.call("session.semantics.page", { sessionId, object: "contexts", revision, cursor, limit: 200 })
-      if (page.object !== "contexts") throw new Error("the harness returned the wrong context page")
-      contexts.push(...page.items)
-      cursor = page.nextCursor
-    }
-    this.set({
-      semantic: {
-        ...this.state.semantic,
-        [sessionId]: {
-          revision,
-          turns,
-          entries,
-          contexts,
-          latestModelCallContextId: firstEntries.latestModelCallContextId,
-        },
-      },
-    })
   }
 
   async semanticBody(sessionId: string, entryId: string, contentId: string): Promise<SemanticEntry> {
@@ -863,6 +897,10 @@ export class SessionClient {
 
   async semanticContext(sessionId: string, contextId: string): Promise<ModelCallContext> {
     return (await this.call("session.semantics.context", { sessionId, contextId })).context
+  }
+
+  async semanticContextForCall(sessionId: string, modelCallId: string): Promise<ModelCallContext> {
+    return (await this.call("session.semantics.context", { sessionId, modelCallId })).context
   }
 
   async modelUsage(sessionId: string, modelCallIds: ReadonlyArray<string>): Promise<ReadonlyArray<ModelCallUsage>> {

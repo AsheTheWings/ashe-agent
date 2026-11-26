@@ -10,8 +10,6 @@ import {
   MailIcon,
   MailOpenIcon,
   MoreHorizontalIcon,
-  PanelLeftDashedIcon,
-  PanelLeftIcon,
   PinIcon,
   PinOffIcon,
   PlusIcon,
@@ -36,6 +34,7 @@ import {
 import { Input } from "@/components/ui/input.tsx"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx"
 import type { WebStateClient, WebStateView } from "./web-state-client.ts"
+import { SidebarPaneIcon } from "./icons.tsx"
 import { formatFullTime, formatRelativeTime, randomId, sessionDisplayTitle } from "./types.ts"
 
 type DerivedSessionRow = {
@@ -243,6 +242,7 @@ export const Sidebar = ({
   onTogglePin,
   showPinControl = true,
   onMenuOpenChange,
+  width,
   className,
 }: {
   readonly web: WebStateView
@@ -255,6 +255,7 @@ export const Sidebar = ({
   readonly onTogglePin?: () => void
   readonly showPinControl?: boolean
   readonly onMenuOpenChange?: (open: boolean) => void
+  readonly width?: number
   readonly className?: string
 }) => {
   const client = useClient()
@@ -334,6 +335,7 @@ export const Sidebar = ({
 
   return (
     <aside
+      style={width !== undefined ? { width: `${width}px` } : undefined}
       className={cn(
         "bg-sidebar text-sidebar-foreground border-sidebar-border flex h-full min-h-0 w-[264px] shrink-0 flex-col border-e",
         className,
@@ -422,7 +424,7 @@ export const Sidebar = ({
                   />
                 }
               >
-                {pinned ? <PanelLeftIcon className="size-4" /> : <PanelLeftDashedIcon className="size-4" />}
+                <SidebarPaneIcon className="size-4" />
               </TooltipTrigger>
               <TooltipContent>{pinned ? "Float sidebar (hover to open)" : "Dock sidebar"}</TooltipContent>
             </Tooltip>

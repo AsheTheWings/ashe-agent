@@ -83,55 +83,91 @@ with explicit labels or icons (`Working`, `Needs you`, `Filed`, `Unread`).
 
 ## Layout
 
-### Workspace Shell
+### Workspace Shell: Sidebar, Primary Window & Secondary Window
 
-- **Desktop (`>= 48rem`):** A `264px` conversation sidebar (`var(--sidebar)`,
-  right border) that toggles between **docked** (shifts the main workspace) and
-  **floating** (overlays the main workspace on left-edge or toggle hover without
-  shifting layout), persisted in browser storage. The sidebar separates sessions
-  into **Working**, **Inbox**, and a collapsible **Filed** section (which also
-  serves as a drag-and-drop filing target when dragging a session row). A sticky
-  bottom tray holds **Settings** and **Sign out**.
-- **Mobile (`< 48rem`):** The sidebar opens as a `Sheet` drawer so the
-  conversation and two-bar header use the full viewport width.
+- **Desktop (`>= 48rem`):** A resizable conversation sidebar (`264px` default,
+  clamped `220px`–`420px`, persisted in browser storage, `var(--sidebar)`, right
+  border with a `12px` drag-resize hit strip and `2px` hover/drag highlight)
+  toggles via the landscape left-rail pane icon between **docked** (shifts the
+  workspace) and **floating** (overlays on left-edge or toggle hover). The
+  sidebar separates sessions into **Working**, **Inbox**, and a collapsible
+  **Filed** section (also a drag-and-drop filing target) above a sticky bottom
+  tray holding **Settings** and **Sign out**.
+- **Primary & Secondary Windows:** To the right of the sidebar, the workspace
+  splits into a **Primary Window** (hosting the active session header, view, and
+  composer) and an optional right-hand **Secondary Window** (`36%` default,
+  clamped `24%`–`60%`, persisted in browser storage, separated by the same
+  vertical drag-resize handle). The mirrored right-rail toggle icon (`Ctrl+.`)
+  appears only when the active view provides secondary content (currently
+  Session insights and Checkpoint window context breakdown + snapshot switcher);
+  clicking the Session or Checkpoint `ViewPanel` toggles the Secondary Window.
+  When open on desktop, the toggle button moves into the Secondary Window's
+  `44px` header while the Primary Window header keeps a fixed `40px` slot
+  reserved so adjacent controls never shift horizontally.
+- **Mobile (`< 48rem`):** The sidebar opens as a left `Sheet` drawer and the
+  Secondary Window opens as a right `Sheet` drawer so the primary view uses the
+  full viewport width.
 
-### Constant Two-Bar Workspace Header
+### Primary Workspace Header, `ViewPanel` & `SessionNotifications` Bar
 
-Every active session keeps a constant two-bar header so the layout never jumps
-as agent runs start or finish:
+Every active session keeps a `44px` primary header bar on desktop (`>= 48rem`)
+hosting the sidebar toggle (when floating or on mobile), the session title, a
+centered inset **`ViewPanel`** slot owned by the active view, the **View**
+selector dropdown (`Chat`, `Session`, `Checkpoint window` with keyboard hint),
+and the reserved Secondary Window toggle slot. On narrow mobile viewports
+(`< 48rem`), `ViewPanel` drops to a compact `36px` strip below the primary bar.
 
-1. **Primary bar (`44px`):** Sidebar dock/float toggle (when floating or on
-   mobile) and the session title on the left; the **View** selector dropdown
-   (`Chat`, `Session`, `Checkpoint window` with keyboard hint) on the right.
-2. **`SessionNotifications` / contextual overview bar (`36px`):** Edge-to-edge
-   full-height bar:
-   - **Chat:** `SessionNotifications` queue showing the latest single entry
-     when collapsed and expanding to a five-entry scrollable viewport (latest
-     at top) on click. `ActivityPreview` (latest thought summary and latest
-     tool call with status, persistent when idle) lives as an entry in the
-     queue alongside resumable turns, waiting inputs, execution notices, draft
-     recovery, and composer status—keeping the area above the composer free of
-     alerts.
-   - **Session:** Compact session insights (total/user/agent messages, tool call
-     count and most-used tool, estimated tokens) with a breakdown popover and a
-     queue toggle when alerts are waiting.
-   - **Checkpoint window:** Provider-reported input tokens as the authoritative
-     window size (falling back to the estimator when unavailable), coverage,
-     and a stacked horizontal semantic distribution bar grouped into
-     **Harness** (System message, Tool definitions, Developer messages, Tool
-     results), **Agent output**, and **User messages**, with a popover showing
-     the same stacked horizontal bar, 3-group breakdown, and provider usage
-     table, plus a queue toggle when alerts are waiting.
+- **`SessionNotifications` secondary bar:** Whenever actionable alerts, errors,
+  or user-action items exist across sessions (including connection/app errors,
+  resumable turns, pending permissions/questions, execution failures, and
+  recoverable/unsupported drafts), `SessionNotifications` renders as a `36px`
+  secondary bar directly below the primary bar showing the latest entry;
+  clicking it expands a 5-row scrollable list (`max-h-[185px]`) with per-entry
+  actions. App errors always appear in this bar and never overlay the page.
+  When no notifications are active, the bar is omitted.
+- **Token formatting & tooltips:** Token counts render as compact unitless
+  numbers below `1,000` (`754`, `~120`) and `K`/`M` at or above `1,000` (`4.7K`,
+  `79.1K`, `1.2M`), paired with first-class themed `Tooltip` overlays
+  (`bg-popover`, `text-popover-foreground`, subtle hairline border, no arrow)
+  giving exact counts and descriptions across the workspace.
+- **`ViewPanel` by view:**
+  - **Chat:** `ActivityPreview` (latest thought summary and latest tool call
+    with status, persistent when idle).
+  - **Session:** Compact session insights (total/user/agent messages, tool call
+    count and most-used tool, compact estimated token count); clicking toggles
+    the **Session insights** Secondary Window.
+  - **Checkpoint window:** Input-only compact token count, a stacked horizontal
+    distribution bar grouped into **Harness** (System message, Tool
+    definitions, Developer messages, Tool results), **Agent output**, and **User
+    messages**, and the snapshot label `Window <N> · <time>` (plus a `Latest`
+    reset control when viewing a historical snapshot); clicking toggles the
+    **Checkpoint window** Secondary Window showing **Context breakdown** (`est.
+    · 1T ≈ 4 chars`), the stacked horizontal bar and 3-group breakdown, and the
+    timestamped snapshot switcher.
 
-### Inspection Views (Session & Checkpoint)
+### Inspection Views, Timestamps & Cross-View Navigation
 
-Session and Checkpoint window render full-width, horizontally padded,
-always-expanded blocks (`SYSTEM-MESSAGE`, `DEVELOPER-MESSAGE`, `USER-MESSAGE`,
-`AGENT-MESSAGE`, `AGENT-THOUGHT`, `AGENT-TOOL`) separated by horizontal
-hairline dividers (`divide-y`) without card backgrounds or collapse toggles,
+Session and Checkpoint window render full-width, horizontally padded blocks
+(`SYSTEM-MESSAGE`, `DEVELOPER-MESSAGE`, `USER-MESSAGE`, `AGENT-MESSAGE` with
+the `AA` brand monogram icon, `AGENT-THOUGHT`, `AGENT-TOOL`) separated by
+horizontal hairline dividers (`divide-y`) without card backgrounds. Every block
+groups its header details together inline on the left (icon, kind label,
+tool/component metadata, author/model identity where applicable, and compact
+token estimate with exact tooltips) for single-glance lookup. Session blocks include a human-readable full
+date and time in the header; Checkpoint window blocks omit per-block timestamps
+(snapshot timing lives in the Checkpoint window header). Chat messages reveal
+friendly relative timestamps (`Just now`, `5 mins ago`, `2 hours ago`,
+`Yesterday`) on hover/focus alongside message actions, with full date/time on
+tooltip. Switching from Chat to Session anchors Session's scroll position
+instantly to the focused user message in Chat without moving Chat's saved scroll
+position on return. Selection-safe `Shift+click` on an agent message in Chat or
+an agent message, thought, or tool block in Session jumps directly to the
+Checkpoint window snapshot that generated it. In Checkpoint window,
+`TOOL-DEFINITIONS` is always the first block and the only collapsible block
+(collapsed by default via `Collapsible`); every other block stays expanded,
 maximizing scannable width for traces, developer components (including
-foreign-owner transcripts), diffs, cleared tool results, and offered tool
-definitions while omitting empty text-less agent carrier entries. `DEVELOPER-MESSAGE`, `SYSTEM-MESSAGE`, and human `USER-MESSAGE`
+foreign-owner transcripts), diffs, and cleared tool results while omitting
+empty text-less agent carrier entries. `DEVELOPER-MESSAGE`, `SYSTEM-MESSAGE`, and human `USER-MESSAGE`
 headers omit agent/model identity; peer-agent `USER-MESSAGE` headers display
 the sending agent's identity and session link. `AGENT-TOOL` merges kind, tool
 name, colored outcome badge (`success`, `failed`, `running`), and
@@ -233,10 +269,11 @@ incoming updates when the user has scrolled up.
   quiet footer row below holds the agent title selector, contextual queue
   toggle while running, and a combined Model + Thinking Effort menu that
   configures reasoning effort in a nested `Effort` submenu.
-- **Data visualization:** Use `@tanstack/charts` (`--chart-1`) alongside a
-  segmented semantic distribution bar (`--chart-1`–`--chart-5`) in the
-  Checkpoint window to visualize token distribution across contributions,
-  paired with a structured `Table` for measurements and provider usage.
+- **Data visualization:** Use a segmented horizontal semantic distribution bar
+  (`--chart-1`–`--chart-5`, `--primary`) in the Checkpoint window `ViewPanel`
+  and Secondary Window to visualize token distribution across **Harness**,
+  **Agent output**, and **User messages**, paired with compact unitless /
+  `K` / `M` counters and exact tooltips throughout.
 
 ## Do's and Don'ts
 

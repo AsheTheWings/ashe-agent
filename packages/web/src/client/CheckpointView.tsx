@@ -1,5 +1,5 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react"
-import { BrainIcon, LayersIcon, Loader2Icon, WrenchIcon } from "lucide-react"
+import { memo, useEffect, useMemo, useState } from "react"
+import { BrainIcon, ChevronRightIcon, LayersIcon, Loader2Icon, WrenchIcon } from "lucide-react"
 import type {
   ContextMediaProjection,
   ModelCallContext,
@@ -8,9 +8,12 @@ import type {
   SemanticEntry,
   SemanticPageEntry,
 } from "@ashe-agent/protocol"
+import { cn } from "cn"
 import { useClient, useClientState } from "@/app/client-context.tsx"
 import { Badge } from "@/components/ui/badge.tsx"
 import { Button } from "@/components/ui/button.tsx"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible.tsx"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx"
 import { FormattedPayload } from "./json-view.tsx"
 import { PlainText } from "./markdown.tsx"
 import {
@@ -18,6 +21,7 @@ import {
   SemanticEntryContent,
   useAutoHydrateSemanticBody,
 } from "./SessionView.tsx"
+import { estimateContextItemTokens, estimateToolDefinitionTokens, formatTokens, formatTokensTooltip } from "./stats.ts"
 import { formatBytes } from "./types.ts"
 
 const CLEARED_RESULT_TEXT = "[Result cleared to free context. Run the call again if you need it.]"
@@ -113,14 +117,27 @@ const ContextItemRow = memo(({
     }
   }, [attempt, client, contextId, fallbackSystemKey, item, sessionId])
 
+  const itemTokens = estimateContextItemTokens(item)
   const metaTag = (
-    <span className="text-muted-foreground/75 shrink-0 font-mono text-[11px] tabular-nums">
-      #{index + 1}
-      {item.kind === "agent-tool"
-        ? ` · ${formatBytes(item.inputByteLength + item.resultByteLength)}${item.resultCleared ? " · cleared" : ""}`
-        : item.kind === "agent-thought" && item.opaque
-          ? " · opaque replay"
-          : ` · ${formatBytes(item.byteLength)}`}
+    <span className="text-muted-foreground/75 flex shrink-0 items-center gap-1.5 font-mono text-[11px] tabular-nums">
+      <span>#{index + 1}</span>
+      <span className="text-muted-foreground/50" aria-hidden="true">·</span>
+      {item.kind === "agent-thought" && item.opaque ? (
+        <span>opaque</span>
+      ) : (
+        <Tooltip>
+          <TooltipTrigger render={<span className="cursor-default" />}>
+            {formatTokens(itemTokens, true)}
+          </TooltipTrigger>
+          <TooltipContent>{formatTokensTooltip(itemTokens, true)}</TooltipContent>
+        </Tooltip>
+      )}
+      {item.kind === "agent-tool" && item.resultCleared && (
+        <>
+          <span className="text-muted-foreground/50" aria-hidden="true">·</span>
+          <span>cleared</span>
+        </>
+      )}
     </span>
   )
 
@@ -147,11 +164,12 @@ const ContextItemRow = memo(({
   if (item.kind === "agent-thought" && resolvedEntry === undefined) {
     return (
       <li className="flex flex-col gap-2 py-5 text-sm">
-        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
           <span className="text-muted-foreground inline-flex items-center gap-2 font-mono font-semibold tracking-wide">
             <BrainIcon className="size-3.5 shrink-0" />
             AGENT-THOUGHT
           </span>
+          <span className="text-muted-foreground/50" aria-hidden="true">·</span>
           {metaTag}
         </div>
         <p className="text-muted-foreground text-xs">
@@ -250,27 +268,74 @@ const ContextItemRow = memo(({
   )
 })
 
-const ToolDefinitionRow = memo(({ tool, index }: { readonly tool: OfferedToolDefinition; readonly index: number }) => (
-  <li className="flex flex-col gap-2.5 py-5 text-sm [content-visibility:auto] [contain-intrinsic-size:auto_180px]">
-    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
-      <div className="flex min-w-0 items-center gap-2">
-        <WrenchIcon className="text-muted-foreground size-3.5 shrink-0" />
-        <span className="font-mono font-semibold tracking-wide text-muted-foreground">
-          tool definition · <span className="text-foreground">{tool.name}</span>
-        </span>
-      </div>
-      <span className="text-muted-foreground/75 shrink-0 font-mono text-[11px] tabular-nums">
-        tool #{index + 1}
-      </span>
-    </div>
-    <div className="flex flex-col gap-2">
-      {tool.description !== "" && (
-        <PlainText text={tool.description} className="text-xs leading-relaxed text-muted-foreground" />
-      )}
-      <FormattedPayload value={tool.parameters} className="h-52" fitAlmostFull />
-    </div>
-  </li>
-))
+const ToolDefinitionsBlock = memo(({ tools }: { readonly tools: ReadonlyArray<OfferedToolDefinition> }) => {
+  const [open, setOpen] = useState(false)
+  const toolMetrics = useMemo(
+    () => tools.map((tool) => ({ tool, tokens: estimateToolDefinitionTokens(tool) })),
+    [tools],
+  )
+  const totalTokens = useMemo(
+    () => toolMetrics.reduce((sum, entry) => sum + entry.tokens, 0),
+    [toolMetrics],
+  )
+
+  return (
+    <li className="py-5 text-sm" data-slot="tool-definitions-block">
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <CollapsibleTrigger
+          render={
+            <button
+              type="button"
+              className="hover:text-foreground focus-visible:ring-ring/50 group flex w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-md py-0.5 text-start text-[11px] outline-none transition-colors focus-visible:ring-2"
+            />
+          }
+        >
+          <ChevronRightIcon
+            className={cn(
+              "text-muted-foreground size-3.5 shrink-0 transition-transform duration-150",
+              open && "rotate-90",
+            )}
+          />
+          <WrenchIcon className="text-muted-foreground size-3.5 shrink-0" />
+          <span className="font-mono font-semibold tracking-wide text-muted-foreground">
+            TOOL-DEFINITIONS
+          </span>
+          <span className="text-muted-foreground/50" aria-hidden="true">·</span>
+          <span className="text-muted-foreground/80 font-normal tabular-nums">
+            {tools.length} {tools.length === 1 ? "tool" : "tools"}
+          </span>
+          <span className="text-muted-foreground/50" aria-hidden="true">·</span>
+          <span className="text-muted-foreground/75 shrink-0 font-mono text-[11px] tabular-nums">
+            {formatTokens(totalTokens, true)}
+          </span>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          {toolMetrics.length === 0 ? (
+            <p className="text-muted-foreground pt-3 text-xs">No tools offered in this checkpoint window.</p>
+          ) : (
+            <div className="mt-3 divide-y divide-border/60 border-t border-border/60">
+              {toolMetrics.map(({ tool, tokens }, index) => (
+                <div key={`tool:${tool.name}:${index}`} className="flex flex-col gap-2 py-4 first:pt-3 last:pb-0">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+                    <span className="font-mono text-xs font-semibold text-foreground">{tool.name}</span>
+                    <span className="text-muted-foreground/50" aria-hidden="true">·</span>
+                    <span className="text-muted-foreground/75 shrink-0 font-mono text-[11px] tabular-nums">
+                      #{index + 1} · {formatTokens(tokens, true)}
+                    </span>
+                  </div>
+                  {tool.description !== "" && (
+                    <PlainText text={tool.description} className="text-xs leading-relaxed text-muted-foreground" />
+                  )}
+                  <FormattedPayload value={tool.parameters} className="h-52" fitAlmostFull />
+                </div>
+              ))}
+            </div>
+          )}
+        </CollapsibleContent>
+      </Collapsible>
+    </li>
+  )
+})
 
 export const Checkpoint = ({
   context,
@@ -301,6 +366,7 @@ export const Checkpoint = ({
   return (
     <div className="w-full px-6 sm:px-10 lg:px-12 xl:px-16">
       <ol className="divide-y divide-border">
+        <ToolDefinitionsBlock key={`tools:${context.id}`} tools={context.tools} />
         {context.items.map((item, index) => {
           const sourceId =
             item.kind === "developer-message"
@@ -318,9 +384,6 @@ export const Checkpoint = ({
             />
           )
         })}
-        {context.tools.map((tool, index) => (
-          <ToolDefinitionRow key={`tool:${tool.name}:${index}`} tool={tool} index={index} />
-        ))}
       </ol>
     </div>
   )

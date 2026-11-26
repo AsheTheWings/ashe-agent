@@ -49,12 +49,14 @@ export type UserItem = {
   /** The turn's stable identifier, or an input id before its turn starts. */
   readonly id: string
   readonly seq: number
+  readonly timestamp?: number
   /** Every UserMessage admitted in this one UserTurn, in order. */
   readonly messages: ReadonlyArray<{
     readonly id: string
     readonly text: string
     readonly mode: InputMode
     readonly sender: MessageSender
+    readonly timestamp?: number
   }>
   readonly runId: string | null
 }
@@ -66,6 +68,7 @@ export type AssistantItem = {
   readonly kind: "assistant"
   readonly id: string
   readonly seq: number
+  readonly timestamp?: number
   readonly runId: string
   readonly parts: ReadonlyArray<AssistantPart>
   readonly status: RunStatus
@@ -262,7 +265,12 @@ const openSegment = (view: SessionView): AssistantItem | null => {
 }
 
 /** Applies `change` to the open segment, opening one for the running turn when needed. */
-const withSegment = (view: SessionView, seq: number, change: (segment: AssistantItem) => AssistantItem): SessionView => {
+const withSegment = (
+  view: SessionView,
+  seq: number,
+  timestamp: number,
+  change: (segment: AssistantItem) => AssistantItem,
+): SessionView => {
   const open = openSegment(view)
   if (open !== null) return { ...view, items: [...view.items.slice(0, -1), change(open)] }
   const runId = view.runId
@@ -272,6 +280,7 @@ const withSegment = (view: SessionView, seq: number, change: (segment: Assistant
     kind: "assistant",
     id: `${runId}:${count}`,
     seq,
+    timestamp,
     runId,
     parts: [],
     status: "running",
@@ -356,7 +365,7 @@ const discardRunCalls = (view: SessionView, runId: string): SessionView => {
   return next
 }
 
-const reduce = (view: SessionView, { seq, event }: SessionEvent): SessionView => {
+const reduce = (view: SessionView, { seq, timestamp, event }: SessionEvent): SessionView => {
   switch (event.type) {
     case "SESSION_CREATED": {
       const created = {
@@ -378,7 +387,8 @@ const reduce = (view: SessionView, { seq, event }: SessionEvent): SessionView =>
         kind: "user",
         id: event.inputId,
         seq,
-        messages: [{ id: event.inputId, text: event.text, mode: event.mode, sender: event.sender }],
+        timestamp,
+        messages: [{ id: event.inputId, text: event.text, mode: event.mode, sender: event.sender, timestamp }],
         runId: null,
       }
       return { ...view, items: [...view.items, user], pending: view.pending.filter((input) => input.inputId !== event.inputId) }
@@ -395,10 +405,12 @@ const reduce = (view: SessionView, { seq, event }: SessionEvent): SessionView =>
         (item) => !(item.kind === "user" && item.messages.some((message) => ids.has(message.id))),
       )
       if (first >= 0) {
+        const groupedTimestamp = grouped[0]?.timestamp ?? timestamp
         items.splice(first, 0, {
           kind: "user",
           id: event.runId,
           seq,
+          timestamp: groupedTimestamp,
           messages: grouped,
           runId: event.runId,
         })
@@ -433,7 +445,7 @@ const reduce = (view: SessionView, { seq, event }: SessionEvent): SessionView =>
       return discardCall(view, event.modelCallId)
     case "TEXT_MESSAGE_START":
       return trackPart(
-        withSegment(view, seq, (segment) => ({
+        withSegment(view, seq, timestamp, (segment) => ({
           ...segment,
           parts: [...segment.parts, { type: "text", id: event.messageId, modelCallId: event.modelCallId, text: "" }],
         })),
@@ -447,7 +459,7 @@ const reduce = (view: SessionView, { seq, event }: SessionEvent): SessionView =>
       )
     case "REASONING_MESSAGE_START":
       return trackPart(
-        withSegment(view, seq, (segment) => ({
+        withSegment(view, seq, timestamp, (segment) => ({
           ...segment,
           parts: [...segment.parts, { type: "reasoning", id: event.messageId, modelCallId: event.modelCallId, text: "" }],
         })),
@@ -456,7 +468,7 @@ const reduce = (view: SessionView, { seq, event }: SessionEvent): SessionView =>
       )
     case "TOOL_CALL_START":
       return trackPart(
-        withSegment(view, seq, (segment) => ({
+        withSegment(view, seq, timestamp, (segment) => ({
           ...segment,
           parts: [
             ...segment.parts,

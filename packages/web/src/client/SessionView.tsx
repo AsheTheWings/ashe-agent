@@ -7,7 +7,6 @@ import {
   FileDiffIcon,
   FileIcon,
   Loader2Icon,
-  SparklesIcon,
   TerminalIcon,
   UserIcon,
   WrenchIcon,
@@ -18,6 +17,7 @@ import { cn } from "cn"
 import { useClient, useClientState } from "@/app/client-context.tsx"
 import { Badge } from "@/components/ui/badge.tsx"
 import { Button } from "@/components/ui/button.tsx"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx"
 import { sessionPath } from "@/shared/routes.ts"
 import { BlockBoundary, PatchDiffPre, RetainedMedia } from "./blocks.tsx"
 import {
@@ -26,8 +26,8 @@ import {
   TOOL_PANE_BASE_HEIGHT,
 } from "./json-view.tsx"
 import { MarkdownText, PlainText } from "./markdown.tsx"
-import { hasVisibleSemanticContent } from "./stats.ts"
-import { decodeBase64, formatBytes } from "./types.ts"
+import { estimateEntryTokens, formatTokens, formatTokensTooltip, hasVisibleSemanticContent } from "./stats.ts"
+import { decodeBase64, formatBytes, formatFullTime, formatHumanDateTime } from "./types.ts"
 
 type SemanticToolEntry = Extract<SemanticEntry, { kind: "agent-tool" }>
 
@@ -170,7 +170,7 @@ const AgentIdentityMeta = ({
   readonly sessionLink?: string
   readonly onOpenSession?: ((sessionId: string) => void) | undefined
 }) => (
-  <span className="text-muted-foreground/75 ml-auto flex min-w-0 flex-wrap items-center gap-1.5 text-[11px]">
+  <span className="text-muted-foreground/75 flex min-w-0 flex-wrap items-center gap-1.5 text-[11px]">
     {sessionLink !== undefined && (
       <>
         <a
@@ -206,7 +206,15 @@ const BlockKindIcon = ({ kind }: { readonly kind: SemanticEntry["kind"] }) => {
     case "user-message":
       return <UserIcon className="text-sidebar-primary size-3.5 shrink-0" />
     case "agent-message":
-      return <SparklesIcon className="text-foreground/80 size-3.5 shrink-0" />
+      return (
+        <span
+          className="text-foreground inline-flex h-3.5 shrink-0 items-center text-[12px] font-normal leading-none tracking-tight select-none"
+          style={{ fontFamily: "var(--font-brand)" }}
+          aria-hidden="true"
+        >
+          AA
+        </span>
+      )
     case "agent-thought":
       return <BrainIcon className="text-muted-foreground size-3.5 shrink-0" />
     case "agent-tool":
@@ -238,47 +246,54 @@ export const SemanticBlockHeader = ({
   const showAuthor = entry.kind === "agent-message" || entry.kind === "agent-thought" || entry.kind === "agent-tool"
 
   return (
-    <div className="flex flex-wrap items-center gap-2 text-[11px]">
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <BlockKindIcon kind={entry.kind} />
-        <span className={cn("font-mono font-semibold tracking-wide", blockLabelClass(entry.kind))}>
-          {SEMANTIC_BLOCK_LABEL[entry.kind]}
-        </span>
-        {entry.kind === "system-message" && (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+      <BlockKindIcon kind={entry.kind} />
+      <span className={cn("font-mono font-semibold tracking-wide", blockLabelClass(entry.kind))}>
+        {SEMANTIC_BLOCK_LABEL[entry.kind]}
+      </span>
+      {entry.kind === "system-message" && (
+        <>
+          <span className="text-muted-foreground/50" aria-hidden="true">·</span>
           <span className="text-muted-foreground/80 font-normal">Harness instructions</span>
-        )}
-        {entry.kind === "agent-tool" && (
-          <>
-            <span className="text-muted-foreground/60" aria-hidden="true">·</span>
-            <span className="font-mono text-xs font-semibold text-foreground">{entry.tool.name}</span>
-            <ToolOutcomeBadge outcome={entry.tool.outcome} />
-          </>
-        )}
-        {entry.ownership.kind === "inherited" && (
-          <Badge variant="secondary" className="text-[10px]">
-            inherited from {entry.ownership.sourceSessionId}
-          </Badge>
-        )}
-      </div>
-
-      {(peerSender !== null || showAuthor || extraRight !== undefined) && (
-        <div className="ml-auto flex min-w-0 flex-wrap items-center gap-2">
-          {peerSender !== null && (
-            <AgentIdentityMeta
-              agentTitle={peerSender.agentTitle}
-              modelId={peerSender.modelId}
-              sessionLink={peerSender.sessionId}
-              onOpenSession={onOpenSession}
-            />
-          )}
-          {showAuthor && (
-            <AgentIdentityMeta
-              agentTitle={entry.authorship.agentTitle}
-              modelId={entry.authorship.modelId}
-            />
-          )}
+        </>
+      )}
+      {entry.kind === "agent-tool" && (
+        <>
+          <span className="text-muted-foreground/50" aria-hidden="true">·</span>
+          <span className="font-mono text-xs font-semibold text-foreground">{entry.tool.name}</span>
+          <ToolOutcomeBadge outcome={entry.tool.outcome} />
+        </>
+      )}
+      {entry.ownership.kind === "inherited" && (
+        <Badge variant="secondary" className="text-[10px]">
+          inherited from {entry.ownership.sourceSessionId}
+        </Badge>
+      )}
+      {peerSender !== null && (
+        <>
+          <span className="text-muted-foreground/50" aria-hidden="true">·</span>
+          <AgentIdentityMeta
+            agentTitle={peerSender.agentTitle}
+            modelId={peerSender.modelId}
+            sessionLink={peerSender.sessionId}
+            onOpenSession={onOpenSession}
+          />
+        </>
+      )}
+      {showAuthor && (
+        <>
+          <span className="text-muted-foreground/50" aria-hidden="true">·</span>
+          <AgentIdentityMeta
+            agentTitle={entry.authorship.agentTitle}
+            modelId={entry.authorship.modelId}
+          />
+        </>
+      )}
+      {extraRight !== undefined && (
+        <>
+          <span className="text-muted-foreground/50" aria-hidden="true">·</span>
           {extraRight}
-        </div>
+        </>
       )}
     </div>
   )
@@ -470,9 +485,11 @@ export const SemanticEntryContent = ({ entry }: { readonly entry: SemanticEntry 
 const SessionBlock = memo(({
   item,
   onOpenSession,
+  onInspectModelCall,
 }: {
   readonly item: SemanticPageEntry
   readonly onOpenSession?: ((sessionId: string) => void) | undefined
+  readonly onInspectModelCall?: ((modelCallId: string) => void) | undefined
 }) => {
   const sessionId = useClientState((state) => state.activeSessionId)
   const { hostRef, hydrated, loading, error, retry } = useAutoHydrateSemanticBody(sessionId, item.entry.id, item.body)
@@ -481,18 +498,61 @@ const SessionBlock = memo(({
 
   if (!pendingBody && !hasVisibleSemanticContent(entry)) return null
 
+  const tokenCount = estimateEntryTokens({ entry, body: pendingBody ? item.body : null })
+  const inspectCallId =
+    entry.kind === "agent-message" || entry.kind === "agent-thought"
+      ? entry.modelCallId
+      : entry.kind === "agent-tool"
+        ? entry.tool.modelCallId
+        : null
+
+  const handleBlockClick = (event: React.MouseEvent<HTMLElement>) => {
+    if (!event.shiftKey || inspectCallId === null || onInspectModelCall === undefined) return
+    const selection = typeof window !== "undefined" ? window.getSelection() : null
+    if (selection !== null && !selection.isCollapsed) return
+    event.preventDefault()
+    onInspectModelCall(inspectCallId)
+  }
+
   return (
     <article
       ref={(node) => {
         hostRef.current = node
       }}
+      onClick={handleBlockClick}
       className="flex flex-col gap-2.5 py-5 [content-visibility:auto] [contain-intrinsic-size:auto_180px]"
       data-content-id={entry.contentId}
       data-kind={entry.kind}
+      data-user-anchor={entry.kind === "user-message" ? (entry.turnId ?? entry.id) : undefined}
+      data-model-call-id={inspectCallId ?? undefined}
       data-tool-id={entry.kind === "agent-tool" ? (entry.tool.providerCallId ?? entry.tool.id) : undefined}
       data-thought-id={entry.kind === "agent-thought" ? (entry.modelCallId ?? entry.id) : undefined}
     >
-      <SemanticBlockHeader entry={entry} onOpenSession={onOpenSession} />
+      <SemanticBlockHeader
+        entry={entry}
+        onOpenSession={onOpenSession}
+        extraRight={
+          <span className="text-muted-foreground/75 flex shrink-0 items-center gap-1.5 font-mono text-[11px] tabular-nums">
+            {entry.createdAt > 0 && (
+              <>
+                <time dateTime={new Date(entry.createdAt).toISOString()}>
+                  {formatHumanDateTime(entry.createdAt)}
+                </time>
+                <span className="text-muted-foreground/50" aria-hidden="true">·</span>
+              </>
+            )}
+            <Tooltip>
+              <TooltipTrigger render={<span className="cursor-default" />}>
+                {formatTokens(tokenCount, true)}
+              </TooltipTrigger>
+              <TooltipContent>
+                {formatTokensTooltip(tokenCount, true)}
+                {inspectCallId !== null ? " · Shift+click block to inspect checkpoint window" : ""}
+              </TooltipContent>
+            </Tooltip>
+          </span>
+        }
+      />
 
       {pendingBody ? (
         <div className="text-muted-foreground flex items-center gap-2 py-1 text-xs">
@@ -520,9 +580,11 @@ const SessionBlock = memo(({
 export const SessionNotebook = ({
   entries,
   onOpenSession,
+  onInspectModelCall,
 }: {
   readonly entries: ReadonlyArray<SemanticPageEntry>
   readonly onOpenSession?: (sessionId: string) => void
+  readonly onInspectModelCall?: (modelCallId: string) => void
 }) => {
   const visibleEntries = entries.filter((item) => item.body !== null || hasVisibleSemanticContent(item.entry))
 
@@ -539,7 +601,7 @@ export const SessionNotebook = ({
               </pre>
             }
           >
-            <SessionBlock item={entry} onOpenSession={onOpenSession} />
+            <SessionBlock item={entry} onOpenSession={onOpenSession} onInspectModelCall={onInspectModelCall} />
           </BlockBoundary>
         ))}
       </div>
