@@ -9082,6 +9082,91 @@
                       "user"
                     ]
                   },
+                  "sender": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "token"
+                            ]
+                          },
+                          "tokenId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "tokenId",
+                          "name"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "login"
+                            ]
+                          },
+                          "loginId": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "loginId"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "session"
+                            ]
+                          },
+                          "sessionId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "agentTitle": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "modelId": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "sessionId",
+                          "agentTitle",
+                          "modelId"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
                   "parts": {
                     "type": "array",
                     "items": {
@@ -11037,6 +11122,91 @@
                               "user"
                             ]
                           },
+                          "sender": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "token"
+                                    ]
+                                  },
+                                  "tokenId": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "tokenId",
+                                  "name"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "login"
+                                    ]
+                                  },
+                                  "loginId": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "loginId"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "session"
+                                    ]
+                                  },
+                                  "sessionId": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "agentTitle": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "modelId": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "sessionId",
+                                  "agentTitle",
+                                  "modelId"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
                           "parts": {
                             "type": "array",
                             "items": {
@@ -12572,6 +12742,91 @@
                   "type": "string",
                   "enum": [
                     "user"
+                  ]
+                },
+                "sender": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "token"
+                          ]
+                        },
+                        "tokenId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "tokenId",
+                        "name"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "login"
+                          ]
+                        },
+                        "loginId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "loginId"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "session"
+                          ]
+                        },
+                        "sessionId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "agentTitle": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "modelId": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "sessionId",
+                        "agentTitle",
+                        "modelId"
+                      ],
+                      "additionalProperties": false
+                    }
                   ]
                 },
                 "parts": {
