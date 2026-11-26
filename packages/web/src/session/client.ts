@@ -53,6 +53,7 @@ export type ClientState = {
   readonly models: ReadonlyArray<Model>
   readonly agents: ReadonlyArray<Agent>
   readonly sessions: ReadonlyArray<SessionSummary>
+  readonly sessionsLoaded: boolean
   readonly activeSessionId: string | null
   /** Selection changes this client will submit with the next input or rewind. */
   readonly requestedSelections: Readonly<Record<string, SelectionPatch>>
@@ -161,6 +162,7 @@ export class SessionClient {
       models: [],
       agents: [],
       sessions: [],
+      sessionsLoaded: false,
       activeSessionId: null,
       requestedSelections: {},
       views: {},
@@ -327,6 +329,7 @@ export class SessionClient {
       observations: {},
       semantic: {},
       sessions: [],
+      sessionsLoaded: false,
       requestedSelections: {},
       owned: { questions: [], permissions: [] },
     })
@@ -490,14 +493,24 @@ export class SessionClient {
       connection.request("agents.list", {}),
       connection.request("session.list", {}),
     ])
-    this.set({ models, agents, sessions })
+    this.set({ models, agents, sessions, sessionsLoaded: true })
     const { actions } = await connection.request("actions.list", {})
     const supported = actions
       .map((action) => action.name)
       .filter((name) => name === QUESTIONS_ACTION || name === PERMISSION_ACTION)
     await connection.request("client.setActions", { actions: supported })
     const active = this.state.activeSessionId
-    if (active !== null) await this.subscribe(connection, active)
+    if (active !== null) {
+      try {
+        await this.subscribe(connection, active)
+      } catch (error) {
+        if (error instanceof ProtocolError) {
+          if (this.state.activeSessionId === active) this.set({ activeSessionId: null })
+          return
+        }
+        throw error
+      }
+    }
   }
 
   private async subscribe(connection: Connection, sessionId: string) {
@@ -605,7 +618,23 @@ export class SessionClient {
     const connection = this.connection
     if (connection === null || this.state.status !== "connected") return
     if (previous !== null) void connection.request("session.unsubscribe", { sessionId: previous }).catch(() => {})
-    await this.subscribe(connection, sessionId)
+    try {
+      await this.subscribe(connection, sessionId)
+    } catch (error) {
+      if (this.state.activeSessionId === sessionId) this.set({ activeSessionId: null })
+      throw error
+    }
+  }
+
+  /** Closes the currently open session without signing out. */
+  close() {
+    const previous = this.state.activeSessionId
+    if (previous === null) return
+    this.set({ activeSessionId: null, error: null })
+    const connection = this.connection
+    if (connection !== null && this.state.status === "connected") {
+      void connection.request("session.unsubscribe", { sessionId: previous }).catch(() => {})
+    }
   }
 
   async createSession(options: {
