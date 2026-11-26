@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ArrowDownIcon, PanelLeftDashedIcon, PanelLeftIcon } from "lucide-react"
 import { Toaster, toast } from "sonner"
-import type { ModelInputManifest } from "@ashe-agent/protocol"
+import type { ModelCallContext } from "@ashe-agent/protocol"
 import { useClient, useClientState } from "../app/client-context.tsx"
 import { SIGN_IN_RETURN_PATH_KEY, SignIn } from "../app/sign-in.tsx"
 import { useTheme } from "../app/theme/useTheme.ts"
@@ -177,7 +177,7 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
   const [rewindItem, setRewindItem] = useState<UserItem | null>(null)
   const rewindOperation = useRef(randomId())
   const [checkpoint, setCheckpoint] = useState<{
-    manifest: ModelInputManifest
+    context: ModelCallContext
     usage: ReadonlyArray<{ modelCallId: string; providerUsage: unknown }>
   } | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
@@ -416,18 +416,22 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
   }, [view, semantic, active, currentView, pinnedUserItemId])
 
   useEffect(() => {
-    const latestId = semantic?.latestSuccessfulBoundaryId ?? null
+    const latestId = semantic?.latestModelCallContextId ?? null
     if (latestId === null || active === null) {
       setCheckpoint(null)
       return
     }
     let cancelled = false
     void client
-      .semanticBoundary(active, latestId)
-      .then(async (manifest) => {
+      .semanticContext(active, latestId)
+      .then(async (context) => {
         if (cancelled) return
-        const usage = await client.modelUsage(active, [manifest.modelCallId]).catch(() => [])
-        if (!cancelled) setCheckpoint({ manifest, usage })
+        const replayedOpaqueCallIds = context.items.flatMap((item) =>
+          item.kind === "agent-thought" && item.opaque && item.modelCallId !== null ? [item.modelCallId] : [],
+        )
+        const callIds = [...new Set([context.modelCallId, ...replayedOpaqueCallIds])].slice(0, 100)
+        const usage = await client.modelUsage(active, callIds).catch(() => [])
+        if (!cancelled) setCheckpoint({ context, usage })
       })
       .catch(() => {
         if (!cancelled) setCheckpoint(null)
@@ -435,7 +439,7 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
     return () => {
       cancelled = true
     }
-  }, [active, client, semantic?.latestSuccessfulBoundaryId])
+  }, [active, client, semantic?.latestModelCallContextId])
 
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
@@ -1103,7 +1107,7 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
               onViewChange={(next) => setSessionView(active, next)}
               notifications={sessionNotifications}
               semanticEntries={semantic?.entries ?? []}
-              checkpointManifest={checkpoint?.manifest ?? null}
+              checkpointContext={checkpoint?.context ?? null}
               checkpointUsage={checkpoint?.usage ?? []}
               sidebarPinned={sidebarPinned}
               onToggleSidebar={handleToggleSidebar}
@@ -1223,7 +1227,7 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
                     )}
                     {currentView === "checkpoint" && (
                       <Checkpoint
-                        manifest={checkpoint?.manifest ?? null}
+                        context={checkpoint?.context ?? null}
                         entries={semantic?.entries ?? []}
                         onOpenSession={(sessionId) => openSession(sessionId, false)}
                       />
@@ -1275,7 +1279,7 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
               )}
               pendingInputs={(view?.pending ?? []).map((input) => input.text)}
               attachments={(semantic?.entries ?? []).flatMap((entry) =>
-                entry.entry.kind === "user" && rewindItem !== null && entry.entry.turnId === rewindItem.runId
+                entry.entry.kind === "user-message" && rewindItem !== null && entry.entry.turnId === rewindItem.runId
                   ? entry.entry.parts.flatMap((part) => (part.kind === "attachment" ? [part.name] : []))
                   : [],
               )}

@@ -140,7 +140,11 @@ export const sessionHandlers = (hub: SessionHub) => {
     "session.semantics.page": async (params) =>
       hub.semanticPage(params.sessionId, params.object, params.revision, params.cursor, params.limit),
     "session.semantics.body": async (params) => hub.semanticBody(params.sessionId, params.entryId, params.contentId),
-    "session.semantics.boundary": async (params) => hub.semanticBoundary(params.sessionId, params.manifestId),
+    "session.semantics.context": async (params) =>
+      hub.semanticContext(
+        params.sessionId,
+        "contextId" in params ? { contextId: params.contextId } : { modelCallId: params.modelCallId },
+      ),
     "session.modelCalls.usage": async (params) => hub.modelCallUsage(params.sessionId, params.modelCallIds),
     "session.observe": async (params) => hub.observe(params.sessionId),
     "session.grants.list": async (params) => ({ grants: [...hub.store.grantsForSession(params.sessionId)] }),

@@ -22,9 +22,9 @@ import {
   UploadStatus,
 } from "./owner.ts"
 import {
-  BoundarySummary,
+  ModelCallContext,
+  ModelCallContextSummary,
   ModelCallUsage,
-  ModelInputManifest,
   SemanticEntry,
   SemanticHistory,
   SemanticPageEntry,
@@ -174,14 +174,14 @@ export const SessionObservation = Schema.Struct({
   pending: Schema.Array(PendingInputObservation),
   execution: ExecutionEligibility,
   userTurnIds: Schema.Array(Id),
-  latestSuccessfulBoundaryId: Schema.NullOr(Id),
+  latestModelCallContextId: Schema.NullOr(Id),
   attention: Schema.Array(ActionAttentionFact),
 })
 
 export type SessionObservation = typeof SessionObservation.Type
 
 /** The bounded semantic collection a page request selects. */
-export const SemanticPageObject = Schema.Literals(["turns", "entries", "boundaries"])
+export const SemanticPageObject = Schema.Literals(["turns", "entries", "contexts"])
 
 export type SemanticPageObject = typeof SemanticPageObject.Type
 
@@ -192,21 +192,21 @@ export const SemanticPage = Schema.Union([
     revision: Id,
     items: Schema.Array(Turn),
     nextCursor: Schema.NullOr(Id),
-    latestSuccessfulBoundaryId: Schema.NullOr(Id),
+    latestModelCallContextId: Schema.NullOr(Id),
   }),
   Schema.Struct({
     object: Schema.Literal("entries"),
     revision: Id,
     items: Schema.Array(SemanticPageEntry),
     nextCursor: Schema.NullOr(Id),
-    latestSuccessfulBoundaryId: Schema.NullOr(Id),
+    latestModelCallContextId: Schema.NullOr(Id),
   }),
   Schema.Struct({
-    object: Schema.Literal("boundaries"),
+    object: Schema.Literal("contexts"),
     revision: Id,
-    items: Schema.Array(BoundarySummary),
+    items: Schema.Array(ModelCallContextSummary),
     nextCursor: Schema.NullOr(Id),
-    latestSuccessfulBoundaryId: Schema.NullOr(Id),
+    latestModelCallContextId: Schema.NullOr(Id),
   }),
 ])
 
@@ -313,9 +313,9 @@ export const methods = {
       currentTurnId: Schema.NullOr(Id),
     }),
   ),
-  /** Canonical semantic content and successful request boundaries for owner analysis. */
+  /** Canonical semantic content and successful model call contexts for owner analysis. */
   "session.semantics": method(Schema.Struct({ sessionId: Id }), SemanticHistory),
-  /** One bounded page of turns, typed entries or successful boundaries. */
+  /** One bounded page of turns, typed entries or successful model call contexts. */
   "session.semantics.page": method(
     Schema.Struct({
       sessionId: Id,
@@ -331,10 +331,13 @@ export const methods = {
     Schema.Struct({ sessionId: Id, entryId: Id, contentId: Id }),
     Schema.Struct({ entry: SemanticEntry }),
   ),
-  /** Reads one successful request boundary a page summarized. */
-  "session.semantics.boundary": method(
-    Schema.Struct({ sessionId: Id, manifestId: Id }),
-    Schema.Struct({ boundary: ModelInputManifest }),
+  /** Reads one successful model call context by context identity or generating model call identity. */
+  "session.semantics.context": method(
+    Schema.Union([
+      Schema.Struct({ sessionId: Id, contextId: Id }),
+      Schema.Struct({ sessionId: Id, modelCallId: Id }),
+    ]),
+    Schema.Struct({ context: ModelCallContext }),
   ),
   /** Stored provider usage for one bounded set of model calls. */
   "session.modelCalls.usage": method(

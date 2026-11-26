@@ -1,7 +1,15 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react"
-import { LayersIcon, Loader2Icon, WrenchIcon } from "lucide-react"
-import type { ModelInputManifest, SemanticPageEntry } from "@ashe-agent/protocol"
+import { BrainIcon, LayersIcon, Loader2Icon, WrenchIcon } from "lucide-react"
+import type {
+  ContextMediaProjection,
+  ModelCallContext,
+  ModelCallContextItem,
+  OfferedToolDefinition,
+  SemanticEntry,
+  SemanticPageEntry,
+} from "@ashe-agent/protocol"
 import { useClient, useClientState } from "@/app/client-context.tsx"
+import { Badge } from "@/components/ui/badge.tsx"
 import { Button } from "@/components/ui/button.tsx"
 import { FormattedPayload } from "./json-view.tsx"
 import { PlainText } from "./markdown.tsx"
@@ -10,27 +18,47 @@ import {
   SemanticEntryContent,
   useAutoHydrateSemanticBody,
 } from "./SessionView.tsx"
-import { hasVisibleSemanticContent } from "./stats.ts"
 import { formatBytes } from "./types.ts"
 
-const MAX_RENDERED_CACHE = 80
-const renderedBlobCache = new Map<string, string>()
+const CLEARED_RESULT_TEXT = "[Result cleared to free context. Run the call again if you need it.]"
 
-const rememberRenderedBlob = (key: string, text: string) => {
-  if (renderedBlobCache.has(key)) renderedBlobCache.delete(key)
-  renderedBlobCache.set(key, text)
-  if (renderedBlobCache.size > MAX_RENDERED_CACHE) {
-    const oldest = renderedBlobCache.keys().next().value
-    if (oldest !== undefined) renderedBlobCache.delete(oldest)
+const MAX_SYSTEM_CACHE = 40
+const systemBlobCache = new Map<string, string>()
+
+const rememberSystemBlob = (key: string, text: string) => {
+  if (systemBlobCache.has(key)) systemBlobCache.delete(key)
+  systemBlobCache.set(key, text)
+  if (systemBlobCache.size > MAX_SYSTEM_CACHE) {
+    const oldest = systemBlobCache.keys().next().value
+    if (oldest !== undefined) systemBlobCache.delete(oldest)
   }
 }
 
-const ContributionRow = memo(({
-  contribution,
+const MediaProjectionList = ({ items }: { readonly items: ReadonlyArray<ContextMediaProjection> }) => {
+  if (items.length === 0) return null
+  return (
+    <div className="flex flex-wrap gap-1.5 pt-1">
+      {items.map((item, index) => (
+        <Badge key={index} variant="secondary" className="font-mono text-[10px] font-normal">
+          {item.kind === "placeholder"
+            ? `${item.name} · placeholder (${item.reason})`
+            : `${item.name} · ${item.content.mediaType}${item.byteLength > 0 ? ` · ${formatBytes(item.byteLength)}` : ""}`}
+        </Badge>
+      ))}
+    </div>
+  )
+}
+
+const ContextItemRow = memo(({
+  contextId,
+  item,
+  index,
   matchedPageEntry,
   onOpenSession,
 }: {
-  readonly contribution: ModelInputManifest["contributions"][number]
+  readonly contextId: string
+  readonly item: ModelCallContextItem
+  readonly index: number
   readonly matchedPageEntry: SemanticPageEntry | undefined
   readonly onOpenSession?: ((sessionId: string) => void) | undefined
 }) => {
@@ -44,193 +72,212 @@ const ContributionRow = memo(({
     retry: retryBody,
   } = useAutoHydrateSemanticBody(sessionId, matchedPageEntry?.entry.id, matchedPageEntry?.body ?? null)
 
-  const entry = hydrated ?? matchedPageEntry?.entry
+  const resolvedEntry = hydrated ?? matchedPageEntry?.entry
   const pendingBody = hydrated === null && matchedPageEntry?.body !== null && matchedPageEntry !== undefined
-  const semanticVisible = entry !== undefined && (pendingBody || hasVisibleSemanticContent(entry))
 
-  const blobKey =
-    sessionId !== null &&
-    contribution.kind !== "tool-definition" &&
-    contribution.kind !== "placeholder" &&
-    !semanticVisible
-      ? `${sessionId}:${contribution.rendered.contentId}:${contribution.rendered.representationId}`
+  const fallbackSystemKey =
+    item.kind === "system-message" && resolvedEntry === undefined && sessionId !== null
+      ? `${sessionId}:${item.contentId}:${contextId}`
       : null
-  const [rawContent, setRawContent] = useState<string | null>(() =>
-    blobKey !== null ? (renderedBlobCache.get(blobKey) ?? null) : null,
+  const [fallbackSystemText, setFallbackSystemText] = useState<string | null>(() =>
+    fallbackSystemKey !== null ? (systemBlobCache.get(fallbackSystemKey) ?? null) : null,
   )
-  const [blobLoading, setBlobLoading] = useState(false)
-  const [blobError, setBlobError] = useState<string | null>(null)
-  const [blobAttempt, setBlobAttempt] = useState(0)
-  const liRef = useRef<HTMLLIElement | null>(null)
+  const [fallbackError, setFallbackError] = useState<string | null>(null)
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
-    setRawContent(blobKey !== null ? (renderedBlobCache.get(blobKey) ?? null) : null)
-    setBlobError(null)
-  }, [blobKey])
+    setFallbackSystemText(fallbackSystemKey !== null ? (systemBlobCache.get(fallbackSystemKey) ?? null) : null)
+    setFallbackError(null)
+  }, [fallbackSystemKey])
 
   useEffect(() => {
-    if (
-      blobKey === null ||
-      sessionId === null ||
-      contribution.kind === "tool-definition" ||
-      contribution.kind === "placeholder"
-    ) {
-      return
-    }
-    if (renderedBlobCache.has(blobKey)) {
-      setRawContent(renderedBlobCache.get(blobKey)!)
+    if (fallbackSystemKey === null || sessionId === null || item.kind !== "system-message") return
+    if (systemBlobCache.has(fallbackSystemKey)) {
+      setFallbackSystemText(systemBlobCache.get(fallbackSystemKey)!)
       return
     }
     let cancelled = false
-    let started = false
-    const startFetch = () => {
-      if (started || cancelled) return
-      started = true
-      setBlobLoading(true)
-      setBlobError(null)
-      void client
-        .downloadContent(sessionId, contribution.rendered.contentId, contribution.rendered.representationId)
-        .then((blob) => blob.text())
-        .then((text) => {
-          if (cancelled) return
-          rememberRenderedBlob(blobKey, text)
-          setRawContent(text)
-        })
-        .catch(() => {
-          if (!cancelled) setBlobError("Retained representation is not directly downloadable.")
-        })
-        .finally(() => {
-          if (!cancelled) setBlobLoading(false)
-        })
-    }
-
-    const node = liRef.current
-    if (node === null || typeof IntersectionObserver === "undefined") {
-      startFetch()
-      return () => {
-        cancelled = true
-      }
-    }
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((candidate) => candidate.isIntersecting)) {
-          observer.disconnect()
-          startFetch()
-        }
-      },
-      { rootMargin: "600px 0px" },
-    )
-    observer.observe(node)
+    void client
+      .downloadContent(sessionId, item.contentId, contextId)
+      .then((blob) => blob.text())
+      .then((text) => {
+        if (cancelled) return
+        rememberSystemBlob(fallbackSystemKey, text)
+        setFallbackSystemText(text)
+      })
+      .catch(() => {
+        if (!cancelled) setFallbackError("Could not load harness instructions.")
+      })
     return () => {
       cancelled = true
-      observer.disconnect()
     }
-  }, [blobAttempt, blobKey, client, contribution, sessionId])
+  }, [attempt, client, contextId, fallbackSystemKey, item, sessionId])
 
-  const metaTag =
-    contribution.kind === "placeholder" ? null : (
-      <span className="text-muted-foreground/75 shrink-0 font-mono text-[11px] tabular-nums">
-        #{contribution.position} · {contribution.rendered.mediaType} · {formatBytes(contribution.rendered.byteLength)} · {contribution.rendered.renderer}
-      </span>
-    )
+  const metaTag = (
+    <span className="text-muted-foreground/75 shrink-0 font-mono text-[11px] tabular-nums">
+      #{index + 1}
+      {item.kind === "agent-tool"
+        ? ` · ${formatBytes(item.inputByteLength + item.resultByteLength)}${item.resultCleared ? " · cleared" : ""}`
+        : item.kind === "agent-thought" && item.opaque
+          ? " · opaque replay"
+          : ` · ${formatBytes(item.byteLength)}`}
+    </span>
+  )
 
-  const renderedBlobBody =
-    contribution.kind === "tool-definition" || contribution.kind === "placeholder" ? null : rawContent !== null ? (
-      <FormattedPayload value={rawContent} className="max-h-96" />
-    ) : blobError !== null ? (
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <span>{blobError}</span>
-        <Button type="button" size="xs" variant="ghost" onClick={() => setBlobAttempt((n) => n + 1)}>
-          Retry
-        </Button>
-      </div>
-    ) : (
-      <div className="text-muted-foreground flex items-center gap-2 py-1 text-xs">
-        <Loader2Icon className={blobLoading ? "size-3.5 shrink-0 animate-spin" : "size-3.5 shrink-0"} />
-        <span>Loading content ({formatBytes(contribution.rendered.byteLength)})…</span>
-      </div>
+  if (item.kind === "developer-message" && item.transcript !== null) {
+    const transcriptEntry: SemanticEntry = {
+      id: item.transcript.id,
+      contentId: item.transcript.id,
+      position: index + 1,
+      turnId: null,
+      authorship: { sessionId: sessionId ?? "session", agentTitle: "harness", modelId: null },
+      ownership: { kind: "local" },
+      createdAt: 0,
+      kind: "developer-message",
+      components: [item.transcript],
+    }
+    return (
+      <li className="flex flex-col gap-2.5 py-5 text-sm [content-visibility:auto] [contain-intrinsic-size:auto_180px]">
+        <SemanticBlockHeader entry={transcriptEntry} onOpenSession={onOpenSession} extraRight={metaTag} />
+        <SemanticEntryContent entry={transcriptEntry} />
+      </li>
     )
+  }
+
+  if (item.kind === "agent-thought" && resolvedEntry === undefined) {
+    return (
+      <li className="flex flex-col gap-2 py-5 text-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+          <span className="text-muted-foreground inline-flex items-center gap-2 font-mono font-semibold tracking-wide">
+            <BrainIcon className="size-3.5 shrink-0" />
+            AGENT-THOUGHT
+          </span>
+          {metaTag}
+        </div>
+        <p className="text-muted-foreground text-xs">
+          {item.opaque ? "Opaque provider reasoning state replayed to the model." : "Replayed reasoning."}
+        </p>
+      </li>
+    )
+  }
+
+  if (item.kind === "system-message" && resolvedEntry === undefined) {
+    const syntheticSystem: SemanticEntry = {
+      id: `system:${contextId}`,
+      contentId: item.contentId,
+      position: index + 1,
+      turnId: null,
+      authorship: { sessionId: sessionId ?? "session", agentTitle: "harness", modelId: null },
+      ownership: { kind: "local" },
+      createdAt: 0,
+      kind: "system-message",
+      content: { id: item.contentId, kind: "text", text: fallbackSystemText ?? "" },
+    }
+    return (
+      <li className="flex flex-col gap-2.5 py-5 text-sm">
+        <SemanticBlockHeader entry={syntheticSystem} onOpenSession={onOpenSession} extraRight={metaTag} />
+        {fallbackSystemText !== null ? (
+          <PlainText text={fallbackSystemText} className="text-xs leading-relaxed text-foreground" />
+        ) : fallbackError !== null ? (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span>{fallbackError}</span>
+            <Button type="button" size="xs" variant="ghost" onClick={() => setAttempt((n) => n + 1)}>
+              Retry
+            </Button>
+          </div>
+        ) : (
+          <div className="text-muted-foreground flex items-center gap-2 py-1 text-xs">
+            <Loader2Icon className="size-3.5 shrink-0 animate-spin" />
+            <span>Loading harness instructions ({formatBytes(item.byteLength)})…</span>
+          </div>
+        )}
+      </li>
+    )
+  }
+
+  if (resolvedEntry === undefined) return null
+
+  const displayEntry: SemanticEntry =
+    item.kind === "agent-tool" && item.resultCleared && resolvedEntry.kind === "agent-tool"
+      ? {
+          ...resolvedEntry,
+          tool: {
+            ...resolvedEntry.tool,
+            result: {
+              content: [{ id: `${resolvedEntry.id}:cleared`, kind: "text", text: CLEARED_RESULT_TEXT }],
+              structured: null,
+            },
+          },
+        }
+      : resolvedEntry
 
   return (
     <li
       ref={(node) => {
-        liRef.current = node
         hostRef.current = node
       }}
       className="flex flex-col gap-2.5 py-5 text-sm [content-visibility:auto] [contain-intrinsic-size:auto_180px]"
     >
-      {entry !== undefined ? (
-        <>
-          <SemanticBlockHeader entry={entry} onOpenSession={onOpenSession} extraRight={metaTag} />
-          {pendingBody ? (
-            <div className="text-muted-foreground flex items-center gap-2 py-1 text-xs">
-              {bodyError !== null ? (
-                <>
-                  <span className="text-destructive">{bodyError}</span>
-                  <Button type="button" size="xs" variant="ghost" onClick={retryBody}>
-                    Retry
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <Loader2Icon className={hydratingBody ? "size-3.5 shrink-0 animate-spin" : "size-3.5 shrink-0"} />
-                  <span>Loading content ({formatBytes(matchedPageEntry!.body!.byteLength)})…</span>
-                </>
-              )}
-            </div>
-          ) : semanticVisible ? (
-            <SemanticEntryContent entry={entry} />
+      <SemanticBlockHeader entry={displayEntry} onOpenSession={onOpenSession} extraRight={metaTag} />
+      {pendingBody ? (
+        <div className="text-muted-foreground flex items-center gap-2 py-1 text-xs">
+          {bodyError !== null ? (
+            <>
+              <span className="text-destructive">{bodyError}</span>
+              <Button type="button" size="xs" variant="ghost" onClick={retryBody}>
+                Retry
+              </Button>
+            </>
           ) : (
-            renderedBlobBody
+            <>
+              <Loader2Icon className={hydratingBody ? "size-3.5 shrink-0 animate-spin" : "size-3.5 shrink-0"} />
+              <span>Loading content ({formatBytes(matchedPageEntry!.body!.byteLength)})…</span>
+            </>
           )}
-        </>
-      ) : contribution.kind === "tool-definition" ? (
-        <>
-          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
-            <div className="flex min-w-0 items-center gap-2">
-              <WrenchIcon className="text-muted-foreground size-3.5 shrink-0" />
-              <span className="font-mono font-semibold tracking-wide text-muted-foreground">
-                tool definition · <span className="text-foreground">{contribution.name}</span>
-              </span>
-            </div>
-            {metaTag}
-          </div>
-          <div className="flex flex-col gap-2">
-            {contribution.description !== "" && (
-              <PlainText text={contribution.description} className="text-xs leading-relaxed text-muted-foreground" />
-            )}
-            <FormattedPayload value={contribution.parameters} className="h-52" fitAlmostFull />
-          </div>
-        </>
-      ) : contribution.kind === "placeholder" ? (
-        <div className="flex flex-wrap items-baseline gap-2 text-xs">
-          <span className="text-muted-foreground font-mono text-[11px] font-semibold tabular-nums">
-            #{contribution.position}
-          </span>
-          <span className="font-medium text-muted-foreground">placeholder · {contribution.reason}</span>
         </div>
       ) : (
         <>
-          <div className="flex flex-wrap items-baseline justify-between gap-2 text-[11px]">
-            <span className="font-mono font-semibold uppercase tracking-wide text-muted-foreground">
-              {contribution.kind}
-              {contribution.transformation !== null ? ` · ${contribution.transformation}` : ""}
-            </span>
-            {metaTag}
-          </div>
-          {renderedBlobBody}
+          <SemanticEntryContent entry={displayEntry} />
+          {item.kind === "user-message" && item.attachments.length > 0 && (
+            <MediaProjectionList items={item.attachments} />
+          )}
+          {item.kind === "agent-tool" && !item.resultCleared && item.resultMedia.length > 0 && (
+            <MediaProjectionList items={item.resultMedia} />
+          )}
         </>
       )}
     </li>
   )
 })
 
+const ToolDefinitionRow = memo(({ tool, index }: { readonly tool: OfferedToolDefinition; readonly index: number }) => (
+  <li className="flex flex-col gap-2.5 py-5 text-sm [content-visibility:auto] [contain-intrinsic-size:auto_180px]">
+    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+      <div className="flex min-w-0 items-center gap-2">
+        <WrenchIcon className="text-muted-foreground size-3.5 shrink-0" />
+        <span className="font-mono font-semibold tracking-wide text-muted-foreground">
+          tool definition · <span className="text-foreground">{tool.name}</span>
+        </span>
+      </div>
+      <span className="text-muted-foreground/75 shrink-0 font-mono text-[11px] tabular-nums">
+        tool #{index + 1}
+      </span>
+    </div>
+    <div className="flex flex-col gap-2">
+      {tool.description !== "" && (
+        <PlainText text={tool.description} className="text-xs leading-relaxed text-muted-foreground" />
+      )}
+      <FormattedPayload value={tool.parameters} className="h-52" fitAlmostFull />
+    </div>
+  </li>
+))
+
 export const Checkpoint = ({
-  manifest,
+  context,
   entries = [],
   onOpenSession,
 }: {
-  readonly manifest: ModelInputManifest | null
+  readonly context: ModelCallContext | null
   readonly entries?: ReadonlyArray<SemanticPageEntry>
   readonly onOpenSession?: (sessionId: string) => void
 }) => {
@@ -238,18 +285,14 @@ export const Checkpoint = ({
     () => new Map<string, SemanticPageEntry>(entries.map((item) => [item.entry.id, item])),
     [entries],
   )
-  const systemPageEntry = useMemo(
-    () => entries.find((item) => item.entry.kind === "system"),
-    [entries],
-  )
 
-  if (manifest === null) {
+  if (context === null) {
     return (
       <div className="text-muted-foreground flex flex-col items-center justify-center gap-2 px-6 py-20 text-center sm:px-10 lg:px-12 xl:px-16">
         <div className="bg-muted flex size-10 items-center justify-center rounded-xl border">
           <LayersIcon className="size-5" />
         </div>
-        <p className="text-sm font-medium text-foreground">No checkpoint boundary yet</p>
+        <p className="text-sm font-medium text-foreground">No checkpoint window yet</p>
         <p className="max-w-sm text-xs">No successful model request is retained for this session yet.</p>
       </div>
     )
@@ -258,26 +301,26 @@ export const Checkpoint = ({
   return (
     <div className="w-full px-6 sm:px-10 lg:px-12 xl:px-16">
       <ol className="divide-y divide-border">
-        {manifest.contributions.map((contribution) => {
+        {context.items.map((item, index) => {
           const sourceId =
-            contribution.kind === "placeholder" || contribution.kind === "tool-definition"
-              ? null
-              : (contribution.sourceEntryId ?? contribution.sourceEntryIds[0] ?? null)
-          const matchedPageEntry =
-            sourceId !== null
-              ? pageEntryById.get(sourceId)
-              : contribution.kind === "message" && contribution.transformation === "harness-system"
-                ? systemPageEntry
-                : undefined
+            item.kind === "developer-message"
+              ? (item.transcript === null ? (item.sourceEntryIds[0] ?? null) : null)
+              : item.sourceEntryId
+          const matchedPageEntry = sourceId !== null ? pageEntryById.get(sourceId) : undefined
           return (
-            <ContributionRow
-              key={contribution.position}
-              contribution={contribution}
+            <ContextItemRow
+              key={`${item.kind}:${sourceId ?? index}:${index}`}
+              contextId={context.id}
+              item={item}
+              index={index}
               matchedPageEntry={matchedPageEntry}
               onOpenSession={onOpenSession}
             />
           )
         })}
+        {context.tools.map((tool, index) => (
+          <ToolDefinitionRow key={`tool:${tool.name}:${index}`} tool={tool} index={index} />
+        ))}
       </ol>
     </div>
   )

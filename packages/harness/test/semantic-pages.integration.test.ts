@@ -46,7 +46,10 @@ describe("bounded semantic reads", () => {
       const client = await connect(server.url, token)
       const sessionId = await createSession(client)
       const large = "context ".repeat(9_000)
-      model.next(callTools([{ name: "big", args: {} }]), say("complete", { inputTokens: 1_234 }))
+      model.next(
+        callTools([{ name: "big", args: {} }]),
+        say("complete", { inputTokens: 1_234, reasoningTokens: 42, cachedTokens: 600 }),
+      )
       await client.request("session.input", { sessionId, text: large })
       await waitFor("the turn", async () =>
         (await server.hub()).store.eventsAfter(sessionId, 0).some((event) => event.event.type === "RUN_FINISHED")
@@ -57,7 +60,13 @@ describe("bounded semantic reads", () => {
       const first = await client.request("session.semantics.page", { sessionId, object: "entries", limit: 10 })
       expect(first.error).toBeUndefined()
       expect(Schema.decodeUnknownExit(SemanticPage)(first.result)._tag).toBe("Success")
-      const userEntry = first.result.items.find((item: { entry: { kind: string } }) => item.entry.kind === "user")
+      const systemEntry = first.result.items[0]
+      expect(systemEntry.entry.kind).toBe("system-message")
+      expect(systemEntry.entry.position).toBe(1)
+      expect(systemEntry.entry.ownership).toEqual({ kind: "local" })
+      expect(systemEntry.entry.content.text).toContain("AsheAgent is the harness that runs this session.")
+      expect(systemEntry.body).toBeNull()
+      const userEntry = first.result.items.find((item: { entry: { kind: string } }) => item.entry.kind === "user-message")
       expect(userEntry.body).toMatchObject({ referenceId: userEntry.entry.id })
       expect(userEntry.entry.parts).toEqual([])
       expect(userEntry.entry.sender).toMatchObject({ kind: "token", name: "semantic-pages" })
@@ -105,33 +114,48 @@ describe("bounded semantic reads", () => {
         length: 1,
       })).error?.code).toBe(-32004)
 
-      const boundaries = await client.request("session.semantics.page", { sessionId, object: "boundaries", limit: 10 })
-      expect(boundaries.result.items.length).toBeGreaterThan(0)
-      const boundaryPage = await client.request("session.semantics.page", { sessionId, object: "boundaries", limit: 1 })
-      const nextBoundaryPage = await client.request("session.semantics.page", {
+      const contexts = await client.request("session.semantics.page", { sessionId, object: "contexts", limit: 10 })
+      expect(contexts.result.items.length).toBeGreaterThan(0)
+      const contextPage = await client.request("session.semantics.page", { sessionId, object: "contexts", limit: 1 })
+      const nextContextPage = await client.request("session.semantics.page", {
         sessionId,
-        object: "boundaries",
-        revision: boundaryPage.result.revision,
-        cursor: boundaryPage.result.nextCursor,
+        object: "contexts",
+        revision: contextPage.result.revision,
+        cursor: contextPage.result.nextCursor,
         limit: 1,
       })
-      expect(nextBoundaryPage.result.items[0].id).not.toBe(boundaryPage.result.items[0].id)
-      expect(boundaries.result.latestSuccessfulBoundaryId).toBeString()
-      const latest = boundaries.result.items.find(
-        (item: { id: string }) => item.id === boundaries.result.latestSuccessfulBoundaryId,
+      expect(nextContextPage.result.items[0].id).not.toBe(contextPage.result.items[0].id)
+      expect(contexts.result.latestModelCallContextId).toBeString()
+      const latest = contexts.result.items.find(
+        (item: { id: string }) => item.id === contexts.result.latestModelCallContextId,
       )
-      const full = await client.request("session.semantics.boundary", {
+      const full = await client.request("session.semantics.context", {
         sessionId,
-        manifestId: latest.id,
+        contextId: latest.id,
       })
-      expect(full.result.boundary.contributions.length).toBeGreaterThan(0)
+      expect(full.result.context.items.length).toBeGreaterThan(0)
+      expect(full.result.context.items[0]).toMatchObject({
+        kind: "system-message",
+        sourceEntryId: systemEntry.entry.id,
+      })
+      expect(full.result.context.tools.length).toBeGreaterThan(0)
+
+      const byCall = await client.request("session.semantics.context", {
+        sessionId,
+        modelCallId: full.result.context.modelCallId,
+      })
+      expect(byCall.error).toBeUndefined()
+      expect(byCall.result.context.id).toBe(full.result.context.id)
 
       const usage = await client.request("session.modelCalls.usage", {
         sessionId,
-        modelCallIds: [full.result.boundary.modelCallId],
+        modelCallIds: [full.result.context.modelCallId],
       })
       expect(usage.result.usage).toEqual([
-        { modelCallId: full.result.boundary.modelCallId, providerUsage: { inputTokens: 1_234, outputTokens: 1, totalTokens: 1_235 } },
+        {
+          modelCallId: full.result.context.modelCallId,
+          providerUsage: { inputTokens: 1_234, outputTokens: 1, totalTokens: 1_235, reasoningTokens: 42, cachedTokens: 600 },
+        },
       ])
 
       const inspected = await inspectHistory(client, sessionId)
@@ -143,11 +167,11 @@ describe("bounded semantic reads", () => {
       const branchId = forked.result.session.id
       expect((await client.request("session.modelCalls.usage", {
         sessionId: branchId,
-        modelCallIds: boundaries.result.items.map((item: { modelCallId: string }) => item.modelCallId),
+        modelCallIds: contexts.result.items.map((item: { modelCallId: string }) => item.modelCallId),
       })).result.usage).toEqual(
         (await client.request("session.modelCalls.usage", {
           sessionId,
-          modelCallIds: boundaries.result.items.map((item: { modelCallId: string }) => item.modelCallId),
+          modelCallIds: contexts.result.items.map((item: { modelCallId: string }) => item.modelCallId),
         })).result.usage,
       )
       expect((await client.request("session.semantics.page", {
@@ -168,7 +192,7 @@ describe("bounded semantic reads", () => {
       })).error).toBeUndefined()
       expect((await afterRestart.request("session.modelCalls.usage", {
         sessionId,
-        modelCallIds: [full.result.boundary.modelCallId],
+        modelCallIds: [full.result.context.modelCallId],
       })).result.usage).toEqual(usage.result.usage)
       expect((await afterRestart.request("content.capture", {
         sessionId,
@@ -197,18 +221,32 @@ describe("bounded semantic reads", () => {
         offset: 0,
         length: 1,
       })).error?.code).toBe(-32004)
-      expect((await afterRestart.request("session.semantics.boundary", {
+      expect((await afterRestart.request("session.semantics.context", {
         sessionId: otherSession,
-        manifestId: full.result.boundary.id,
+        contextId: full.result.context.id,
+      })).error?.code).toBe(-32004)
+      expect((await afterRestart.request("session.semantics.context", {
+        sessionId: otherSession,
+        modelCallId: full.result.context.modelCallId,
+      })).error?.code).toBe(-32004)
+      expect((await afterRestart.request("session.semantics.context", {
+        sessionId,
+        modelCallId: "missing-model-call",
       })).error?.code).toBe(-32004)
       const liveDb = new Database(server.databasePath)
-      liveDb.run("UPDATE model_calls SET provider_input_tokens = NULL, provider_output_tokens = NULL, provider_total_tokens = NULL WHERE session_id = ? AND model_call_id = ?", [sessionId, full.result.boundary.modelCallId])
+      liveDb.run(
+        "UPDATE model_calls SET provider_input_tokens = NULL, provider_output_tokens = NULL, provider_total_tokens = NULL, provider_reasoning_tokens = NULL, provider_cached_tokens = NULL WHERE session_id = ? AND model_call_id = ?",
+        [sessionId, full.result.context.modelCallId],
+      )
       liveDb.close()
       expect((await afterRestart.request("session.modelCalls.usage", {
         sessionId,
-        modelCallIds: [full.result.boundary.modelCallId],
+        modelCallIds: [full.result.context.modelCallId],
       })).result.usage).toEqual([
-        { modelCallId: full.result.boundary.modelCallId, providerUsage: { inputTokens: null, outputTokens: null, totalTokens: null } },
+        {
+          modelCallId: full.result.context.modelCallId,
+          providerUsage: { inputTokens: null, outputTokens: null, totalTokens: null, reasoningTokens: null, cachedTokens: null },
+        },
       ])
       rmSync(join(server.sessionsDir, branchId, "references", capture.name))
       expect((await afterRestart.request("content.capture", {
@@ -226,7 +264,7 @@ describe("bounded semantic reads", () => {
           ? true
           : undefined,
       )
-      const survivingCalls = boundaries.result.items.map((item: { modelCallId: string }) => item.modelCallId)
+      const survivingCalls = contexts.result.items.map((item: { modelCallId: string }) => item.modelCallId)
       const usageBeforeRewind = (await afterRestart.request("session.modelCalls.usage", {
         sessionId,
         modelCallIds: survivingCalls,
@@ -325,7 +363,7 @@ describe("bounded semantic reads", () => {
       const targetPage = await client.request("session.semantics.page", { sessionId: targetSessionId, object: "entries", limit: 10 })
       expect(targetPage.error).toBeUndefined()
       expect(Schema.decodeUnknownExit(SemanticPage)(targetPage.result)._tag).toBe("Success")
-      const peerUserEntry = targetPage.result.items.find((item: { entry: { kind: string } }) => item.entry.kind === "user")
+      const peerUserEntry = targetPage.result.items.find((item: { entry: { kind: string } }) => item.entry.kind === "user-message")
       expect(peerUserEntry.entry.sender).toEqual({
         kind: "session",
         sessionId: sourceSessionId,

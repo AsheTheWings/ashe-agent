@@ -3,8 +3,8 @@ import { Schema } from "effect"
 import {
   AgentTool,
   Measurement,
+  ModelCallContext,
   ModelCallDiscarded,
-  ModelInputManifest,
   OwnerIdentity,
   SelectionPatch,
   SessionSummary,
@@ -90,50 +90,38 @@ describe("owned semantic content", () => {
     expect(decodes(AgentTool, { ...tool, providerCallId: null })).toBe(true)
   })
 
-  test("a successful boundary retains ordered contributions and offered definitions", () => {
-    const manifest = {
-      id: "boundary-1",
+  test("a successful model call context retains ordered semantic items and offered definitions", () => {
+    const context = {
+      id: "context-1",
       modelCallId: "mc-1",
       turnId: "turn-1",
       windowPosition: 1,
       committedAt: 3,
-      contributions: [
+      tools: [
         {
-          position: 0,
-          kind: "instruction",
-          sourceEntryId: null,
-          sourceEntryIds: [],
-          representation: {
-            representationId: "rep-1",
-            contentId: "content-1",
-            mediaType: "text/plain",
-            digest: "sha256:1",
-            transformation: null,
-          },
-          transformation: null,
-          rendered: {
-            representationId: "rep-1",
-            contentId: "content-1",
-            mediaType: "text/plain",
-            digest: "sha256:1",
-            byteLength: 4,
-            renderer: "ashe-agent/instruction@1",
-          },
-        },
-        {
-          position: 1,
-          kind: "tool-definition",
           name: "file_read",
           description: "Read a file",
           parameters: { type: "object" },
-          rendered: {
-            representationId: "rep-2",
-            contentId: "content-2",
-            mediaType: "text/plain",
-            digest: "sha256:2",
-            byteLength: 5,
-            renderer: "ashe-agent/tool-definition@1",
-          },
+        },
+      ],
+      items: [
+        {
+          kind: "system-message",
+          sourceEntryId: "entry-sys",
+          contentId: "content-sys",
+          byteLength: 40,
+        },
+        {
+          kind: "developer-message",
+          sourceEntryIds: ["entry-dev"],
+          transcript: null,
+          byteLength: 80,
+        },
+        {
+          kind: "user-message",
+          sourceEntryId: "entry-user",
+          byteLength: 12,
+          attachments: [],
         },
       ],
       measurement: {
@@ -154,7 +142,7 @@ describe("owned semantic content", () => {
         unavailable: [],
       },
     }
-    expect(decodes(ModelInputManifest, manifest)).toBe(true)
+    expect(decodes(ModelCallContext, context)).toBe(true)
   })
 
   test("partial measurement identifies unavailable coverage instead of counting it as zero", () => {

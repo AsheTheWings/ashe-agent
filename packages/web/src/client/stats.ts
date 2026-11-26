@@ -1,4 +1,11 @@
-import { estimateStructured, estimateText, type ModelInputManifest, type SemanticEntry, type SemanticPageEntry } from "@ashe-agent/protocol"
+import {
+  estimateStructured,
+  estimateText,
+  type ContextMediaProjection,
+  type ModelCallContext,
+  type SemanticEntry,
+  type SemanticPageEntry,
+} from "@ashe-agent/protocol"
 
 export type SessionToolStat = {
   readonly name: string
@@ -27,10 +34,10 @@ export type SessionStats = {
 }
 
 const KIND_LABELS: Record<SemanticEntry["kind"], string> = {
-  system: "System",
-  developer: "Developer",
-  user: "User messages",
-  agent: "Agent messages",
+  "system-message": "System",
+  "developer-message": "Developer",
+  "user-message": "User messages",
+  "agent-message": "Agent messages",
   "agent-thought": "Thoughts",
   "agent-tool": "Tool calls",
 }
@@ -39,13 +46,13 @@ const estimateEntryTokens = (item: SemanticPageEntry): number => {
   if (item.body !== null) return Math.ceil(item.body.byteLength / 4)
   const { entry } = item
   switch (entry.kind) {
-    case "system":
+    case "system-message":
       return estimateText(entry.content.text)
-    case "developer":
+    case "developer-message":
       return entry.components.reduce((sum, component) => sum + estimateText(`${component.heading}\n${component.text}`), 0)
-    case "user":
+    case "user-message":
       return entry.parts.reduce((sum, part) => sum + (part.kind === "text" ? estimateText(part.text) : 1_500), 0)
-    case "agent":
+    case "agent-message":
       return entry.parts.reduce((sum, part) => sum + (part.kind === "text" ? estimateText(part.text) : 1_500), 0)
     case "agent-thought":
       return estimateText(entry.text)
@@ -63,7 +70,7 @@ const estimateEntryTokens = (item: SemanticPageEntry): number => {
 
 /** Whether a semantic entry carries visible content to display in Session or count as an agent message. */
 export const hasVisibleSemanticContent = (entry: SemanticEntry): boolean => {
-  if (entry.kind === "agent") {
+  if (entry.kind === "agent-message") {
     return entry.parts.some((part) => part.kind !== "text" || part.text.trim() !== "")
   }
   if (entry.kind === "agent-thought") {
@@ -95,8 +102,8 @@ export const computeSessionStats = (entries: ReadonlyArray<SemanticPageEntry>): 
     kindBucket.tokens += tokens
     kindMap.set(entry.kind, kindBucket)
 
-    if (entry.kind === "user") userMessages += 1
-    else if (entry.kind === "agent") agentMessages += 1
+    if (entry.kind === "user-message") userMessages += 1
+    else if (entry.kind === "agent-message") agentMessages += 1
     else if (entry.kind === "agent-thought") thoughts += 1
     else if (entry.kind === "agent-tool") {
       toolCalls += 1
@@ -140,23 +147,26 @@ export const computeSessionStats = (entries: ReadonlyArray<SemanticPageEntry>): 
   }
 }
 
-export type CheckpointSegmentCategory =
-  | "system"
-  | "developer"
-  | "tools"
-  | "user"
-  | "assistant"
-  | "tool-results"
-  | "other"
+export type CheckpointGroupId = "harness" | "agent-output" | "user-messages"
 
 export type CheckpointSegment = {
   readonly id: string
+  readonly groupId: CheckpointGroupId
   readonly label: string
-  readonly category: CheckpointSegmentCategory
   readonly detail?: string
   readonly tokens: number
   readonly share: number
   readonly colorToken: string
+}
+
+export type CheckpointGroup = {
+  readonly id: CheckpointGroupId
+  readonly label: string
+  readonly detail?: string
+  readonly tokens: number
+  readonly share: number
+  readonly colorToken: string
+  readonly subgroups: ReadonlyArray<CheckpointSegment>
 }
 
 export type ProviderUsageEntry = {
@@ -165,247 +175,350 @@ export type ProviderUsageEntry = {
 }
 
 export type CheckpointStats = {
-  readonly boundaryId: string
+  readonly contextId: string
   readonly windowPosition: number
   readonly committedAt: number
-  readonly contributionCount: number
+  readonly itemCount: number
+  readonly toolCount: number
+  readonly windowTokens: number
+  readonly windowTokensSource: "provider" | "estimated"
   readonly knownSubtotal: number
   readonly coverage: "complete" | "partial"
   readonly unavailableCount: number
+  readonly groups: ReadonlyArray<CheckpointGroup>
   readonly segments: ReadonlyArray<CheckpointSegment>
   readonly providerInputTokens: number | null
   readonly providerOutputTokens: number | null
   readonly providerTotalTokens: number | null
+  readonly providerReasoningTokens: number | null
+  readonly providerCachedTokens: number | null
   readonly providerUsage: ReadonlyArray<ProviderUsageEntry>
 }
 
-const CATEGORY_COLORS: Record<CheckpointSegmentCategory, string> = {
-  developer: "var(--chart-1)",
+const COLORS = {
   system: "var(--chart-2)",
-  tools: "var(--chart-3)",
-  user: "var(--chart-4)",
-  assistant: "var(--chart-5)",
-  "tool-results": "var(--primary)",
-  other: "var(--muted-foreground)",
+  toolDefinitions: "var(--chart-3)",
+  developer: "var(--chart-1)",
+  toolResults: "var(--primary)",
+  agentOutput: "var(--chart-5)",
+  userMessages: "var(--chart-4)",
+} as const
+
+type ParsedCallUsage = {
+  readonly inputTokens: number | null
+  readonly outputTokens: number | null
+  readonly totalTokens: number | null
+  readonly reasoningTokens: number | null
+  readonly cachedTokens: number | null
+  readonly entry: ProviderUsageEntry
 }
 
-const parseUsageEntries = (
-  usage: ReadonlyArray<{ readonly modelCallId: string; readonly providerUsage: unknown }>,
-): {
-  readonly input: number | null
-  readonly output: number | null
-  readonly total: number | null
-  readonly entries: ReadonlyArray<ProviderUsageEntry>
-} => {
-  let input: number | null = null
-  let output: number | null = null
-  let total: number | null = null
-  const entries: Array<ProviderUsageEntry> = []
-
-  for (const row of usage) {
-    const raw = row.providerUsage
-    const metrics: Array<{ readonly key: string; readonly value: string; readonly numeric: number | null }> = []
-    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-      metrics.push({ key: "raw", value: JSON.stringify(raw), numeric: null })
-    } else {
-      for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-        const numeric = typeof value === "number" && Number.isFinite(value) ? value : null
-        metrics.push({
-          key,
-          value: numeric !== null ? numeric.toLocaleString() : typeof value === "string" ? value : JSON.stringify(value),
-          numeric,
-        })
-        if (numeric !== null) {
-          const normalized = key.toLowerCase().replaceAll("_", "")
-          if (normalized === "inputtokens" || normalized === "prompttokens") input = (input ?? 0) + numeric
-          else if (normalized === "outputtokens" || normalized === "completiontokens") output = (output ?? 0) + numeric
-          else if (normalized === "totaltokens") total = (total ?? 0) + numeric
-        }
+const parseUsageRow = (row: { readonly modelCallId: string; readonly providerUsage: unknown }): ParsedCallUsage => {
+  let inputTokens: number | null = null
+  let outputTokens: number | null = null
+  let totalTokens: number | null = null
+  let reasoningTokens: number | null = null
+  let cachedTokens: number | null = null
+  const raw = row.providerUsage
+  const metrics: Array<{ readonly key: string; readonly value: string; readonly numeric: number | null }> = []
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    metrics.push({ key: "raw", value: JSON.stringify(raw), numeric: null })
+  } else {
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+      if (value === null) continue
+      const numeric = typeof value === "number" && Number.isFinite(value) ? value : null
+      metrics.push({
+        key,
+        value: numeric !== null ? numeric.toLocaleString() : typeof value === "string" ? value : JSON.stringify(value),
+        numeric,
+      })
+      if (numeric !== null) {
+        const normalized = key.toLowerCase().replaceAll("_", "")
+        if (normalized === "inputtokens" || normalized === "prompttokens") inputTokens = numeric
+        else if (normalized === "outputtokens" || normalized === "completiontokens") outputTokens = numeric
+        else if (normalized === "totaltokens") totalTokens = numeric
+        else if (normalized === "reasoningtokens") reasoningTokens = numeric
+        else if (normalized === "cachedtokens") cachedTokens = numeric
       }
     }
-    entries.push({ modelCallId: row.modelCallId, metrics })
   }
-
-  return { input, output, total, entries }
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    reasoningTokens,
+    cachedTokens,
+    entry: { modelCallId: row.modelCallId, metrics },
+  }
 }
 
+const estimateMediaTokens = (projections: ReadonlyArray<ContextMediaProjection>): number =>
+  projections.reduce((sum, projection) => {
+    if (projection.kind === "placeholder") return sum + estimateText(projection.reason)
+    if (projection.mediaKind === "image") return sum + 1_500
+    if (projection.mediaKind === "pdf") return sum + 2_000
+    return sum + Math.ceil(projection.byteLength / 4)
+  }, 0)
+
+const byteTokens = (bytes: number): number => (bytes > 0 ? Math.max(1, Math.ceil(bytes / 4)) : 0)
+
 /**
- * Computes semantic token distribution for a Checkpoint boundary, splitting
- * developer contributions down to individual SemanticDeveloperComponents when
- * the session's canonical semantic entries are available.
+ * Computes Checkpoint window size (provider-reported when available) and the
+ * estimated 3-group semantic distribution (`Harness`, `Agent output`, `User messages`).
  */
 export const computeCheckpointStats = (
-  manifest: ModelInputManifest | null,
+  context: ModelCallContext | null,
   semanticEntries: ReadonlyArray<SemanticPageEntry>,
   usage: ReadonlyArray<{ readonly modelCallId: string; readonly providerUsage: unknown }>,
 ): CheckpointStats | null => {
-  if (manifest === null) return null
+  if (context === null) return null
 
   const entryById = new Map<string, SemanticEntry>(semanticEntries.map((item) => [item.entry.id, item.entry]))
-  const measurementByPosition = new Map<number, number>()
-  const measurementByRep = new Map<string, number>()
+  const usageByCallId = new Map<string, ParsedCallUsage>()
+  for (const row of usage) usageByCallId.set(row.modelCallId, parseUsageRow(row))
 
-  for (const item of manifest.measurement.contributions) {
-    if (item.tokens === null) continue
-    measurementByPosition.set(item.contributionPosition, (measurementByPosition.get(item.contributionPosition) ?? 0) + item.tokens)
-    for (const repId of item.representationIds) {
-      if (!measurementByRep.has(repId)) measurementByRep.set(repId, item.tokens)
-    }
+  const currentUsage = usageByCallId.get(context.modelCallId) ?? null
+
+  let systemTokens = 0
+  let toolDefTokens = 0
+  let developerTokens = 0
+  let toolResultTokens = 0
+  let visibleAgentTokens = 0
+  let userTokens = 0
+
+  const developerLabels = new Set<string>()
+  const visibleAgentOutputByCall = new Map<string, number>()
+  const opaqueThoughtCallIds = new Set<string>()
+  let hasOpaqueReplay = false
+
+  for (const tool of context.tools) {
+    toolDefTokens += estimateStructured({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    })
   }
 
-  // Exclude provider-wire duplicate wrappers when semantic contributions are present.
-  const hasSemantic = manifest.contributions.some(
-    (contribution) => contribution.kind === "tool-definition" || contribution.kind === "placeholder" || contribution.transformation !== "provider-message",
-  )
-  const activeContributions = hasSemantic
-    ? manifest.contributions.filter(
-        (contribution) => contribution.kind === "tool-definition" || contribution.kind === "placeholder" || contribution.transformation !== "provider-message",
-      )
-    : manifest.contributions
-
-  const buckets = new Map<
-    string,
-    { label: string; category: CheckpointSegmentCategory; detail?: string; tokens: number }
-  >()
-  const addBucket = (
-    id: string,
-    label: string,
-    category: CheckpointSegmentCategory,
-    tokens: number,
-    detail?: string,
-  ) => {
-    if (tokens <= 0) return
-    const existing = buckets.get(id)
-    if (existing !== undefined) {
-      existing.tokens += tokens
-      return
-    }
-    buckets.set(id, { label, category, ...(detail === undefined ? {} : { detail }), tokens })
-  }
-
-  let toolDefCount = 0
-
-  for (const contribution of activeContributions) {
-    if (contribution.kind === "placeholder") continue
-
-    if (contribution.kind === "tool-definition") {
-      toolDefCount += 1
-      const tokens =
-        measurementByRep.get(contribution.rendered.representationId) ??
-        measurementByPosition.get(contribution.position) ??
-        estimateStructured({
-          name: contribution.name,
-          description: contribution.description,
-          parameters: contribution.parameters,
-        })
-      addBucket("tool-definitions", "Tool definitions", "tools", tokens)
-      continue
-    }
-
-    const fallbackTokens =
-      measurementByPosition.get(contribution.position) ??
-      Math.max(1, Math.ceil(contribution.rendered.byteLength / 4))
-
-    if (contribution.kind === "instruction" || contribution.transformation === "harness-system") {
-      addBucket("system", "System & harness", "system", fallbackTokens)
-      continue
-    }
-
-    const entryIds =
-      contribution.sourceEntryIds.length > 0
-        ? contribution.sourceEntryIds
-        : contribution.sourceEntryId !== null
-          ? [contribution.sourceEntryId]
-          : []
-    const matchedEntries = entryIds
-      .map((id) => entryById.get(id))
-      .filter((entry): entry is SemanticEntry => entry !== undefined)
-
-    const developerEntries = matchedEntries.filter(
-      (entry): entry is Extract<SemanticEntry, { kind: "developer" }> => entry.kind === "developer",
-    )
-
-    if (contribution.transformation === "developer-block" || developerEntries.length > 0) {
-      const components = developerEntries.flatMap((entry) => entry.components)
-      if (components.length > 0) {
-        for (const component of components) {
-          const title = component.heading.trim() !== "" ? component.heading.trim() : component.type
-          const tokens = Math.max(1, estimateText(`${component.heading}\n${component.text}`))
-          addBucket(`dev:${component.type}:${title.toLowerCase()}`, title, "developer", tokens, `developer · ${component.type}`)
+  for (const item of context.items) {
+    switch (item.kind) {
+      case "system-message":
+        systemTokens += byteTokens(item.byteLength)
+        break
+      case "developer-message": {
+        developerTokens += byteTokens(item.byteLength)
+        if (item.transcript !== null) {
+          developerLabels.add(item.transcript.heading || "Transcript")
+        } else {
+          for (const sourceId of item.sourceEntryIds) {
+            const matched = entryById.get(sourceId)
+            if (matched?.kind === "developer-message") {
+              for (const component of matched.components) {
+                developerLabels.add(component.heading.trim() || component.type)
+              }
+            }
+          }
         }
-      } else {
-        addBucket("dev:generic", "Developer context", "developer", fallbackTokens, "developer")
+        break
       }
-      continue
+      case "user-message":
+        userTokens += byteTokens(item.byteLength) + estimateMediaTokens(item.attachments)
+        break
+      case "agent-thought":
+        if (item.opaque) {
+          hasOpaqueReplay = true
+          if (item.modelCallId !== null) opaqueThoughtCallIds.add(item.modelCallId)
+        } else {
+          const tokens = byteTokens(item.byteLength)
+          visibleAgentTokens += tokens
+          if (item.modelCallId !== null) {
+            visibleAgentOutputByCall.set(item.modelCallId, (visibleAgentOutputByCall.get(item.modelCallId) ?? 0) + tokens)
+          }
+        }
+        break
+      case "agent-message": {
+        const tokens = byteTokens(item.byteLength)
+        visibleAgentTokens += tokens
+        if (item.modelCallId !== null) {
+          visibleAgentOutputByCall.set(item.modelCallId, (visibleAgentOutputByCall.get(item.modelCallId) ?? 0) + tokens)
+        }
+        break
+      }
+      case "agent-tool": {
+        const inputTokens = byteTokens(item.inputByteLength)
+        visibleAgentTokens += inputTokens
+        if (item.modelCallId !== null) {
+          visibleAgentOutputByCall.set(item.modelCallId, (visibleAgentOutputByCall.get(item.modelCallId) ?? 0) + inputTokens)
+        }
+        toolResultTokens += byteTokens(item.resultByteLength) + estimateMediaTokens(item.resultMedia)
+        break
+      }
     }
-
-    if (
-      contribution.transformation === "user-block" ||
-      contribution.transformation === "attachment-original" ||
-      matchedEntries.some((entry) => entry.kind === "user")
-    ) {
-      addBucket("user", "User messages", "user", fallbackTokens)
-      continue
-    }
-
-    if (
-      contribution.transformation === "tool-result" ||
-      contribution.transformation === "model-projection" ||
-      contribution.transformation === "context-result-cleared" ||
-      matchedEntries.some((entry) => entry.kind === "agent-tool")
-    ) {
-      addBucket("tool-results", "Tool results", "tool-results", fallbackTokens)
-      continue
-    }
-
-    if (
-      contribution.transformation === "native-replay" ||
-      contribution.transformation === "foreign-transcript" ||
-      matchedEntries.some((entry) => entry.kind === "agent" || entry.kind === "agent-thought")
-    ) {
-      const measuredTokens =
-        measurementByRep.get(contribution.representation.representationId) ??
-        measurementByRep.get(contribution.rendered.representationId) ??
-        measurementByPosition.get(contribution.position)
-      addBucket("assistant", "Assistant", "assistant", measuredTokens ?? fallbackTokens)
-      continue
-    }
-
-    addBucket("other", "Messages & other", "other", fallbackTokens)
   }
 
-  const toolDefBucket = buckets.get("tool-definitions")
-  if (toolDefBucket !== undefined && toolDefCount > 0) {
-    toolDefBucket.detail = `${toolDefCount} offered tool${toolDefCount === 1 ? "" : "s"}`
+  const harnessTokens = systemTokens + toolDefTokens + developerTokens + toolResultTokens
+  const visibleTotal = harnessTokens + visibleAgentTokens + userTokens
+
+  let opaqueAgentTokens = 0
+  if (hasOpaqueReplay && currentUsage !== null && currentUsage.inputTokens !== null) {
+    let replayedCap = 0
+    for (const callId of opaqueThoughtCallIds) {
+      const prior = usageByCallId.get(callId)
+      if (prior === undefined) continue
+      if (prior.reasoningTokens !== null) {
+        replayedCap += prior.reasoningTokens
+      } else if (prior.outputTokens !== null) {
+        replayedCap += Math.max(0, prior.outputTokens - (visibleAgentOutputByCall.get(callId) ?? 0))
+      }
+    }
+    const gap = Math.max(0, currentUsage.inputTokens - visibleTotal)
+    opaqueAgentTokens = Math.min(replayedCap, gap)
   }
 
-  const totalSegmentTokens = [...buckets.values()].reduce((sum, item) => sum + item.tokens, 0)
-  const segments: Array<CheckpointSegment> = [...buckets.entries()]
-    .map(([id, item]) => ({
-      id,
-      label: item.label,
-      category: item.category,
-      ...(item.detail === undefined ? {} : { detail: item.detail }),
-      tokens: item.tokens,
-      share: totalSegmentTokens > 0 ? item.tokens / totalSegmentTokens : 0,
-      colorToken: CATEGORY_COLORS[item.category],
-    }))
-    .sort((a, b) => b.tokens - a.tokens)
+  const agentOutputTokens = visibleAgentTokens + opaqueAgentTokens
+  const totalEstimated = harnessTokens + agentOutputTokens + userTokens
+  const shareOf = (tokens: number) => (totalEstimated > 0 ? tokens / totalEstimated : 0)
 
-  const parsedUsage = parseUsageEntries(usage)
+  const developerSummary = [...developerLabels].slice(0, 3).join(", ")
+  const developerDetail =
+    developerLabels.size > 3
+      ? `${developerSummary} +${developerLabels.size - 3}`
+      : developerSummary || undefined
+
+  const harnessSubgroups: Array<CheckpointSegment> = [
+    ...(systemTokens > 0
+      ? [{
+          id: "harness:system",
+          groupId: "harness" as const,
+          label: "System message",
+          tokens: systemTokens,
+          share: shareOf(systemTokens),
+          colorToken: COLORS.system,
+        }]
+      : []),
+    ...(toolDefTokens > 0
+      ? [{
+          id: "harness:tool-definitions",
+          groupId: "harness" as const,
+          label: "Tool definitions",
+          detail: `${context.tools.length} offered tool${context.tools.length === 1 ? "" : "s"}`,
+          tokens: toolDefTokens,
+          share: shareOf(toolDefTokens),
+          colorToken: COLORS.toolDefinitions,
+        }]
+      : []),
+    ...(developerTokens > 0
+      ? [{
+          id: "harness:developer",
+          groupId: "harness" as const,
+          label: "Developer messages",
+          ...(developerDetail === undefined ? {} : { detail: developerDetail }),
+          tokens: developerTokens,
+          share: shareOf(developerTokens),
+          colorToken: COLORS.developer,
+        }]
+      : []),
+    ...(toolResultTokens > 0
+      ? [{
+          id: "harness:tool-results",
+          groupId: "harness" as const,
+          label: "Tool results",
+          tokens: toolResultTokens,
+          share: shareOf(toolResultTokens),
+          colorToken: COLORS.toolResults,
+        }]
+      : []),
+  ]
+
+  const agentDetail =
+    opaqueAgentTokens > 0
+      ? "includes opaque reasoning"
+      : hasOpaqueReplay
+        ? "opaque reasoning unmeasured"
+        : undefined
+
+  const groups: Array<CheckpointGroup> = [
+    ...(harnessTokens > 0
+      ? [{
+          id: "harness" as const,
+          label: "Harness",
+          tokens: harnessTokens,
+          share: shareOf(harnessTokens),
+          colorToken: COLORS.toolDefinitions,
+          subgroups: harnessSubgroups,
+        }]
+      : []),
+    ...(agentOutputTokens > 0 || hasOpaqueReplay
+      ? [{
+          id: "agent-output" as const,
+          label: "Agent output",
+          ...(agentDetail === undefined ? {} : { detail: agentDetail }),
+          tokens: agentOutputTokens,
+          share: shareOf(agentOutputTokens),
+          colorToken: COLORS.agentOutput,
+          subgroups: [],
+        }]
+      : []),
+    ...(userTokens > 0
+      ? [{
+          id: "user-messages" as const,
+          label: "User messages",
+          tokens: userTokens,
+          share: shareOf(userTokens),
+          colorToken: COLORS.userMessages,
+          subgroups: [],
+        }]
+      : []),
+  ]
+
+  const segments: Array<CheckpointSegment> = [
+    ...harnessSubgroups,
+    ...(agentOutputTokens > 0
+      ? [{
+          id: "agent-output",
+          groupId: "agent-output" as const,
+          label: "Agent output",
+          ...(agentDetail === undefined ? {} : { detail: agentDetail }),
+          tokens: agentOutputTokens,
+          share: shareOf(agentOutputTokens),
+          colorToken: COLORS.agentOutput,
+        }]
+      : []),
+    ...(userTokens > 0
+      ? [{
+          id: "user-messages",
+          groupId: "user-messages" as const,
+          label: "User messages",
+          tokens: userTokens,
+          share: shareOf(userTokens),
+          colorToken: COLORS.userMessages,
+        }]
+      : []),
+  ]
+
+  const providerInputTokens = currentUsage?.inputTokens ?? null
+  const providerOutputTokens = currentUsage?.outputTokens ?? null
+  const providerTotalTokens = currentUsage?.totalTokens ?? null
+  const providerReasoningTokens = currentUsage?.reasoningTokens ?? null
+  const providerCachedTokens = currentUsage?.cachedTokens ?? null
 
   return {
-    boundaryId: manifest.id,
-    windowPosition: manifest.windowPosition,
-    committedAt: manifest.committedAt,
-    contributionCount: activeContributions.length,
-    knownSubtotal: manifest.measurement.knownSubtotal,
-    coverage: manifest.measurement.coverage,
-    unavailableCount: manifest.measurement.unavailable.length,
+    contextId: context.id,
+    windowPosition: context.windowPosition,
+    committedAt: context.committedAt,
+    itemCount: context.items.length,
+    toolCount: context.tools.length,
+    windowTokens: providerInputTokens ?? context.measurement.knownSubtotal,
+    windowTokensSource: providerInputTokens !== null ? "provider" : "estimated",
+    knownSubtotal: context.measurement.knownSubtotal,
+    coverage: context.measurement.coverage,
+    unavailableCount: context.measurement.unavailable.length,
+    groups,
     segments,
-    providerInputTokens: parsedUsage.input,
-    providerOutputTokens: parsedUsage.output,
-    providerTotalTokens: parsedUsage.total,
-    providerUsage: parsedUsage.entries,
+    providerInputTokens,
+    providerOutputTokens,
+    providerTotalTokens,
+    providerReasoningTokens,
+    providerCachedTokens,
+    providerUsage: currentUsage !== null && currentUsage.entry.metrics.length > 0 ? [currentUsage.entry] : [],
   }
 }

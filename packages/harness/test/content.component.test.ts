@@ -663,22 +663,22 @@ describe("content measurement and retention", () => {
           transformation: "pdf-text",
         })
 
-      const boundary = h.hub.semantics(session).boundaries[0]!
-      const provider = boundary.contributions.find((contribution) =>
-        "transformation" in contribution && contribution.transformation === "provider-message")
-      expect(provider).toBeDefined()
-      if (provider === undefined || !("rendered" in provider)) throw new Error("no rendered provider contribution")
+      const context = h.hub.semantics(session).contexts[0]!
+      const manifest = h.hub.store.conversation.successfulManifests(session)[0]!.manifest as {
+        readonly providerInput?: { readonly contentId: string; readonly representationId: string }
+      }
+      expect(manifest.providerInput).toBeDefined()
       const providerContent = h.hub.store.conversation.retainedContent(
         session,
-        provider.rendered.contentId,
-        boundary.id,
+        manifest.providerInput!.contentId,
+        context.id,
       )!
       expect(providerContent.representations[0]).toMatchObject({
-        representationId: provider.rendered.representationId,
+        representationId: manifest.providerInput!.representationId,
         kind: "text",
         filename: null,
         transformation: "provider-message",
-        metadata: { renderer: "ashe-agent/provider-message@1" },
+        metadata: { renderer: "ashe-agent/window@1" },
       })
     } finally {
       await h.cleanup()

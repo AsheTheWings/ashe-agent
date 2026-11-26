@@ -77,7 +77,7 @@ describe("web observer", () => {
               pending: [],
               execution: { activeTurnId: "r1", activity: "working", canResume: false, canRewind: true, canFork: false, contextWorkflowActive: false, restorePending: false },
               userTurnIds: ["r1"],
-              latestSuccessfulBoundaryId: null,
+              latestModelCallContextId: null,
               attention: [],
             })
           } else respond({})

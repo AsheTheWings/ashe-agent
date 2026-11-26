@@ -1,5 +1,5 @@
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages"
-import type { RepresentationRef } from "@ashe-agent/protocol"
+import type { ContextMediaProjection, ModelCallContextItem, RepresentationRef } from "@ashe-agent/protocol"
 import { developerBlock, systemBlock } from "../context/components.ts"
 import type { Item } from "../sessions/conversation.ts"
 import type { ProjectedAttachment } from "../content/media.ts"
@@ -116,27 +116,74 @@ export const transcriptComponent = (items: ReadonlyArray<Item>, projected?: Read
   return `# Transcript\n\nTurns another model ran in this session, recorded verbatim; they are not your own work.${origin}\n\n${renderTranscript(items, projected)}`
 }
 
+export interface ReplayedReasoningInfo {
+  readonly present: boolean
+  readonly opaque: boolean
+  readonly plaintext: string
+}
+
 /**
- * An assistant message as the model receives it again: reasoning without
- * encrypted content is dropped, since no provider keeps it for replay.
+ * Inspects a replayed assistant message's provider reasoning items across
+ * Responses API archetypes: opaque encrypted/signed items (`encrypted_content`)
+ * vs. plaintext-only reasoning items (empty/absent `encrypted_content`).
  */
-const replayable = (message: AIMessage): AIMessage => {
-  const reasoning = message.additional_kwargs?.reasoning as { encrypted_content?: unknown } | undefined
-  if (reasoning === undefined || typeof reasoning.encrypted_content === "string") return message
-  const { reasoning: _, ...kwargs } = message.additional_kwargs
-  return new AIMessage({
-    content: Array.isArray(message.content)
-      ? message.content.filter((part) => !(typeof part === "object" && part.type === "reasoning"))
-      : message.content,
-    tool_calls: message.tool_calls ?? [],
-    additional_kwargs: kwargs,
-    response_metadata: message.response_metadata,
-    ...(message.id === undefined ? {} : { id: message.id }),
-  })
+export const inspectReplayedReasoning = (message: BaseMessage): ReplayedReasoningInfo => {
+  const output = (message.response_metadata as { readonly output?: unknown } | undefined)?.output
+  if (Array.isArray(output)) {
+    const reasoningItems = output.filter(
+      (item): item is {
+        readonly type: "reasoning"
+        readonly encrypted_content?: unknown
+        readonly summary?: ReadonlyArray<{ readonly text?: unknown }>
+        readonly content?: ReadonlyArray<{ readonly text?: unknown }>
+      } => typeof item === "object" && item !== null && (item as { type?: unknown }).type === "reasoning",
+    )
+    if (reasoningItems.length > 0) {
+      const opaque = reasoningItems.some(
+        (item) => typeof item.encrypted_content === "string" && item.encrypted_content.trim() !== "",
+      )
+      if (opaque) return { present: true, opaque: true, plaintext: "" }
+      const plaintext = reasoningItems
+        .flatMap((item) => {
+          const summaryText = Array.isArray(item.summary)
+            ? item.summary.flatMap((part) => (typeof part?.text === "string" ? [part.text] : [])).join("")
+            : ""
+          if (summaryText !== "") return [summaryText]
+          const contentText = Array.isArray(item.content)
+            ? item.content.flatMap((part) => (typeof part?.text === "string" ? [part.text] : [])).join("")
+            : ""
+          return contentText !== "" ? [contentText] : []
+        })
+        .join("\n")
+      return { present: plaintext !== "", opaque: false, plaintext }
+    }
+  }
+  const reasoning = (message.additional_kwargs as { readonly reasoning?: unknown } | undefined)?.reasoning as
+    | { readonly encrypted_content?: unknown; readonly summary?: ReadonlyArray<{ readonly text?: unknown }> }
+    | undefined
+  if (reasoning !== undefined) {
+    const opaque = typeof reasoning.encrypted_content === "string" && reasoning.encrypted_content.trim() !== ""
+    if (opaque) return { present: true, opaque: true, plaintext: "" }
+    const summaryText = Array.isArray(reasoning.summary)
+      ? reasoning.summary.flatMap((part) => (typeof part?.text === "string" ? [part.text] : [])).join("")
+      : ""
+    if (summaryText !== "") return { present: true, opaque: false, plaintext: summaryText }
+  }
+  if (Array.isArray(message.content)) {
+    const plaintext = message.content
+      .flatMap((part) =>
+        typeof part === "object" && part !== null && part.type === "reasoning" && typeof part.reasoning === "string"
+          ? [part.reasoning]
+          : [],
+      )
+      .join("")
+    if (plaintext !== "") return { present: true, opaque: false, plaintext }
+  }
+  return { present: false, opaque: false, plaintext: "" }
 }
 
 /** The native assistant message a provider receives for retained own-history. */
-export const renderNativeMessage = (message: AIMessage): AIMessage => replayable(message)
+export const renderNativeMessage = (message: AIMessage): AIMessage => message
 
 /** A tool result as a model call carries it: images as images for a model that takes them, else as placeholders. */
 const toolMessage = (item: ResultItem, imageInput: boolean, pdfInput: boolean, projected?: ToolContent) => {
@@ -218,6 +265,131 @@ const toolMessage = (item: ResultItem, imageInput: boolean, pdfInput: boolean, p
 export const renderToolResultMessage = (item: ResultItem, imageInput: boolean, pdfInput = false): ToolMessage =>
   toolMessage(item, imageInput, pdfInput)
 
+const mediaKindForType = (mediaType: string): "text" | "image" | "pdf" =>
+  mediaType.startsWith("image/") ? "image" : mediaType === "application/pdf" ? "pdf" : "text"
+
+const userAttachmentsProjection = (
+  item: Extract<Item, { kind: "user" }>,
+  projected?: ProjectedAttachment,
+): ReadonlyArray<ContextMediaProjection> => {
+  if (projected !== undefined && projected.contributions.length > 0) {
+    return projected.contributions.map((contribution) => {
+      if (contribution.transformation === "attachment-placeholder") {
+        return {
+          kind: "placeholder" as const,
+          name:
+            item.attachments?.find((att) => att.contentId === contribution.representation.contentId)?.name ??
+            item.attachments?.[0]?.name ??
+            "attachment",
+          reason: "attachment unavailable to selected model",
+        }
+      }
+      const matchingPart = projected.parts.find(
+        (part) => part.representation?.representationId === contribution.representation.representationId,
+      )
+      const byteLength =
+        matchingPart === undefined
+          ? 0
+          : matchingPart.type === "text"
+            ? Buffer.byteLength(matchingPart.text)
+            : Buffer.from(matchingPart.data, "base64").byteLength
+      const name =
+        matchingPart !== undefined && matchingPart.type === "pdf"
+          ? matchingPart.filename
+          : (item.attachments?.find((att) => att.contentId === contribution.representation.contentId)?.name ??
+            item.attachments?.[0]?.name ??
+            "attachment")
+      return {
+        kind: "representation" as const,
+        name,
+        content: contribution.representation,
+        byteLength,
+        mediaKind: mediaKindForType(contribution.representation.mediaType),
+      }
+    })
+  }
+  return (item.attachments ?? []).map((attachment) => ({
+    kind: "representation" as const,
+    name: attachment.name,
+    content: {
+      representationId: attachment.representationId,
+      contentId: attachment.contentId,
+      mediaType: attachment.mediaType,
+      digest: attachment.digest,
+      transformation: "attachment-original",
+    },
+    byteLength: 0,
+    mediaKind: mediaKindForType(attachment.mediaType),
+  }))
+}
+
+const toolResultContextProjection = (
+  item: ResultItem,
+  imageInput: boolean,
+  pdfInput: boolean,
+  projected?: ToolContent,
+): { readonly resultByteLength: number; readonly resultMedia: ReadonlyArray<ContextMediaProjection> } => {
+  if (item.cleared === true) {
+    return { resultByteLength: Buffer.byteLength(CLEARED_RESULT), resultMedia: [] }
+  }
+  const content = projected ?? item.content
+  if (typeof content === "string") {
+    return { resultByteLength: Buffer.byteLength(content), resultMedia: [] }
+  }
+  let textBytes = 0
+  const media: Array<ContextMediaProjection> = []
+  for (const part of content) {
+    if (part.type === "text") {
+      textBytes += Buffer.byteLength(part.text)
+      continue
+    }
+    if (part.type === "image") {
+      if (imageInput) {
+        const bytes = Buffer.from(part.data, "base64")
+        const digest = new Bun.CryptoHasher("sha256").update(bytes).digest("hex")
+        media.push({
+          kind: "representation",
+          name: part.path,
+          content: part.representation ?? {
+            representationId: digest,
+            contentId: digest,
+            mediaType: part.mimeType,
+            digest,
+            transformation: null,
+          },
+          byteLength: bytes.byteLength,
+          mediaKind: "image",
+        })
+      } else {
+        textBytes += Buffer.byteLength(`[image: ${part.path}]`)
+        media.push({ kind: "placeholder", name: part.path, reason: "image input unavailable for selected model" })
+      }
+      continue
+    }
+    if (pdfInput) {
+      const bytes = Buffer.from(part.data, "base64")
+      const digest = new Bun.CryptoHasher("sha256").update(bytes).digest("hex")
+      media.push({
+        kind: "representation",
+        name: part.filename,
+        content: part.representation ?? {
+          representationId: digest,
+          contentId: digest,
+          mediaType: part.mimeType,
+          digest,
+          transformation: null,
+        },
+        byteLength: bytes.byteLength,
+        mediaKind: "pdf",
+      })
+    } else {
+      textBytes += Buffer.byteLength(`[pdf: ${part.filename}]`)
+      media.push({ kind: "placeholder", name: part.filename, reason: "pdf input unavailable for selected model" })
+    }
+  }
+  return { resultByteLength: textBytes, resultMedia: media }
+}
+
 /**
  * The messages of a model call by `model` in a checkpoint window: its
  * harness instructions as the `<system>` block of the first user input,
@@ -240,6 +412,8 @@ export const renderWindow = (
   pdfInput = false,
   projectedResults?: ReadonlyMap<string, ToolContent>,
   observeMessage?: (sourceEntryIds: ReadonlyArray<string>, rendered: string) => void,
+  observeContext?: (item: ModelCallContextItem) => void,
+  thoughtEntryIds?: ReadonlyMap<string, string>,
 ): Array<BaseMessage> => {
   const messages: Array<BaseMessage> = []
   let blocks: Array<string> = [systemBlock(harness)]
@@ -249,6 +423,7 @@ export const renderWindow = (
   let foreignContent: Array<Record<string, unknown>> = []
   let foreignRepresentations: Array<Record<string, unknown>> = []
   let inputOwner: string | null | undefined
+  const toolArgsByCallId = new Map<string, unknown>()
   const closeComponents = () => {
     if (components.length > 0) {
       const rendered = developerBlock(components)
@@ -261,7 +436,19 @@ export const renderWindow = (
   const closeForeign = () => {
     if (foreign.length > 0) {
       const rendered = transcriptComponent(foreign, attachments)
-      components.push({ text: rendered, sourceEntryIds: foreign.map((item) => item.entryId) })
+      const sourceEntryIds = foreign.map((item) => item.entryId)
+      components.push({ text: rendered, sourceEntryIds })
+      observeContext?.({
+        kind: "developer-message",
+        sourceEntryIds,
+        transcript: {
+          id: `transcript:${sourceEntryIds[0]!}`,
+          type: "transcript",
+          heading: "Transcript",
+          text: rendered,
+        },
+        byteLength: Buffer.byteLength(rendered),
+      })
       for (const item of foreign) {
         const projected = item.kind === "user" ? attachments?.get(item.entryId)?.parts : undefined
         const result = item.kind === "result" ? projectedResults?.get(item.entryId) : undefined
@@ -350,10 +537,22 @@ export const renderWindow = (
     switch (item.kind) {
       case "component":
         components.push({ ...item.component, sourceEntryIds: [item.entryId] })
+        observeContext?.({
+          kind: "developer-message",
+          sourceEntryIds: [item.entryId],
+          transcript: null,
+          byteLength: Buffer.byteLength(item.component.text),
+        })
         break
       case "user": {
         closeComponents()
         const projected = attachments?.get(item.entryId)
+        observeContext?.({
+          kind: "user-message",
+          sourceEntryId: item.entryId,
+          byteLength: Buffer.byteLength(item.text),
+          attachments: userAttachmentsProjection(item, projected),
+        })
         if (projected === undefined || projected.parts.length === 0) {
           const rendered = userBlock(item.text)
           blocks.push(rendered)
@@ -392,21 +591,63 @@ export const renderWindow = (
         observeMessage?.([item.entryId], rendered)
         break
       }
-      case "assistant":
+      case "assistant": {
         flush()
-        messages.push(replayable(item.message))
-        const assistantRendered = JSON.stringify(replayable(item.message))
+        const native = renderNativeMessage(item.message)
+        messages.push(native)
+        for (const call of native.tool_calls ?? []) {
+          if (call.id !== undefined) toolArgsByCallId.set(call.id, call.args)
+        }
+        const reasoning = inspectReplayedReasoning(native)
+        if (reasoning.present) {
+          observeContext?.({
+            kind: "agent-thought",
+            sourceEntryId: item.modelCallId !== null ? (thoughtEntryIds?.get(item.modelCallId) ?? null) : null,
+            modelCallId: item.modelCallId,
+            opaque: reasoning.opaque,
+            byteLength: reasoning.opaque ? 0 : Buffer.byteLength(reasoning.plaintext),
+          })
+        }
+        const visibleText = messageText(native)
+        if (visibleText !== "" || (!reasoning.present && (native.tool_calls?.length ?? 0) === 0)) {
+          observeContext?.({
+            kind: "agent-message",
+            sourceEntryId: item.entryId,
+            modelCallId: item.modelCallId,
+            byteLength: Buffer.byteLength(visibleText),
+          })
+        }
+        const assistantRendered = JSON.stringify(native)
         observe?.([item.entryId], assistantRendered)
         observeMessage?.([item.entryId], assistantRendered)
         break
-      case "result":
+      }
+      case "result": {
         flush()
         const message = toolMessage(item, imageInput, pdfInput, projectedResults?.get(item.entryId))
         messages.push(message)
+        const args = toolArgsByCallId.get(item.callId)
+        const inputByteLength = Buffer.byteLength(JSON.stringify({ name: item.name, arguments: args ?? null }))
+        const { resultByteLength, resultMedia } = toolResultContextProjection(
+          item,
+          imageInput,
+          pdfInput,
+          projectedResults?.get(item.entryId),
+        )
+        observeContext?.({
+          kind: "agent-tool",
+          sourceEntryId: item.entryId,
+          modelCallId: item.modelCallId,
+          resultCleared: item.cleared === true,
+          inputByteLength,
+          resultByteLength,
+          resultMedia,
+        })
         const resultRendered = JSON.stringify(message)
         observe?.([item.entryId], resultRendered)
         observeMessage?.([item.entryId], resultRendered)
         break
+      }
     }
   }
   flush()

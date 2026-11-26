@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createElement, type ReactNode } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import type { ModelInputManifest, SemanticPageEntry, SessionObservation } from "@ashe-agent/protocol"
+import type { ModelCallContext, SemanticPageEntry, SessionObservation } from "@ashe-agent/protocol"
 import { ClientProvider } from "../src/app/client-context.tsx"
 import { SessionClient } from "../src/session/client.ts"
 import {
@@ -78,7 +78,7 @@ const observation: SessionObservation = {
   pending: [],
   execution: { activeTurnId: "r1", activity: "working", canResume: false, canRewind: true, canFork: false, contextWorkflowActive: false, restorePending: false },
   userTurnIds: ["r1"],
-  latestSuccessfulBoundaryId: null,
+  latestModelCallContextId: null,
   attention: [],
 }
 
@@ -90,7 +90,7 @@ const sampleEntries: ReadonlyArray<SemanticPageEntry> = [
       contentId: "c1",
       position: 1,
       turnId: null,
-      kind: "developer",
+      kind: "developer-message",
       authorship: { sessionId: "s1", agentTitle: "untitled", modelId: null },
       ownership: { kind: "inherited", sourceSessionId: "source", sourceEntryId: "e0" },
       createdAt: 1,
@@ -107,7 +107,7 @@ const sampleEntries: ReadonlyArray<SemanticPageEntry> = [
       contentId: "c2",
       position: 2,
       turnId: "r1",
-      kind: "user",
+      kind: "user-message",
       authorship: { sessionId: "s1", agentTitle: "untitled", modelId: null },
       ownership: { kind: "local" },
       createdAt: 2,
@@ -152,7 +152,7 @@ const sampleEntries: ReadonlyArray<SemanticPageEntry> = [
       contentId: "c4",
       position: 4,
       turnId: "r1",
-      kind: "agent",
+      kind: "agent-message",
       modelCallId: "m1",
       authorship: { sessionId: "s1", agentTitle: "untitled", modelId: "m1" },
       ownership: { kind: "local" },
@@ -186,7 +186,7 @@ describe("owned three-view rendering", () => {
         contentId: "c5",
         position: 5,
         turnId: "r2",
-        kind: "user",
+        kind: "user-message",
         sender: { kind: "session", sessionId: "peer-1", agentTitle: "reviewer", modelId: "peer-model" },
         authorship: { sessionId: "s1", agentTitle: "untitled", modelId: "m1" },
         ownership: { kind: "local" },
@@ -201,7 +201,7 @@ describe("owned three-view rendering", () => {
         contentId: "c6",
         position: 6,
         turnId: "r2",
-        kind: "agent",
+        kind: "agent-message",
         modelCallId: "m2",
         authorship: { sessionId: "s1", agentTitle: "untitled", modelId: "m1" },
         ownership: { kind: "local" },
@@ -290,7 +290,7 @@ describe("owned three-view rendering", () => {
         contentId: "c-empty-agent",
         position: 7,
         turnId: "r2",
-        kind: "agent",
+        kind: "agent-message",
         modelCallId: "m3",
         authorship: { sessionId: "s1", agentTitle: "untitled", modelId: "m1" },
         ownership: { kind: "local" },
@@ -329,43 +329,89 @@ describe("owned three-view rendering", () => {
     expect(barHtml).toContain("file_patch")
   })
 
-  test("Checkpoint renders flat expanded contributions and reports semantic breakdown and provider usage in its stats bar", () => {
-    const manifest: ModelInputManifest = {
-      id: "b1",
-      modelCallId: "m1",
+  test("Checkpoint renders semantic context items, transcripts, cleared tool results, and 3-group stacked stats", () => {
+    const context: ModelCallContext = {
+      id: "ctx1",
+      modelCallId: "m2",
       turnId: "r1",
       windowPosition: 1,
       committedAt: 1,
-      contributions: [
-        { position: 0, kind: "message", sourceEntryId: "e1", sourceEntryIds: ["e1"], representation: { representationId: "r-dev", contentId: "c1", mediaType: "text/plain", digest: "d1", transformation: "developer-block" }, transformation: "developer-block", rendered: { representationId: "rr-dev", contentId: "cc-dev", mediaType: "text/plain", digest: "dd-dev", byteLength: 80, renderer: "text@1" } },
-        { position: 1, kind: "message", sourceEntryId: "e2", sourceEntryIds: ["e2"], representation: { representationId: "r", contentId: "c", mediaType: "text/plain", digest: "d", transformation: "user-block" }, transformation: "user-block", rendered: { representationId: "rr", contentId: "cc", mediaType: "text/plain", digest: "dd", byteLength: 20, renderer: "text@1" } },
-        { position: 2, kind: "tool-definition", name: "file_patch", description: "Apply a patch", parameters: {}, rendered: { representationId: "rt", contentId: "ct", mediaType: "application/json", digest: "dt", byteLength: 24, renderer: "json@1" } },
-        { position: 3, kind: "placeholder", sourceEntryId: "e3", reason: "cleared tool result" },
+      tools: [
+        { name: "file_patch", description: "Apply a patch", parameters: { type: "object" } },
       ],
-      measurement: { method: "ashe-agent-estimator", methodVersion: 1, purpose: "analysis", coverage: "partial", knownSubtotal: 42, contributions: [{ contributionPosition: 1, basis: "ashe-agent-text-v1", methodVersion: 1, tokens: 5, representationIds: ["rr"] }], unavailable: [{ contributionPosition: 3, reason: "cleared" }] },
+      items: [
+        { kind: "system-message", sourceEntryId: "e0-sys", contentId: "c0-sys", byteLength: 400 },
+        { kind: "developer-message", sourceEntryIds: ["e1"], transcript: null, byteLength: 80 },
+        {
+          kind: "developer-message",
+          sourceEntryIds: ["e-foreign"],
+          transcript: { id: "transcript:e-foreign", type: "transcript", heading: "Transcript", text: "# Transcript\n\nEarlier model turn." },
+          byteLength: 120,
+        },
+        { kind: "user-message", sourceEntryId: "e2", byteLength: 20, attachments: [] },
+        { kind: "agent-thought", sourceEntryId: null, modelCallId: "m1", opaque: true, byteLength: 0 },
+        { kind: "agent-message", sourceEntryId: "e4", modelCallId: "m1", byteLength: 36 },
+        { kind: "agent-tool", sourceEntryId: "e3", modelCallId: "m1", resultCleared: true, inputByteLength: 60, resultByteLength: 66, resultMedia: [] },
+      ],
+      measurement: { method: "ashe-agent-estimator", methodVersion: 1, purpose: "analysis", coverage: "partial", knownSubtotal: 200, contributions: [{ contributionPosition: 0, basis: "ashe-agent-text-v1", methodVersion: 1, tokens: 200, representationIds: ["c0-sys"] }], unavailable: [{ contributionPosition: 4, reason: "opaque provider replay state is not measured" }] },
     }
-    const html = render(createElement(Checkpoint, { manifest, entries: sampleEntries }))
-    expect(html).not.toContain("Best-effort model input")
+    const systemEntry: SemanticPageEntry = {
+      body: null,
+      entry: {
+        id: "e0-sys",
+        contentId: "c0-sys",
+        position: 1,
+        turnId: null,
+        kind: "system-message",
+        authorship: { sessionId: "s1", agentTitle: "untitled", modelId: null },
+        ownership: { kind: "local" },
+        createdAt: 1,
+        content: { id: "e0-sys", kind: "text", text: "Harness rules for the session" },
+      },
+    }
+    const html = render(createElement(Checkpoint, { context, entries: [systemEntry, ...sampleEntries] }))
+    expect(html).not.toContain("INSTRUCTION")
+    expect(html).not.toContain("PROVIDER-MESSAGE")
+    expect(html).toContain("SYSTEM-MESSAGE")
+    expect(html).toContain("Harness instructions")
+    expect(html).toContain("Harness rules for the session")
     expect(html).toContain("Peer developer")
     expect(html).toContain("Workspace state")
+    expect(html).toContain("Transcript")
+    expect(html).toContain("Earlier model turn.")
+    expect(html).toContain("Result cleared to free context")
     expect(html).toContain("tool definition")
     expect(html).toContain("file_patch")
     expect(html).toContain("Apply a patch")
-    expect(html).toContain("placeholder · cleared tool result")
 
-    const usage = [{ modelCallId: "m1", providerUsage: { inputTokens: 70, outputTokens: 30 } }]
-    const stats = computeCheckpointStats(manifest, sampleEntries, usage)
+    // Provider inputTokens is the window size; opaque thoughts are bounded by prior reasoningTokens and input gap.
+    const usage = [
+      { modelCallId: "m1", providerUsage: { inputTokens: 200, outputTokens: 525, totalTokens: 725, reasoningTokens: 500, cachedTokens: null } },
+      { modelCallId: "m2", providerUsage: { inputTokens: 720, outputTokens: 30, totalTokens: 750, reasoningTokens: null, cachedTokens: null } },
+    ]
+    const stats = computeCheckpointStats(context, [systemEntry, ...sampleEntries], usage)
     expect(stats).not.toBeNull()
-    expect(stats?.segments.some((segment) => segment.label === "Peer developer")).toBe(true)
-    expect(stats?.segments.some((segment) => segment.label === "Workspace state")).toBe(true)
-    expect(stats?.providerInputTokens).toBe(70)
+    expect(stats?.windowTokens).toBe(720)
+    expect(stats?.windowTokensSource).toBe("provider")
+    expect(stats?.groups.map((group) => group.label)).toEqual(["Harness", "Agent output", "User messages"])
+    expect(stats?.groups[0]?.subgroups.map((sub) => sub.label)).toEqual([
+      "System message",
+      "Tool definitions",
+      "Developer messages",
+      "Tool results",
+    ])
+    const agentGroup = stats?.groups.find((group) => group.id === "agent-output")
+    expect(agentGroup?.detail).toBe("includes opaque reasoning")
+    expect(agentGroup?.tokens).toBeGreaterThan(400)
+    expect(stats?.providerInputTokens).toBe(720)
     expect(stats?.providerOutputTokens).toBe(30)
 
-    const barHtml = render(createElement(CheckpointStatsBar, { manifest, entries: sampleEntries, usage }))
-    expect(barHtml).toContain("42 est. tokens")
-    expect(barHtml).toContain("partial")
-    expect(barHtml).toContain("70 in")
+    const barHtml = render(createElement(CheckpointStatsBar, { context, entries: [systemEntry, ...sampleEntries], usage }))
+    expect(barHtml).toContain("720 tokens")
     expect(barHtml).toContain("30 out")
+    expect(barHtml).toContain("Harness")
+    expect(barHtml).toContain("Agent output")
+    expect(barHtml).toContain("partial")
   })
 
   test("external image destinations render as inert consent placeholders and raw HTML is never evaluated", () => {
@@ -386,7 +432,7 @@ describe("owned three-view rendering", () => {
   })
 
   test("Checkpoint has an explicit empty state and the activity preview persists when idle", () => {
-    expect(render(createElement(Checkpoint, { manifest: null }))).toContain("No successful model request is retained")
+    expect(render(createElement(Checkpoint, { context: null }))).toContain("No successful model request is retained")
     const activeHtml = render(createElement(ActivityPreview, { view, onReveal: () => {} }))
     expect(activeHtml).toContain("thinking about the task")
     expect(activeHtml).toContain("file_patch")
@@ -435,7 +481,7 @@ describe("owned three-view rendering", () => {
         onViewChange: () => {},
         notifications: [],
         semanticEntries: [],
-        checkpointManifest: null,
+        checkpointContext: null,
         checkpointUsage: [],
         sidebarPinned: true,
         onToggleSidebar: () => {},
@@ -455,7 +501,7 @@ describe("owned three-view rendering", () => {
         onViewChange: () => {},
         notifications: [],
         semanticEntries: [],
-        checkpointManifest: null,
+        checkpointContext: null,
         checkpointUsage: [],
         sidebarPinned: true,
         onToggleSidebar: () => {},

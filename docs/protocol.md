@@ -93,9 +93,9 @@ the next section explains, and then sends any of these:
   execution/history eligibility, and validated action-attention facts.
   Developer pending work is typed, but its full content stays in Session.
 - `session.semantics.page` returns bounded pages of `turns`, typed `entries`,
-  or successful `boundaries`; `revision` and `cursor` must agree, and a stale
+  or successful `contexts`; `revision` and `cursor` must agree, and a stale
   pair is an explicit conflict. `session.semantics.body` and
-  `session.semantics.boundary` read one omitted body or boundary.
+  `session.semantics.context` read one omitted body or model call context.
   `session.modelCalls.usage` returns stored nullable provider counts for at
   most 100 calls.
 - `session.history.inspect` returns a pending-aware mutation scope and target.
@@ -126,22 +126,26 @@ the next section explains, and then sends any of these:
   result independently of the transport, reporting an unresolved
   acknowledgement explicitly.
 - `session.semantics` returns the session's immutable turns, canonical
-  semantic entries, and every successful request boundary. A boundary
-  carries its ordered contribution representations and transformations,
-  offered tool definitions, rendered identities, attribution, and
-  measurement, so an owner client can build its own model-input view
-  without database access.
+  semantic entries (`system-message`, `developer-message`, `user-message`,
+  `agent-message`, `agent-thought`, `agent-tool`), and every successful
+  `ModelCallContext`. Each context carries its ordered semantic items
+  (including synthesized `transcript` developer components, cleared-result
+  state, and projected media), offered tool definitions, and measurement, so
+  an owner client can inspect the session's model context without database
+  access or presentation assumptions.
 - `session.semantics.page` reads turns, typed entries or successful
-  boundaries in bounded cursor pages under one history revision. A stale
+  `contexts` in bounded cursor pages under one history revision. A stale
   revision, a cursor without its revision, or a cursor of another
   collection fails explicitly. An entry whose retained body exceeds the
-  inline bound carries a body reference; boundary summaries always carry
-  theirs. `session.semantics.body` and `session.semantics.boundary` read
-  the full immutable body. The page result also names the latest
-  successful boundary.
+  inline bound carries a body reference; context summaries always carry
+  theirs. `session.semantics.body` and `session.semantics.context` read
+  the full immutable body (`session.semantics.context` resolves by either
+  `contextId` or generating `modelCallId`). The page result also names
+  the latest successful model call context (`latestModelCallContextId`).
 - `session.modelCalls.usage` returns stored nullable provider input,
-  output and total token counts by `modelCallId`, separately from the
-  manifest measurement. Missing counts stay null and are never estimated.
+  output, total, reasoning, and cached token counts by `modelCallId`,
+  separately from the context measurement. Missing counts stay null and are
+  never estimated.
 - `session.observe` returns a coherent cursor-bound owner snapshot: the
   ordered pending user and developer input with requested selection patches
   and attachment references, active execution, continuation, rewind and

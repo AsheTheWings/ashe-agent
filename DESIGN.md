@@ -115,10 +115,13 @@ as agent runs start or finish:
    - **Session:** Compact session insights (total/user/agent messages, tool call
      count and most-used tool, estimated tokens) with a breakdown popover and a
      queue toggle when alerts are waiting.
-   - **Checkpoint window:** Estimated context tokens, coverage, separate
-     provider-reported usage, and a segmented semantic distribution bar
-     (including individual developer components) with a `@tanstack/charts`
-     breakdown popover and a queue toggle when alerts are waiting.
+   - **Checkpoint window:** Provider-reported input tokens as the authoritative
+     window size (falling back to the estimator when unavailable), coverage,
+     and a stacked horizontal semantic distribution bar grouped into
+     **Harness** (System message, Tool definitions, Developer messages, Tool
+     results), **Agent output**, and **User messages**, with a popover showing
+     the same stacked horizontal bar, 3-group breakdown, and provider usage
+     table, plus a queue toggle when alerts are waiting.
 
 ### Inspection Views (Session & Checkpoint)
 
@@ -126,9 +129,9 @@ Session and Checkpoint window render full-width, horizontally padded,
 always-expanded blocks (`SYSTEM-MESSAGE`, `DEVELOPER-MESSAGE`, `USER-MESSAGE`,
 `AGENT-MESSAGE`, `AGENT-THOUGHT`, `AGENT-TOOL`) separated by horizontal
 hairline dividers (`divide-y`) without card backgrounds or collapse toggles,
-maximizing scannable width for traces, developer components, diffs, and
-model-input contributions while omitting empty text-less agent carrier entries
-from Session. `DEVELOPER-MESSAGE`, `SYSTEM-MESSAGE`, and human `USER-MESSAGE`
+maximizing scannable width for traces, developer components (including
+foreign-owner transcripts), diffs, cleared tool results, and offered tool
+definitions while omitting empty text-less agent carrier entries. `DEVELOPER-MESSAGE`, `SYSTEM-MESSAGE`, and human `USER-MESSAGE`
 headers omit agent/model identity; peer-agent `USER-MESSAGE` headers display
 the sending agent's identity and session link. `AGENT-TOOL` merges kind, tool
 name, colored outcome badge (`success`, `failed`, `running`), and

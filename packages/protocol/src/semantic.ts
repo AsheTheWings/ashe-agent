@@ -112,7 +112,7 @@ export type AgentContentPart = typeof AgentContentPart.Type
 
 export const SemanticDeveloperComponent = Schema.Struct({
   id: Id,
-  type: Schema.Literals(["seed", "state", "notification", "title", "global"]),
+  type: Schema.Literals(["seed", "state", "notification", "title", "global", "transcript"]),
   heading: Schema.String,
   text: Schema.String,
   source: Schema.optionalKey(Schema.String),
@@ -171,21 +171,21 @@ const entryFields = {
 
 /** Canonical conversation content. Provider replay state is retained separately. */
 export const SemanticEntry = Schema.Union([
-  Schema.Struct({ ...entryFields, kind: Schema.Literal("system"), content: TextContent }),
+  Schema.Struct({ ...entryFields, kind: Schema.Literal("system-message"), content: TextContent }),
   Schema.Struct({
     ...entryFields,
-    kind: Schema.Literal("developer"),
+    kind: Schema.Literal("developer-message"),
     components: Schema.Array(SemanticDeveloperComponent),
   }),
   Schema.Struct({
     ...entryFields,
-    kind: Schema.Literal("user"),
+    kind: Schema.Literal("user-message"),
     sender: Schema.optionalKey(MessageSender),
     parts: Schema.Array(UserContentPart),
   }),
   Schema.Struct({
     ...entryFields,
-    kind: Schema.Literal("agent"),
+    kind: Schema.Literal("agent-message"),
     modelCallId: Schema.NullOr(Id),
     parts: Schema.Array(AgentContentPart),
   }),
@@ -217,18 +217,19 @@ export const SemanticPageEntry = Schema.Struct({
 
 export type SemanticPageEntry = typeof SemanticPageEntry.Type
 
-/** A successful boundary without its potentially large contribution body. */
-export const BoundarySummary = Schema.Struct({
+/** A successful model call context without its potentially large item body. */
+export const ModelCallContextSummary = Schema.Struct({
   id: Id,
   modelCallId: Id,
   turnId: Id,
   windowPosition: Seq,
   committedAt: Timestamp,
-  contributionCount: Count,
+  itemCount: Count,
+  toolCount: Count,
   body: EntryBodyReference,
 })
 
-export type BoundarySummary = typeof BoundarySummary.Type
+export type ModelCallContextSummary = typeof ModelCallContextSummary.Type
 
 /** Stored provider-reported usage for one model call; nulls stay unknown. */
 export const ModelCallUsage = Schema.Struct({
@@ -260,59 +261,92 @@ export const ModelResponse = Schema.Struct({
 
 export type ModelResponse = typeof ModelResponse.Type
 
-/** A retained rendered representation of one contribution. */
-export const RenderedContribution = Schema.Struct({
-  representationId: Id,
-  contentId: Id,
-  mediaType: Schema.String,
-  digest: Schema.String,
-  byteLength: Count,
-  renderer: Schema.String,
+/** One tool offered to the model on a committed call. */
+export const OfferedToolDefinition = Schema.Struct({
+  name: Schema.String,
+  description: Schema.String,
+  parameters: Schema.Unknown,
 })
 
-export type RenderedContribution = typeof RenderedContribution.Type
+export type OfferedToolDefinition = typeof OfferedToolDefinition.Type
 
-/** A successful request's ordered, immutable input contributions. */
-export const InputContribution = Schema.Union([
+/** How one attachment or tool-result media part reached the model on a call. */
+export const ContextMediaProjection = Schema.Union([
   Schema.Struct({
-    position: Count,
-    kind: Schema.Literals(["instruction", "message", "transcript"]),
-    sourceEntryId: Schema.NullOr(Id),
-    sourceEntryIds: Schema.Array(Id),
-    representation: RepresentationRef,
-    transformation: Schema.NullOr(Schema.String),
-    rendered: RenderedContribution,
-  }),
-  Schema.Struct({
-    position: Count,
-    kind: Schema.Literal("tool-definition"),
+    kind: Schema.Literal("representation"),
     name: Schema.String,
-    description: Schema.String,
-    parameters: Schema.Unknown,
-    rendered: RenderedContribution,
+    content: RepresentationRef,
+    byteLength: Count,
+    mediaKind: Schema.Literals(["text", "image", "pdf"]),
   }),
   Schema.Struct({
-    position: Count,
     kind: Schema.Literal("placeholder"),
-    sourceEntryId: Schema.NullOr(Id),
+    name: Schema.String,
     reason: Schema.String,
   }),
 ])
 
-export type InputContribution = typeof InputContribution.Type
+export type ContextMediaProjection = typeof ContextMediaProjection.Type
 
-/** The exact ordered model input boundary retained after successful response commitment. */
-export const ModelInputManifest = Schema.Struct({
+/** One ordered semantic item inside a committed model call's context. */
+export const ModelCallContextItem = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("system-message"),
+    sourceEntryId: Schema.NullOr(Id),
+    contentId: Id,
+    byteLength: Count,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("developer-message"),
+    sourceEntryIds: Schema.Array(Id),
+    transcript: Schema.NullOr(SemanticDeveloperComponent),
+    byteLength: Count,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("user-message"),
+    sourceEntryId: Id,
+    byteLength: Count,
+    attachments: Schema.Array(ContextMediaProjection),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("agent-thought"),
+    sourceEntryId: Schema.NullOr(Id),
+    modelCallId: Schema.NullOr(Id),
+    opaque: Schema.Boolean,
+    byteLength: Count,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("agent-message"),
+    sourceEntryId: Id,
+    modelCallId: Schema.NullOr(Id),
+    byteLength: Count,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("agent-tool"),
+    sourceEntryId: Id,
+    modelCallId: Schema.NullOr(Id),
+    resultCleared: Schema.Boolean,
+    inputByteLength: Count,
+    resultByteLength: Count,
+    resultMedia: Schema.Array(ContextMediaProjection),
+  }),
+])
+
+export type ModelCallContextItem = typeof ModelCallContextItem.Type
+
+/** The ordered semantic context retained for one successful model call. */
+export const ModelCallContext = Schema.Struct({
   id: Id,
   modelCallId: Id,
   turnId: Id,
   windowPosition: Seq,
   committedAt: Timestamp,
-  contributions: Schema.Array(InputContribution),
+  tools: Schema.Array(OfferedToolDefinition),
+  items: Schema.Array(ModelCallContextItem),
   measurement: Schema.suspend(() => MeasurementFields),
 })
 
-export type ModelInputManifest = typeof ModelInputManifest.Type
+export type ModelCallContext = typeof ModelCallContext.Type
 
 export const MeasurementBasis = Schema.Literals([
   "ashe-agent-text-v1",
@@ -401,12 +435,12 @@ export const Measurement = MeasurementFields.check(
 
 export type Measurement = typeof Measurement.Type
 
-/** Canonical semantic history and every successful request boundary retained for a session. */
+/** Canonical semantic history and every successful model call context retained for a session. */
 export const SemanticHistory = Schema.Struct({
   sessionId: Id,
   turns: Schema.Array(Turn),
   entries: Schema.Array(SemanticEntry),
-  boundaries: Schema.Array(ModelInputManifest),
+  contexts: Schema.Array(ModelCallContext),
 })
 
 export type SemanticHistory = typeof SemanticHistory.Type
@@ -416,6 +450,8 @@ export const ProviderUsage = Schema.Struct({
   inputTokens: Schema.NullOr(Count),
   outputTokens: Schema.NullOr(Count),
   totalTokens: Schema.NullOr(Count),
+  reasoningTokens: Schema.NullOr(Count),
+  cachedTokens: Schema.NullOr(Count),
 })
 
 export type ProviderUsage = typeof ProviderUsage.Type
