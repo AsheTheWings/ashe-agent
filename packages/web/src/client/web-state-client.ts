@@ -245,7 +245,7 @@ export class WebStateClient {
     const token = this.token()
     if (token === null) return
     const url = new URL(this.endpoint)
-    url.protocol = url.protocol === "wss:" ? "https:" : "http:"
+    url.protocol = url.protocol === "wss:" || url.protocol === "https:" ? "https:" : "http:"
     url.pathname = "/v1/web/diagnostics"
     url.search = ""
     url.hash = ""
