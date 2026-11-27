@@ -6,9 +6,14 @@ import { ClientProvider } from "../src/app/client-context.tsx"
 import { SessionClient } from "../src/session/client.ts"
 import {
   ActivityPreview,
+  applyLocalReadCommand,
   Chat,
   Checkpoint,
+  CheckpointInsightsPanel,
   CheckpointStatsBar,
+  evaluateAutoClearRead,
+  hasResumableStoppedTurn,
+  SessionInsightsPanel,
   SessionNotebook,
   SessionNotifications,
   SessionStatsBar,
@@ -18,6 +23,7 @@ import { WorkspaceHeader, type SessionNotificationEntry } from "../src/client/He
 import { formatPayloadText, resolveScrollPaneHeight, TOOL_PANE_BASE_HEIGHT } from "../src/client/json-view.tsx"
 import type { Draft } from "../src/client/drafts.ts"
 import { computeCheckpointStats, computeSessionStats, formatTokens } from "../src/client/stats.ts"
+import { formatAgentLabel, formatFriendlyRelativeTime, formatRelativeTime } from "../src/client/types.ts"
 import type { SessionView } from "../src/session/projection.ts"
 
 const fakeClient = () =>
@@ -276,11 +282,19 @@ describe("owned three-view rendering", () => {
     expect(html).toContain("Loading content")
     expect(html.indexOf("peer details stay in Session")).toBeLessThan(html.indexOf("hello there"))
 
-    // DEVELOPER-MESSAGE and human USER-MESSAGE omit agent/model identity.
+    // DEVELOPER-MESSAGE and human USER-MESSAGE omit agent/model identity; agent blocks label "untitled" as "Default agent".
+    expect(html).toContain("Default agent")
+    expect(html).not.toContain(">untitled<")
     const devOnly = render(createElement(SessionNotebook, { entries: [sampleEntries[0]!] }))
     expect(devOnly).not.toContain("untitled")
+    expect(devOnly).not.toContain("Default agent")
     const humanUserOnly = render(createElement(SessionNotebook, { entries: [sampleEntries[1]!] }))
     expect(humanUserOnly).not.toContain("untitled")
+    expect(humanUserOnly).not.toContain("Default agent")
+
+    const insightsOneThought = render(createElement(SessionInsightsPanel, { entries: [...sampleEntries, thoughtEntry] }))
+    expect(insightsOneThought).toContain("1 thought")
+    expect(insightsOneThought).not.toContain("1 thoughts")
 
     // Empty agent entries (tool/thought-only model calls with no text) are omitted from Session and stats.
     const emptyAgentEntry: SemanticPageEntry = {
@@ -663,5 +677,212 @@ describe("owned three-view rendering", () => {
     expect(baseRouteHtml).toContain('data-variant="centered"')
     expect(baseRouteHtml).not.toContain("Applies on send")
     expect(baseRouteHtml).toContain(">Send<")
+  })
+
+  test("gates resumable-turn notices to unrecovered abnormal stops and formats sub-minute times and default agent labels cleanly", () => {
+    const now = 1_700_000_000_000
+    expect(formatFriendlyRelativeTime(now - 55_000, now)).toBe("Just now")
+    expect(formatRelativeTime(now - 55_000, now)).toBe("Just now")
+    expect(formatFriendlyRelativeTime(now - 60_000, now)).toBe("1 min ago")
+    expect(formatRelativeTime(now - 60_000, now)).toBe("1m ago")
+
+    expect(formatAgentLabel("untitled")).toBe("Default agent")
+    expect(formatAgentLabel(null)).toBe("Default agent")
+    expect(formatAgentLabel("reviewer")).toBe("reviewer")
+
+    const finishedView: SessionView = {
+      ...view,
+      runId: null,
+      items: [
+        view.items[0]!,
+        { kind: "assistant", id: "r1:1", seq: 2, runId: "r1", status: "finished", error: null, parts: [] },
+      ],
+    }
+    expect(hasResumableStoppedTurn(undefined, true)).toBe(false)
+    expect(hasResumableStoppedTurn({ ...finishedView, items: [] }, true)).toBe(false)
+    expect(hasResumableStoppedTurn(finishedView, true)).toBe(false)
+
+    const failedView: SessionView = {
+      ...finishedView,
+      items: [
+        view.items[0]!,
+        { kind: "assistant", id: "r1:1", seq: 2, runId: "r1", status: "failed", error: "provider error", parts: [] },
+      ],
+    }
+    expect(hasResumableStoppedTurn(failedView, true)).toBe(true)
+    expect(hasResumableStoppedTurn(failedView, false)).toBe(false)
+
+    const recoveredView: SessionView = {
+      ...failedView,
+      items: [
+        ...failedView.items,
+        { kind: "assistant", id: "r2:1", seq: 3, runId: "r2", status: "finished", error: null, parts: [] },
+      ],
+    }
+    expect(hasResumableStoppedTurn(recoveredView, true)).toBe(false)
+
+    const unansweredUserView: SessionView = {
+      ...finishedView,
+      items: [view.items[0]!],
+    }
+    expect(hasResumableStoppedTurn(unansweredUserView, true)).toBe(true)
+
+    const insightsPanelHtml = render(
+      createElement(CheckpointInsightsPanel, {
+        context: {
+          id: "ctx1",
+          modelCallId: "m1",
+          turnId: "r1",
+          windowPosition: 1,
+          committedAt: 1,
+          tools: [{ name: "file_patch", description: "Patch", parameters: { type: "object" } }],
+          items: [{ kind: "user-message", sourceEntryId: "e2", byteLength: 20, attachments: [] }],
+          measurement: { method: "ashe-agent-estimator", methodVersion: 1, purpose: "analysis", coverage: "complete", knownSubtotal: 50, contributions: [], unavailable: [] },
+        },
+        entries: sampleEntries,
+        usage: [],
+      }),
+    )
+    expect(insightsPanelHtml).toContain("Tool definitions")
+    expect(insightsPanelHtml).toContain(">1 offered tool<")
+    expect(insightsPanelHtml).toContain("~4 chars/token")
+  })
+
+  test("auto-clears unread on visible chat/session views while preserving local and cross-tab Mark unread", () => {
+    // Opening an unread session in chat auto-clears it.
+    const opened = evaluateAutoClearRead({
+      activeSessionId: "s1",
+      currentView: "chat",
+      webLive: true,
+      pageVisible: true,
+      sessionState: { unread: true, readGeneration: 2 },
+      cursor: null,
+    })
+    expect(opened.shouldClearRead).toBe(true)
+    expect(opened.nextCursor).toEqual({ sessionId: "s1", generation: 2, suppressed: false })
+
+    // Turn completion while session is active keeps readGeneration unchanged and auto-clears in session view too.
+    const afterTurn = evaluateAutoClearRead({
+      activeSessionId: "s1",
+      currentView: "session",
+      webLive: true,
+      pageVisible: true,
+      sessionState: { unread: true, readGeneration: 2 },
+      cursor: opened.nextCursor,
+    })
+    expect(afterTurn.shouldClearRead).toBe(true)
+
+    // Checkpoint view and hidden tabs do not auto-clear unread.
+    expect(
+      evaluateAutoClearRead({
+        activeSessionId: "s1",
+        currentView: "checkpoint",
+        webLive: true,
+        pageVisible: true,
+        sessionState: { unread: true, readGeneration: 2 },
+        cursor: opened.nextCursor,
+      }).shouldClearRead,
+    ).toBe(false)
+    expect(
+      evaluateAutoClearRead({
+        activeSessionId: "s1",
+        currentView: "chat",
+        webLive: true,
+        pageVisible: false,
+        sessionState: { unread: true, readGeneration: 2 },
+        cursor: opened.nextCursor,
+      }).shouldClearRead,
+    ).toBe(false)
+    expect(
+      evaluateAutoClearRead({
+        activeSessionId: "s1",
+        currentView: "chat",
+        webLive: false,
+        pageVisible: true,
+        sessionState: { unread: true, readGeneration: 2 },
+        cursor: opened.nextCursor,
+      }).shouldClearRead,
+    ).toBe(false)
+
+    // Cross-tab Mark unread advances readGeneration while the session is already active and suppresses auto-clear.
+    const crossTabUnread = evaluateAutoClearRead({
+      activeSessionId: "s1",
+      currentView: "chat",
+      webLive: true,
+      pageVisible: true,
+      sessionState: { unread: true, readGeneration: 3 },
+      cursor: opened.nextCursor,
+    })
+    expect(crossTabUnread.shouldClearRead).toBe(false)
+    expect(crossTabUnread.nextCursor).toEqual({ sessionId: "s1", generation: 3, suppressed: true })
+
+    // Cross-tab Mark unread received while hidden stays suppressed once the tab becomes visible again.
+    const hiddenCrossTab = evaluateAutoClearRead({
+      activeSessionId: "s1",
+      currentView: "chat",
+      webLive: true,
+      pageVisible: false,
+      sessionState: { unread: true, readGeneration: 3 },
+      cursor: opened.nextCursor,
+    })
+    expect(hiddenCrossTab.nextCursor?.suppressed).toBe(true)
+    expect(
+      evaluateAutoClearRead({
+        activeSessionId: "s1",
+        currentView: "chat",
+        webLive: true,
+        pageVisible: true,
+        sessionState: { unread: true, readGeneration: 3 },
+        cursor: hiddenCrossTab.nextCursor,
+      }).shouldClearRead,
+    ).toBe(false)
+
+    // Explicit Mark read from another tab clears suppression so subsequent turn completions auto-clear again.
+    const clearedElsewhere = evaluateAutoClearRead({
+      activeSessionId: "s1",
+      currentView: "chat",
+      webLive: true,
+      pageVisible: true,
+      sessionState: { unread: false, readGeneration: 3 },
+      cursor: crossTabUnread.nextCursor,
+    })
+    expect(clearedElsewhere.shouldClearRead).toBe(false)
+    expect(clearedElsewhere.nextCursor).toEqual({ sessionId: "s1", generation: 3, suppressed: false })
+    expect(
+      evaluateAutoClearRead({
+        activeSessionId: "s1",
+        currentView: "chat",
+        webLive: true,
+        pageVisible: true,
+        sessionState: { unread: true, readGeneration: 3 },
+        cursor: clearedElsewhere.nextCursor,
+      }).shouldClearRead,
+    ).toBe(true)
+
+    // Reopening or sending resets cursor to null, which re-enables auto-clear at the current readGeneration.
+    const reopened = evaluateAutoClearRead({
+      activeSessionId: "s1",
+      currentView: "chat",
+      webLive: true,
+      pageVisible: true,
+      sessionState: { unread: true, readGeneration: 3 },
+      cursor: null,
+    })
+    expect(reopened.shouldClearRead).toBe(true)
+
+    // Marking a non-active sidebar session unread leaves the active session's suppressed cursor untouched.
+    const activeSuppressed = { sessionId: "s1", generation: 3, suppressed: true } as const
+    expect(
+      applyLocalReadCommand(activeSuppressed, "s1", { sessionId: "s2", unread: true, generation: 5 }, 5),
+    ).toEqual(activeSuppressed)
+    expect(
+      applyLocalReadCommand(activeSuppressed, "s1", { sessionId: "s2", unread: false, generation: 5 }, 5),
+    ).toEqual(activeSuppressed)
+    expect(
+      applyLocalReadCommand(opened.nextCursor, "s1", { sessionId: "s1", unread: true, generation: 2 }, 2),
+    ).toEqual({ sessionId: "s1", generation: 2, suppressed: true })
+    expect(
+      applyLocalReadCommand(activeSuppressed, "s1", { sessionId: "s1", unread: false, generation: 3 }, 3),
+    ).toBeNull()
   })
 })

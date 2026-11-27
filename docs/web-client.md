@@ -152,7 +152,7 @@ configuration into tabs:
   empty, and a missing selected theme falls back to stock.
 - **Shortcuts & Input:** View-cycle modifier (`Ctrl+I` or `Alt+I`) and
   the type-to-compose switch.
-- **Session & Permissions:** Active session metadata (copyable session
+- **Session:** Active session metadata (copyable session
   ID, applied agent and model, workspace path, fork provenance) and
   title-scoped permission grants, defaulting to the current agent and
   clearing all grants for the selected agent after confirmation.
@@ -166,8 +166,9 @@ agent profile, model, reasoning effort, and delivery mode while views
 change. Send is always Send; while a turn runs, Stop occupies the right-hand action
 slot targeting the observed turn identity when the draft is empty, Send
 replaces it once a submission is ready, and a Queue toggle selects Queue or
-Steer for the next submission. When owner observation says resume is eligible, a
-Continue entry appears in `SessionNotifications`.
+Steer for the next submission. When owner observation says resume is eligible
+and the session has an unrecovered stopped turn, a Continue entry appears in
+`SessionNotifications`.
 
 Requests for agent, model, or effort stay local until Send or a
 confirmed rewind. An omitted field inherits the applied selection; an
@@ -213,10 +214,10 @@ resolves that browser's question as replied-by-message after input
 acceptance; Queue leaves it open. Plain message text never approves a
 permission request.
 
-Session permission grants are managed under **Settings → Session &
-Permissions**, which lists grants for the selected stored agent and
-clears all grants for that agent after confirmation. It neither edits
-permission rules nor revokes an individual grant.
+Session permission grants are managed under **Settings → Session**, which
+lists grants for the selected stored agent and clears all grants for that
+agent after confirmation. It neither edits permission rules nor revokes an
+individual grant.
 
 ## Attention and inbox
 

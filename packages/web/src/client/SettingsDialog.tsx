@@ -15,7 +15,7 @@ import { Switch } from "@/components/ui/switch.tsx"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs.tsx"
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard.ts"
 import type { SessionView } from "@/session/projection.ts"
-import type { ShortcutPreferences } from "./types.ts"
+import { formatAgentLabel, type ShortcutPreferences } from "./types.ts"
 
 export type SettingsTab = "appearance" | "shortcuts" | "session"
 
@@ -82,7 +82,7 @@ export const SettingsDialog = ({
     setConfirmClear(false)
     void client.clearGrants(activeSessionId, grantTitle).then((cleared) => {
       setGrants((current) => current.filter((grant) => grant.agentTitle !== grantTitle))
-      onNotify(`Cleared ${cleared} grant(s) for ${grantTitle}`)
+      onNotify(`Cleared ${cleared} grant(s) for ${formatAgentLabel(grantTitle)}`)
     }).catch(() => onNotify("Grants could not be cleared"))
   }
 
@@ -107,7 +107,7 @@ export const SettingsDialog = ({
               </TabsTrigger>
               <TabsTrigger value="session" className="flex-none px-3">
                 <ShieldCheckIcon className="size-3.5" />
-                Session &amp; Permissions
+                Session
               </TabsTrigger>
             </TabsList>
 
@@ -192,7 +192,7 @@ export const SettingsDialog = ({
                     <Separator />
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-muted-foreground">Applied agent</span>
-                      <Badge variant="outline" className="font-mono text-[11px]">{view?.agent ?? session?.selection.agentTitle ?? "untitled"}</Badge>
+                      <Badge variant="outline" className="font-mono text-[11px]">{formatAgentLabel(view?.agent ?? session?.selection.agentTitle)}</Badge>
                     </div>
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-muted-foreground">Applied model</span>
@@ -221,11 +221,13 @@ export const SettingsDialog = ({
                       <div className="flex items-center gap-2">
                         <Select value={grantTitle ?? ""} onValueChange={(value) => setGrantTitle(value)}>
                           <SelectTrigger size="sm" className="w-36 text-xs">
-                            <SelectValue placeholder="Agent" />
+                            <SelectValue placeholder="Agent">
+                              {grantTitle !== null ? formatAgentLabel(grantTitle) : "Agent"}
+                            </SelectValue>
                           </SelectTrigger>
                           <SelectContent>
                             {grantTitles.map((title) => (
-                              <SelectItem key={title} value={title}>{title}</SelectItem>
+                              <SelectItem key={title} value={title}>{formatAgentLabel(title)}</SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
@@ -244,7 +246,7 @@ export const SettingsDialog = ({
 
                     {filteredGrants.length === 0 ? (
                       <p className="text-muted-foreground py-3 text-center text-xs">
-                        No persisted grants for {grantTitle ?? "this agent"}.
+                        No persisted grants for {grantTitle !== null ? formatAgentLabel(grantTitle) : "this agent"}.
                       </p>
                     ) : (
                       <ul className="divide-y rounded-md border">
@@ -269,7 +271,7 @@ export const SettingsDialog = ({
           <AlertDialogHeader>
             <AlertDialogTitle>Clear permission grants?</AlertDialogTitle>
             <AlertDialogDescription>
-              This removes every persisted “Always allow” approval for “{grantTitle}”. Future tool calls will prompt for permission again.
+              This removes every persisted “Always allow” approval for “{formatAgentLabel(grantTitle)}”. Future tool calls will prompt for permission again.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

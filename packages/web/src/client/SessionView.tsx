@@ -27,7 +27,7 @@ import {
 } from "./json-view.tsx"
 import { MarkdownText, PlainText } from "./markdown.tsx"
 import { estimateEntryTokens, formatTokens, formatTokensTooltip, hasVisibleSemanticContent } from "./stats.ts"
-import { decodeBase64, formatBytes, formatFullTime, formatHumanDateTime } from "./types.ts"
+import { decodeBase64, formatAgentLabel, formatBytes, formatFullTime, formatHumanDateTime } from "./types.ts"
 
 type SemanticToolEntry = Extract<SemanticEntry, { kind: "agent-tool" }>
 
@@ -187,7 +187,7 @@ const AgentIdentityMeta = ({
         <span aria-hidden="true">·</span>
       </>
     )}
-    <span className="truncate">{agentTitle}</span>
+    <span className="truncate">{formatAgentLabel(agentTitle)}</span>
     {modelId !== null && (
       <>
         <span aria-hidden="true">·</span>
