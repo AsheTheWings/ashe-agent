@@ -162,4 +162,25 @@ describe("web state browser protocol", () => {
       restore()
     }
   })
+
+  test("posts browser diagnostics over HTTPS when the endpoint uses https: or wss:", async () => {
+    install()
+    const originalFetch = globalThis.fetch
+    const urls: string[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input))
+      return new Response(null, { status: 202 })
+    }) as typeof fetch
+    try {
+      for (const endpoint of ["https://app.test/v1/web-state", "wss://app.test/v1/web-state"]) {
+        const client = new WebStateClient(endpoint, () => ({ token: "access", expiresAt: Date.now() + 600_000 }), async () => {}, 100)
+        client.reportDiagnostic("web.interaction", { "web.operation": "read.set", "web.outcome": "confirmed" })
+      }
+      await waitFor(() => urls.length === 2)
+      expect(urls).toEqual(["https://app.test/v1/web/diagnostics", "https://app.test/v1/web/diagnostics"])
+    } finally {
+      globalThis.fetch = originalFetch
+      restore()
+    }
+  })
 })
