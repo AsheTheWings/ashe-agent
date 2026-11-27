@@ -151,11 +151,15 @@ export const formatCompactTime = (value: number, now = Date.now()): string => {
   return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
 }
 
+/** Display label for an agent title, rendering the unnamed default profile as `Default agent`. */
+export const formatAgentLabel = (title: string | null | undefined): string =>
+  !title || title === "untitled" ? "Default agent" : title
+
 /** Friendly relative time awareness hint for Chat messages (e.g. `Just now`, `5 mins ago`, `2 hours ago`, `Yesterday`). */
 export const formatFriendlyRelativeTime = (value: number, now = Date.now()): string => {
   const diff = Math.max(0, now - value)
   const seconds = Math.floor(diff / 1000)
-  if (seconds < 45) return "Just now"
+  if (seconds < 60) return "Just now"
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return minutes === 1 ? "1 min ago" : `${minutes} mins ago`
   const hours = Math.floor(minutes / 60)
@@ -169,7 +173,7 @@ export const formatFriendlyRelativeTime = (value: number, now = Date.now()): str
 export const formatRelativeTime = (value: number, now = Date.now()): string => {
   const diff = Math.max(0, now - value)
   const seconds = Math.floor(diff / 1000)
-  if (seconds < 45) return "Just now"
+  if (seconds < 60) return "Just now"
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return `${minutes}m ago`
   const hours = Math.floor(minutes / 60)

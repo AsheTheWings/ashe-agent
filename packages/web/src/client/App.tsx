@@ -82,6 +82,114 @@ const escapeAttr = (value: string): string =>
 const isNonEmptyDraft = (draft: Draft): boolean =>
   draft.text.trim() !== "" || draft.attachments.length > 0 || Object.keys(draft.selection).length > 0
 
+/**
+ * Returns true only when the harness reports `canResume` and the session actually ended abnormally
+ * (an unrecovered failed/cancelled/interrupted assistant turn or an unanswered user turn).
+ */
+export const hasResumableStoppedTurn = (
+  candidateView: SessionView | undefined,
+  canResume: boolean,
+): boolean => {
+  if (!canResume || candidateView === undefined || candidateView.items.length === 0) return false
+  const failure = [...candidateView.items]
+    .reverse()
+    .find(
+      (item): item is AssistantItem =>
+        item.kind === "assistant" &&
+        (item.error !== null || item.status === "failed" || item.status === "cancelled" || item.status === "interrupted"),
+    )
+  if (failure !== undefined) {
+    const isRecovered = candidateView.items.some(
+      (item) => item.kind === "assistant" && item.status === "finished" && item.seq > failure.seq,
+    )
+    if (!isRecovered) return true
+  }
+  const lastTurnItem = [...candidateView.items]
+    .reverse()
+    .find((item) => item.kind === "user" || item.kind === "assistant")
+  return lastTurnItem?.kind === "user"
+}
+
+export type AutoReadCursor = {
+  readonly sessionId: string
+  readonly generation: number
+  readonly suppressed: boolean
+}
+
+/**
+ * Decides whether the active session should auto-clear `unread`, tracking `readGeneration`
+ * so explicit `Mark unread` from the local tab or another tab/device is never overwritten.
+ */
+export const evaluateAutoClearRead = ({
+  activeSessionId,
+  currentView,
+  webLive,
+  pageVisible,
+  sessionState,
+  cursor,
+}: {
+  readonly activeSessionId: string | null
+  readonly currentView: ViewName
+  readonly webLive: boolean
+  readonly pageVisible: boolean
+  readonly sessionState: { readonly unread: boolean; readonly readGeneration: number } | undefined
+  readonly cursor: AutoReadCursor | null
+}): {
+  readonly nextCursor: AutoReadCursor | null
+  readonly shouldClearRead: boolean
+} => {
+  if (activeSessionId === null) {
+    return { nextCursor: null, shouldClearRead: false }
+  }
+  if (sessionState === undefined) {
+    const kept = cursor !== null && cursor.sessionId === activeSessionId ? cursor : null
+    return { nextCursor: kept, shouldClearRead: false }
+  }
+  const current =
+    cursor !== null && cursor.sessionId === activeSessionId
+      ? cursor
+      : { sessionId: activeSessionId, generation: sessionState.readGeneration, suppressed: false }
+  let nextCursor = current
+  if (sessionState.readGeneration > current.generation) {
+    nextCursor = {
+      sessionId: activeSessionId,
+      generation: sessionState.readGeneration,
+      suppressed: sessionState.unread,
+    }
+  } else if (!sessionState.unread && current.suppressed) {
+    nextCursor = {
+      sessionId: activeSessionId,
+      generation: sessionState.readGeneration,
+      suppressed: false,
+    }
+  }
+  const shouldClearRead =
+    webLive &&
+    pageVisible &&
+    currentView !== "checkpoint" &&
+    sessionState.unread &&
+    !nextCursor.suppressed
+  return { nextCursor, shouldClearRead }
+}
+
+/** Updates the active session's auto-read cursor for a local `read.set` command without disturbing other sessions. */
+export const applyLocalReadCommand = (
+  cursor: AutoReadCursor | null,
+  activeSessionId: string | null,
+  command: { readonly sessionId: string; readonly unread: boolean; readonly generation?: number },
+  knownGeneration: number,
+): AutoReadCursor | null => {
+  if (activeSessionId === null || command.sessionId !== activeSessionId) return cursor
+  if (command.unread) {
+    return {
+      sessionId: command.sessionId,
+      generation: command.generation ?? knownGeneration,
+      suppressed: true,
+    }
+  }
+  return null
+}
+
 const createStarterDraft = (): Draft => {
   let selection: Draft["selection"] = {}
   try {
@@ -199,7 +307,20 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("appearance")
   const [shortcuts, setShortcuts] = useState<ShortcutPreferences>(loadShortcutPreferences)
-  const [readEligible, setReadEligible] = useState<string | null>(null)
+  const autoReadCursorRef = useRef<AutoReadCursor | null>(null)
+  const [autoReadResetTick, setAutoReadResetTick] = useState(0)
+  const inFlightReadRef = useRef<string | null>(null)
+  const [pageVisible, setPageVisible] = useState<boolean>(() =>
+    typeof document === "undefined" ? true : document.visibilityState === "visible",
+  )
+
+  const clearAutoReadSuppression = useCallback((sessionId?: string) => {
+    if (sessionId === undefined || autoReadCursorRef.current?.sessionId === sessionId) {
+      autoReadCursorRef.current = null
+      inFlightReadRef.current = null
+      setAutoReadResetTick((tick) => tick + 1)
+    }
+  }, [])
   const [rewindItem, setRewindItem] = useState<UserItem | null>(null)
   const rewindOperation = useRef(randomId())
   const [checkpoint, setCheckpoint] = useState<{
@@ -403,9 +524,34 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
   }, [active, client, semantic])
 
   useEffect(() => {
-    if (active === null || readEligible !== active || web.status !== "live" || currentView === "checkpoint") return
-    const state = web.sessions[active]
-    if (state === undefined || !state.unread) return
+    if (typeof document === "undefined") return
+    const onVisibility = () => setPageVisible(document.visibilityState === "visible")
+    document.addEventListener("visibilitychange", onVisibility)
+    return () => document.removeEventListener("visibilitychange", onVisibility)
+  }, [])
+
+  useEffect(() => {
+    inFlightReadRef.current = null
+  }, [active])
+
+  useEffect(() => {
+    const state = active === null ? undefined : web.sessions[active]
+    const { nextCursor, shouldClearRead } = evaluateAutoClearRead({
+      activeSessionId: active,
+      currentView,
+      webLive: web.status === "live",
+      pageVisible,
+      sessionState: state,
+      cursor: autoReadCursorRef.current,
+    })
+    autoReadCursorRef.current = nextCursor
+    if (!shouldClearRead || active === null || state === undefined) {
+      if (state === undefined || !state.unread) inFlightReadRef.current = null
+      return
+    }
+    const readKey = `${active}:${state.readGeneration}:${state.revision}`
+    if (inFlightReadRef.current === readKey) return
+    inFlightReadRef.current = readKey
     void webClient
       .command({
         kind: "read.set",
@@ -414,9 +560,10 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
         unread: false,
         generation: state.readGeneration,
       })
-      .catch(() => {})
-    setReadEligible(null)
-  }, [active, currentView, readEligible, web, webClient])
+      .catch(() => {
+        if (inFlightReadRef.current === readKey) inFlightReadRef.current = null
+      })
+  }, [active, autoReadResetTick, currentView, pageVisible, web.sessions, web.status, webClient])
 
   useLayoutEffect(() => {
     const key = active === null ? null : `${active}:${currentView}`
@@ -666,15 +813,14 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
   const openSession = (sessionId: string, attention: boolean) => {
     setMobileSidebarOpen(false)
     if (!sidebarPinned) setSidebarHoverOpen(false)
+    clearAutoReadSuppression(sessionId)
     void client.open(sessionId).catch(() => {})
     if (attention) {
       setSessionView(sessionId, "chat")
-      setReadEligible(sessionId)
       requestAnimationFrame(() => document.querySelector("[data-attention]")?.scrollIntoView({ block: "center" }))
     } else {
       const next = views[sessionId] ?? savedViews()[sessionId] ?? "chat"
       setViews((current) => ({ ...current, [sessionId]: next }))
-      if (next !== "checkpoint") setReadEligible(sessionId)
     }
   }
 
@@ -682,11 +828,11 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
     async (sessionId: string) => {
       setMobileSidebarOpen(false)
       if (!sidebarPinned) setSidebarHoverOpen(false)
+      clearAutoReadSuppression(sessionId)
       try {
         await client.open(sessionId)
         const next = savedViews()[sessionId] ?? "chat"
         setViews((current) => (current[sessionId] === undefined ? { ...current, [sessionId]: next } : current))
-        if (next !== "checkpoint") setReadEligible(sessionId)
       } catch (failure) {
         suppressPushRef.current = true
         client.close()
@@ -696,7 +842,7 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
         toast.error(failure instanceof Error ? failure.message : "Session not found")
       }
     },
-    [client, sidebarPinned],
+    [clearAutoReadSuppression, client, sidebarPinned],
   )
 
   // Hydrate direct `/sessions/<id>` URL navigation once the harness session list is ready.
@@ -754,6 +900,21 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
   }, [active])
 
   const onCommand = (command: Parameters<WebStateClient["command"]>[0]) => {
+    if (command.kind === "read.set") {
+      if (command.sessionId === active) {
+        if (command.unread) {
+          autoReadCursorRef.current = applyLocalReadCommand(
+            autoReadCursorRef.current,
+            active,
+            command,
+            web.sessions[command.sessionId]?.readGeneration ?? 0,
+          )
+          inFlightReadRef.current = null
+        } else {
+          clearAutoReadSuppression(command.sessionId)
+        }
+      }
+    }
     void webClient
       .command(command)
       .then((receipt) => {
@@ -876,7 +1037,7 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
       })
     }
 
-    if (active !== null && observation?.execution.canResume === true) {
+    if (active !== null && hasResumableStoppedTurn(view, observation?.execution.canResume === true)) {
       list.push({
         id: "resume-turn",
         kind: "notice",
@@ -1070,7 +1231,10 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
       const candidateObs = observations[candidate.id]
       const candidateNeedsHuman =
         web.sessions[candidate.id]?.needsHuman === true || (candidateObs?.attention.length ?? 0) > 0
-      const candidateResumable = candidateObs?.execution.canResume === true
+      const candidateResumable = hasResumableStoppedTurn(
+        allViews[candidate.id],
+        candidateObs?.execution.canResume === true,
+      )
       if (!candidateNeedsHuman && !candidateResumable) continue
       const candidateTitle = sessionDisplayTitle(candidate, allViews[candidate.id], models, candidate.id)
       const id = `cross-session:${candidate.id}:${candidateNeedsHuman ? "attention" : "resume"}`
@@ -1362,7 +1526,7 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
                 onCreateSession={async (selection) => {
                   const created = await client.createSession(selection)
                   setSessionView(created.id, "chat")
-                  setReadEligible(created.id)
+                  clearAutoReadSuppression()
                   pendingPinRef.current = true
                   return created.id
                 }}
@@ -1503,7 +1667,7 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
                             .fork(item.runId!)
                             .then((fork) => {
                               setSessionView(fork.id, "chat")
-                              setReadEligible(fork.id)
+                              clearAutoReadSuppression()
                             })
                             .catch((failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Fork failed"))
                         }}
@@ -1553,6 +1717,7 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
                       pending={view?.pending ?? []}
                       onNotificationsChange={setComposerNotifications}
                       onMessageSent={() => {
+                        clearAutoReadSuppression(active)
                         pendingPinRef.current = true
                         if (currentView !== "chat") setSessionView(active, "chat")
                       }}
@@ -1638,25 +1803,30 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
                 >
                   <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b px-3">
                     <h3 className="truncate text-sm font-medium text-foreground">{secondaryWindow.title}</h3>
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-sm"
-                            aria-label="Close secondary window"
-                            aria-expanded={true}
-                            aria-keyshortcuts="Control+."
-                            data-slot="secondary-window-toggle"
-                            onClick={() => setSecondaryWindowOpen(false)}
-                          />
-                        }
-                      >
-                        <SecondaryWindowIcon className="size-4" />
-                      </TooltipTrigger>
-                      <TooltipContent>Close secondary window (Ctrl+.)</TooltipContent>
-                    </Tooltip>
+                    <div
+                      data-slot="secondary-window-toggle-slot"
+                      className="flex h-7 w-10 shrink-0 items-center justify-center"
+                    >
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label="Close secondary window"
+                              aria-expanded={true}
+                              aria-keyshortcuts="Control+."
+                              data-slot="secondary-window-toggle"
+                              onClick={() => setSecondaryWindowOpen(false)}
+                            />
+                          }
+                        >
+                          <SecondaryWindowIcon className="size-4" />
+                        </TooltipTrigger>
+                        <TooltipContent>Close secondary window (Ctrl+.)</TooltipContent>
+                      </Tooltip>
+                    </div>
                   </div>
                   <div className="scrollbar-compact min-h-0 flex-1 overflow-y-auto p-4">
                     {secondaryWindow.content}
@@ -1675,16 +1845,21 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
                     <>
                       <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b px-3">
                         <h3 className="truncate text-sm font-medium text-foreground">{secondaryWindow.title}</h3>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label="Close secondary window"
-                          aria-expanded={true}
-                          onClick={() => setSecondaryWindowOpen(false)}
+                        <div
+                          data-slot="secondary-window-toggle-slot"
+                          className="flex h-7 w-10 shrink-0 items-center justify-center"
                         >
-                          <SecondaryWindowIcon className="size-4" />
-                        </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label="Close secondary window"
+                            aria-expanded={true}
+                            onClick={() => setSecondaryWindowOpen(false)}
+                          >
+                            <SecondaryWindowIcon className="size-4" />
+                          </Button>
+                        </div>
                       </div>
                       <div className="scrollbar-compact min-h-0 flex-1 overflow-y-auto p-4">
                         {secondaryWindow.content}

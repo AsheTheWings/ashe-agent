@@ -6,6 +6,7 @@ import {
   BrainIcon,
   CheckCircle2Icon,
   CheckIcon,
+  ChevronDownIcon,
   CircleDotIcon,
   InfoIcon,
   LayersIcon,
@@ -26,11 +27,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu.tsx"
+import { Kbd } from "@/components/ui/kbd.tsx"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx"
 import type { AssistantItem, ReasoningPart, SessionView, ToolPart } from "@/session/projection.ts"
 import { SecondaryWindowIcon, SidebarPaneIcon } from "./icons.tsx"
 import { computeCheckpointStats, computeSessionStats, formatTokens, formatTokensTooltip, type CheckpointSegment } from "./stats.ts"
-import { VIEWS, formatCompactTime, formatFullTime, type ShortcutPreferences, type ViewName } from "./types.ts"
+import { VIEWS, formatCompactTime, formatHumanDateTime, type ShortcutPreferences, type ViewName } from "./types.ts"
 
 export type SessionNotificationEntry =
   | {
@@ -453,7 +455,7 @@ export const SessionInsightsPanel = ({
           {stats.totalMessages} {stats.totalMessages === 1 ? "message" : "messages"} ({stats.userMessages} user · {stats.agentMessages} agent)
         </span>
         <span className="text-muted-foreground tabular-nums text-[11px]">
-          {formatTokens(stats.estimatedTokens, true)} · {stats.thoughts} thoughts
+          {formatTokens(stats.estimatedTokens, true)} · {stats.thoughts} {stats.thoughts === 1 ? "thought" : "thoughts"}
         </span>
       </div>
 
@@ -518,27 +520,27 @@ const SessionStatsContent = ({
       <span className="text-foreground flex shrink-0 items-center gap-1.5 font-medium tabular-nums">
         <MessageSquareIcon className="text-muted-foreground size-3.5 shrink-0" />
         {stats.totalMessages} {stats.totalMessages === 1 ? "msg" : "msgs"}
-        <span className="text-muted-foreground hidden font-normal lg:inline">
+        <span className="text-muted-foreground hidden font-normal @[380px]/view-panel:inline">
           ({stats.userMessages} user · {stats.agentMessages} agent)
         </span>
       </span>
 
       <span className="bg-border h-3.5 w-px shrink-0" aria-hidden="true" />
 
-      <span className="flex min-w-0 items-center gap-1.5 truncate tabular-nums">
+      <span className="flex shrink-0 items-center gap-1.5 tabular-nums">
         <WrenchIcon className="text-muted-foreground size-3.5 shrink-0" />
-        <span className="font-medium text-foreground shrink-0">
+        <span className="font-medium text-foreground">
           {stats.toolCalls} {stats.toolCalls === 1 ? "tool" : "tools"}
         </span>
-        {stats.mostUsedTool !== null && (
-          <span className="text-muted-foreground hidden truncate xl:inline">
-            · top <code className="font-mono text-[11px] text-foreground">{stats.mostUsedTool.name}</code> ({stats.mostUsedTool.count})
-          </span>
-        )}
-        {stats.failedTools > 0 && (
-          <span className="text-destructive shrink-0 font-medium">· {stats.failedTools} failed</span>
-        )}
       </span>
+      {stats.mostUsedTool !== null && (
+        <span className="text-muted-foreground hidden min-w-0 truncate @[480px]/view-panel:inline">
+          · top <code className="font-mono text-[11px] text-foreground">{stats.mostUsedTool.name}</code> ({stats.mostUsedTool.count})
+        </span>
+      )}
+      {stats.failedTools > 0 && (
+        <span className="text-destructive shrink-0 font-medium">· {stats.failedTools} failed</span>
+      )}
 
       <span className="bg-border h-3.5 w-px shrink-0" aria-hidden="true" />
 
@@ -565,7 +567,7 @@ export const SessionStatsBar = ({
 }) => (
   <div
     data-slot="session-stats-bar"
-    className="bg-muted/30 relative flex h-9 shrink-0 items-stretch border-b text-xs"
+    className="@container/view-panel bg-muted/30 relative flex h-9 shrink-0 items-stretch border-b text-xs"
   >
     <SessionStatsContent entries={entries} />
   </div>
@@ -633,7 +635,7 @@ export const CheckpointInsightsPanel = ({
             Checkpoint window {stats.windowPosition} · {formatTokens(stats.windowTokens)}
           </p>
           <p className="text-muted-foreground text-[11px] tabular-nums">
-            {formatFullTime(stats.committedAt)}
+            {formatHumanDateTime(stats.committedAt)}
             {stats.coverage === "partial" ? ` · partial (${stats.unavailableCount} unmeasured)` : ""}
           </p>
         </div>
@@ -657,46 +659,54 @@ export const CheckpointInsightsPanel = ({
             <span className="text-muted-foreground text-[11px] font-medium uppercase tracking-wider">
               Context breakdown
             </span>
-            <span className="text-muted-foreground text-[10px]">est. · 1T ≈ 4 chars</span>
+            <span className="text-muted-foreground text-[10px]">est. · ~4 chars/token</span>
           </div>
           <CheckpointDistributionBar segments={stats.segments} className="h-3.5 w-full" />
           <div className="flex flex-col gap-2 pt-1">
             {stats.groups.map((group) => (
               <div key={group.id} className="flex flex-col gap-1">
-                <div className="flex items-center justify-between gap-2 text-xs tabular-nums">
-                  <span className="flex min-w-0 items-center gap-1.5">
+                <div className="flex items-start justify-between gap-2 text-xs tabular-nums">
+                  <div className="flex min-w-0 items-start gap-1.5">
                     {group.subgroups.length === 0 && (
                       <span
-                        className="size-2 shrink-0 rounded-full"
+                        className="mt-1.5 size-2 shrink-0 rounded-full"
                         style={{ backgroundColor: group.colorToken }}
                         aria-hidden="true"
                       />
                     )}
-                    <span className="truncate font-semibold text-foreground">{group.label}</span>
-                    {group.detail !== undefined && (
-                      <span className="text-muted-foreground shrink-0 text-[11px]">({group.detail})</span>
-                    )}
-                  </span>
-                  <span className="font-mono text-[11px] font-medium text-foreground">
+                    <div className="min-w-0">
+                      <span className="block truncate font-semibold text-foreground">{group.label}</span>
+                      {group.detail !== undefined && (
+                        <span className="text-muted-foreground block truncate text-[11px] leading-tight">
+                          {group.detail}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <span className="shrink-0 font-mono text-[11px] font-medium text-foreground">
                     {Math.round(group.share * 100)}%{" "}
                     <span className="text-muted-foreground font-normal">({formatTokens(group.tokens, true)})</span>
                   </span>
                 </div>
                 {group.subgroups.length > 0 && (
-                  <div className="flex flex-col gap-1 ps-3.5">
+                  <div className="flex flex-col gap-1.5 ps-3.5">
                     {group.subgroups.map((subgroup) => (
-                      <div key={subgroup.id} className="flex items-center justify-between gap-2 text-xs tabular-nums">
-                        <span className="flex min-w-0 items-center gap-1.5">
+                      <div key={subgroup.id} className="flex items-start justify-between gap-2 text-xs tabular-nums">
+                        <div className="flex min-w-0 items-start gap-1.5">
                           <span
-                            className="size-2 shrink-0 rounded-full"
+                            className="mt-1.5 size-2 shrink-0 rounded-full"
                             style={{ backgroundColor: subgroup.colorToken }}
                             aria-hidden="true"
                           />
-                          <span className="truncate text-foreground/90">{subgroup.label}</span>
-                          {subgroup.detail !== undefined && (
-                            <span className="text-muted-foreground truncate text-[11px]">({subgroup.detail})</span>
-                          )}
-                        </span>
+                          <div className="min-w-0">
+                            <span className="block truncate text-foreground/90">{subgroup.label}</span>
+                            {subgroup.detail !== undefined && (
+                              <span className="text-muted-foreground block truncate text-[11px] leading-tight">
+                                {subgroup.detail}
+                              </span>
+                            )}
+                          </div>
+                        </div>
                         <span className="text-muted-foreground shrink-0 font-mono text-[11px]">
                           {Math.round(subgroup.share * 100)}% ({formatTokens(subgroup.tokens, true)})
                         </span>
@@ -836,7 +846,7 @@ const CheckpointStatsContent = ({
               Window {stats.windowPosition} · {formatCompactTime(stats.committedAt)}
             </span>
           </TooltipTrigger>
-          <TooltipContent>{formatFullTime(stats.committedAt)}</TooltipContent>
+          <TooltipContent>{formatHumanDateTime(stats.committedAt)}</TooltipContent>
         </Tooltip>
       </button>
 
@@ -900,7 +910,7 @@ export const ViewPanel = ({
   <div
     data-slot="view-panel"
     className={cn(
-      "bg-muted/40 border-border/60 flex h-7 min-w-0 flex-1 items-stretch overflow-hidden rounded-lg border text-xs",
+      "@container/view-panel bg-muted/40 border-border/60 flex h-7 min-w-0 flex-1 items-stretch overflow-hidden rounded-lg border text-xs",
       className,
     )}
   >
@@ -1044,13 +1054,14 @@ export const WorkspaceHeader = ({
                       <button
                         type="button"
                         aria-label="View"
-                        className="hover:bg-accent/70 data-[popup-open]:bg-accent/70 focus-visible:ring-ring/50 inline-flex h-7 min-w-24 shrink-0 items-center justify-center rounded-md px-2.5 text-xs font-medium text-foreground outline-none transition-colors focus-visible:ring-2"
+                        className="hover:bg-accent/70 data-[popup-open]:bg-accent/70 focus-visible:ring-ring/50 inline-flex h-7 min-w-24 shrink-0 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-foreground outline-none transition-colors focus-visible:ring-2"
                       />
                     }
                   />
                 }
               >
                 <span>{activeViewLabel}</span>
+                <ChevronDownIcon className="text-muted-foreground size-3 shrink-0" aria-hidden="true" />
               </TooltipTrigger>
               <TooltipContent>Switch view ({shortcutHint})</TooltipContent>
             </Tooltip>
@@ -1065,6 +1076,10 @@ export const WorkspaceHeader = ({
                   {entry.value === currentView && <CheckIcon className="text-ring size-3.5 shrink-0" />}
                 </DropdownMenuItem>
               ))}
+              <div className="border-border/60 text-muted-foreground mt-1 flex items-center justify-between gap-3 border-t px-2.5 pt-1.5 pb-1 text-[11px]">
+                <span>Cycle views</span>
+                <Kbd>{shortcutHint}</Kbd>
+              </div>
             </DropdownMenuContent>
           </DropdownMenu>
 
@@ -1097,7 +1112,7 @@ export const WorkspaceHeader = ({
         </div>
       </header>
 
-      <div className="bg-muted/30 flex h-9 shrink-0 items-stretch border-b text-xs md:hidden">
+      <div className="@container/view-panel bg-muted/30 flex h-9 shrink-0 items-stretch border-b text-xs md:hidden">
         {viewPanelContent}
       </div>
 

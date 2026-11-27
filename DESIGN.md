@@ -142,7 +142,7 @@ and the reserved Secondary Window toggle slot. On narrow mobile viewports
     messages**, and the snapshot label `Window <N> · <time>` (plus a `Latest`
     reset control when viewing a historical snapshot); clicking toggles the
     **Checkpoint window** Secondary Window showing **Context breakdown** (`est.
-    · 1T ≈ 4 chars`), the stacked horizontal bar and 3-group breakdown, and the
+    · ~4 chars/token`), the stacked horizontal bar and 3-group breakdown, and the
     timestamped snapshot switcher.
 
 ### Inspection Views, Timestamps & Cross-View Navigation
