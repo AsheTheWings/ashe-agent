@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { ErrorCode } from "@ashe-agent/protocol"
 import { sha256 } from "@noble/hashes/sha2.js"
-import { SessionClient } from "../src/session/client.ts"
+import { SessionClient, storageKeys } from "../src/session/client.ts"
 import type { KeyValueStorage, SessionClientPorts, SocketHandlers } from "../src/session/ports.ts"
 
 const SERVER_URL = "ws://server.test/v1/ws"
@@ -167,5 +168,70 @@ describe("development password sign-in", () => {
     expect(seen[0]!.url).toBe("http://server.test/v1/auth/methods")
     globalThis.fetch = (() => Promise.reject(new Error("offline"))) as unknown as typeof fetch
     expect(await client.authMethods()).toEqual({ github: true, password: false })
+  })
+
+  test("resume sets restoring synchronously until refresh settles, while password sign-in keeps restoring false", async () => {
+    const { ports } = fakePorts((request) => {
+      if (request.method === "auth.refresh") return answerExchange()
+      if (request.method === "models.list") return { models: [] }
+      if (request.method === "agents.list") return { agents: [] }
+      if (request.method === "session.list") return { sessions: [] }
+      if (request.method === "actions.list") return { actions: [] }
+      return {}
+    })
+    ports.storage.setItem(storageKeys.refreshToken(SERVER_URL), "stored-refresh")
+    const client = new SessionClient(ports)
+    expect(client.store.getState().restoring).toBe(false)
+    client.resume()
+    expect(client.store.getState().restoring).toBe(true)
+    expect(client.store.getState().status).toBe("connecting")
+    await until("connected", () => client.store.getState().status === "connected")
+    expect(client.store.getState().restoring).toBe(false)
+
+    // Interactive password sign-in stays on the sign-in screen (restoring remains false).
+    stubFetch(async () => Response.json({ signIn: "code-3" }))
+    const interactive = new SessionClient(fakePorts(() => answerExchange()).ports)
+    const pending = interactive.signInWithPassword("secret")
+    expect(interactive.store.getState().restoring).toBe(false)
+    await pending
+    expect(interactive.store.getState().restoring).toBe(false)
+
+    // Revoked/expired stored refresh token clears restoring and returns to signedOut.
+    const failingStorage = memoryStorage()
+    failingStorage.setItem(storageKeys.refreshToken(SERVER_URL), "expired-refresh")
+    const failingPorts: SessionClientPorts = {
+      serverUrl: SERVER_URL,
+      openSocket: (_url, handlers) => {
+        const socket = {
+          send: (text: string) => {
+            const req = JSON.parse(text) as SentRequest
+            queueMicrotask(() =>
+              handlers.onMessage(
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: req.id,
+                  error: { code: ErrorCode.authenticationFailed, message: "refresh token expired" },
+                }),
+              ),
+            )
+          },
+          close: () => {},
+        }
+        queueMicrotask(() => handlers.onOpen())
+        return socket
+      },
+      storage: failingStorage,
+      signIn: ports.signIn,
+      withLock: (_name, task) => task(),
+      now: () => Date.now(),
+      setTimer: () => 0,
+      clearTimer: () => {},
+    }
+    const failingClient = new SessionClient(failingPorts)
+    failingClient.resume()
+    expect(failingClient.store.getState().restoring).toBe(true)
+    await until("signedOut", () => failingClient.store.getState().status === "signedOut")
+    expect(failingClient.store.getState().restoring).toBe(false)
+    expect(failingClient.store.getState().error).toBe("refresh token expired")
   })
 })

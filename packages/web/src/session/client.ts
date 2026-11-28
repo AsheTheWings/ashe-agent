@@ -45,6 +45,8 @@ export type ConnectionStatus = "signedOut" | "connecting" | "connected" | "recon
 
 export type ClientState = {
   readonly status: ConnectionStatus
+  /** True while resuming a stored session or completing a sign-in callback before authentication settles. */
+  readonly restoring: boolean
   /** The configured server's WebSocket URL. */
   readonly serverUrl: string
   readonly principal: Sender | null
@@ -158,6 +160,7 @@ export class SessionClient {
     this.ports = ports
     this.store = createStore<ClientState>()(() => ({
       status: "signedOut",
+      restoring: false,
       serverUrl: ports.serverUrl,
       principal: null,
       error: null,
@@ -187,6 +190,7 @@ export class SessionClient {
     if (this.completeSignIn()) return
     const url = this.state.serverUrl
     if (this.ports.storage.getItem(storageKeys.refreshToken(url)) === null) return
+    this.set({ restoring: true })
     this.connect(url, ++this.generation, null)
   }
 
@@ -235,7 +239,7 @@ export class SessionClient {
   async signInWithPassword(password: string): Promise<void> {
     this.disconnect()
     const generation = ++this.generation
-    this.set({ status: "connecting", error: null })
+    this.set({ status: "connecting", restoring: false, error: null })
     try {
       const serverUrl = this.state.serverUrl
       const endpoint = new URL(serverUrl)
@@ -314,7 +318,7 @@ export class SessionClient {
       return true
     }
     this.disconnect()
-    this.set({ error: null })
+    this.set({ error: null, restoring: true })
     void this.connect(serverUrl, ++this.generation, { code: fragment.get("signIn")!, verifier })
     return true
   }
@@ -325,6 +329,7 @@ export class SessionClient {
     this.ports.storage.removeItem(storageKeys.refreshToken(this.state.serverUrl))
     this.set({
       status: "signedOut",
+      restoring: false,
       principal: null,
       activeSessionId: null,
       views: {},
@@ -384,13 +389,13 @@ export class SessionClient {
       if (signedOut) this.signOut()
       else this.disconnect()
       const message = error instanceof ConnectionClosed ? `could not connect to ${url}` : messageOf(error)
-      this.set({ status: "signedOut", principal: null, error: message })
+      this.set({ status: "signedOut", restoring: false, principal: null, error: message })
       return
     }
     if (!current()) return
     authenticated = true
     this.reconnectDelay = RECONNECT_FIRST_DELAY_MS
-    this.set({ status: "connected", principal, error: null })
+    this.set({ status: "connected", restoring: false, principal, error: null })
     try {
       await this.load(connection)
     } catch (error) {

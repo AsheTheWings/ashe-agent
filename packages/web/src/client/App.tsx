@@ -58,7 +58,7 @@ import {
   type ShortcutPreferences,
   type ViewName,
 } from "./types.ts"
-import { UncertainOperation, useWebState, WebStateClient } from "./web-state-client.ts"
+import { isDegradedWebState, UncertainOperation, useWebState, WebStateClient } from "./web-state-client.ts"
 
 export {
   ActivityPreview,
@@ -1212,7 +1212,7 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
       }
     }
 
-    if (web.status !== "live") {
+    if (isDegradedWebState(web.status)) {
       const id = `web-stale:${web.status}`
       list.push({
         id,
@@ -1890,13 +1890,44 @@ const Workspace = ({ webClient }: { readonly webClient: WebStateClient }) => {
   )
 }
 
+const RESTORE_INDICATOR_DELAY_MS = 250
+
+const RestoringSession = () => {
+  const [showIndicator, setShowIndicator] = useState(false)
+  useEffect(() => {
+    const timer = window.setTimeout(() => setShowIndicator(true), RESTORE_INDICATOR_DELAY_MS)
+    return () => window.clearTimeout(timer)
+  }, [])
+  return (
+    <main
+      data-slot="session-restoring"
+      aria-busy="true"
+      className="bg-background text-foreground flex min-h-svh flex-col items-center justify-center gap-3 p-6"
+    >
+      {showIndicator && (
+        <>
+          <span
+            className="text-sidebar-primary text-[32px] leading-none tracking-tight select-none"
+            style={{ fontFamily: "var(--font-brand)" }}
+            aria-label="AsheAgent"
+          >
+            AA
+          </span>
+          <p className="text-muted-foreground text-sm">Connecting…</p>
+        </>
+      )}
+    </main>
+  )
+}
+
 export const App = () => {
   const signedIn = useClientState((state) => state.status !== "signedOut" && state.principal !== null)
+  const restoring = useClientState((state) => state.restoring)
   const client = useClient()
   const [webClient] = useState(
     () =>
       new WebStateClient(
-        new URL("/v1/web-state", window.location.origin).href,
+        new URL("/v1/web-state", typeof window === "undefined" ? "http://localhost" : window.location.origin).href,
         () => client.accessToken(),
         () => client.renewAccessToken(),
       ),
@@ -1909,7 +1940,9 @@ export const App = () => {
     webClient.start()
     return () => webClient.stop()
   }, [signedIn, webClient])
-  return signedIn ? <Workspace webClient={webClient} /> : <SignIn />
+  if (signedIn) return <Workspace webClient={webClient} />
+  if (restoring) return <RestoringSession />
+  return <SignIn />
 }
 
 export default App

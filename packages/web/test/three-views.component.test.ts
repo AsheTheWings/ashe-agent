@@ -6,6 +6,7 @@ import { ClientProvider } from "../src/app/client-context.tsx"
 import { SessionClient } from "../src/session/client.ts"
 import {
   ActivityPreview,
+  App,
   applyLocalReadCommand,
   Chat,
   Checkpoint,
@@ -20,6 +21,9 @@ import {
 } from "../src/client/App.tsx"
 import { Composer, composerPrimaryAction } from "../src/client/Composer.tsx"
 import { WorkspaceHeader, type SessionNotificationEntry } from "../src/client/Header.tsx"
+import { Sidebar } from "../src/client/Sidebar.tsx"
+import { isDegradedWebState, type WebStateView } from "../src/client/web-state-client.ts"
+import { TooltipProvider } from "../src/components/ui/tooltip.tsx"
 import { formatPayloadText, resolveScrollPaneHeight, TOOL_PANE_BASE_HEIGHT } from "../src/client/json-view.tsx"
 import type { Draft } from "../src/client/drafts.ts"
 import { computeCheckpointStats, computeSessionStats, formatTokens } from "../src/client/stats.ts"
@@ -884,5 +888,68 @@ describe("owned three-view rendering", () => {
     expect(
       applyLocalReadCommand(activeSuppressed, "s1", { sessionId: "s1", unread: false, generation: 3 }, 3),
     ).toBeNull()
+  })
+
+  test("App holds a neutral boot surface while restoring and Sidebar omits stale banners while gating refresh to degraded state", () => {
+    const restoringClient = fakeClient()
+    restoringClient.store.setState({ status: "connecting", restoring: true, principal: null })
+    restoringClient.store.getInitialState = restoringClient.store.getState
+    const restoringHtml = renderToStaticMarkup(
+      createElement(ClientProvider, { client: restoringClient, children: createElement(App) }),
+    )
+    expect(restoringHtml).toContain('data-slot="session-restoring"')
+    expect(restoringHtml).not.toContain("Checking sign-in methods")
+
+    const signedOutClient = fakeClient()
+    const signedOutHtml = renderToStaticMarkup(
+      createElement(ClientProvider, { client: signedOutClient, children: createElement(App) }),
+    )
+    expect(signedOutHtml).toContain("Checking sign-in methods")
+    expect(signedOutHtml).not.toContain('data-slot="session-restoring"')
+
+    expect(isDegradedWebState("signedOut")).toBe(false)
+    expect(isDegradedWebState("connecting")).toBe(false)
+    expect(isDegradedWebState("live")).toBe(false)
+    expect(isDegradedWebState("stale")).toBe(true)
+    expect(isDegradedWebState("unauthorized")).toBe(true)
+    expect(isDegradedWebState("incompatible")).toBe(true)
+
+    const baseWeb: WebStateView = {
+      status: "connecting",
+      error: null,
+      revision: 0,
+      principal: null,
+      harnessId: null,
+      sessions: {},
+      pending: {},
+    }
+    const renderSidebar = (web: WebStateView) =>
+      render(
+        createElement(TooltipProvider, {
+          children: createElement(Sidebar, {
+            web,
+            active: null,
+            onOpen: () => {},
+            onCommand: () => {},
+            onNew: () => {},
+            onOpenSettings: () => {},
+          }),
+        }),
+      )
+
+    const connectingSidebar = renderSidebar(baseWeb)
+    expect(connectingSidebar).not.toContain("sidebar-stale-banner")
+    expect(connectingSidebar).not.toContain("Shared organization is stale")
+    expect(connectingSidebar).not.toContain('aria-label="Refresh sessions"')
+
+    const staleSidebar = renderSidebar({ ...baseWeb, status: "stale", error: "web organization is disconnected; cached state is stale" })
+    expect(staleSidebar).not.toContain("sidebar-stale-banner")
+    expect(staleSidebar).not.toContain("cached state is stale")
+    expect(staleSidebar).toContain('aria-label="Refresh sessions"')
+
+    const incompatibleSidebar = renderSidebar({ ...baseWeb, status: "incompatible", error: "Reload to update it." })
+    expect(incompatibleSidebar).not.toContain("sidebar-stale-banner")
+    expect(incompatibleSidebar).not.toContain("Reload to update it.")
+    expect(incompatibleSidebar).toContain('aria-label="Refresh sessions"')
   })
 })
