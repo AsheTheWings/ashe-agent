@@ -259,6 +259,12 @@ and privacy rules.
 
 ## Signing in
 
+When a browser already holds a stored refresh token or a pending sign-in
+callback, startup keeps a neutral themed boot surface (revealing a
+connecting indicator only if restoration takes longer) instead of mounting
+the sign-in form; if restoration fails, the sign-in page opens with the
+reason.
+
 The sign-in page queries `GET /v1/auth/methods` on the configured harness
 and offers whichever sign-in methods the server accepts: **Continue with
 GitHub**, a development password form, or both. For GitHub sign-in, the tab

@@ -12,6 +12,10 @@ import {
 
 export type WebStateStatus = "signedOut" | "connecting" | "live" | "stale" | "unauthorized" | "incompatible"
 
+/** Returns true only when shared web state has entered a degraded state, not during initial startup or signed-out state. */
+export const isDegradedWebState = (status: WebStateStatus): boolean =>
+  status === "stale" || status === "unauthorized" || status === "incompatible"
+
 export type WebStateView = {
   readonly status: WebStateStatus
   readonly error: string | null

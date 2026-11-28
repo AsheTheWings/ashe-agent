@@ -33,7 +33,7 @@ import {
 } from "@/components/ui/dropdown-menu.tsx"
 import { Input } from "@/components/ui/input.tsx"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx"
-import type { WebStateClient, WebStateView } from "./web-state-client.ts"
+import { isDegradedWebState, type WebStateClient, type WebStateView } from "./web-state-client.ts"
 import { SidebarPaneIcon } from "./icons.tsx"
 import { formatFullTime, formatRelativeTime, randomId, sessionDisplayTitle } from "./types.ts"
 
@@ -319,6 +319,7 @@ export const Sidebar = ({
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.returnAt - a.returnAt)
 
   const sharedLive = web.status === "live"
+  const sharedDegraded = isDegradedWebState(web.status)
 
   const handleDropToFile = (sessionId: string) => {
     if (!sharedLive || sessionId === "") return
@@ -353,7 +354,7 @@ export const Sidebar = ({
           AA
         </button>
         <div className="flex items-center gap-1">
-          {web.status !== "live" && (
+          {sharedDegraded && (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -466,32 +467,6 @@ export const Sidebar = ({
               </button>
             )}
           </div>
-        </div>
-      )}
-
-      {!sharedLive && (
-        <div
-          role="status"
-          data-slot="sidebar-stale-banner"
-          className={cn(
-            "border-sidebar-border flex shrink-0 items-center justify-between gap-2 border-b px-3 py-1.5 text-[11px]",
-            web.status === "incompatible"
-              ? "bg-destructive/10 text-destructive"
-              : "bg-warning-background/60 text-warning",
-          )}
-        >
-          <span className="truncate">{web.error ?? "Shared organization is stale"}</span>
-          {web.status === "incompatible" && (
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              className="h-5 shrink-0 px-1.5 text-[10px]"
-              onClick={() => window.location.reload()}
-            >
-              Reload
-            </Button>
-          )}
         </div>
       )}
 
